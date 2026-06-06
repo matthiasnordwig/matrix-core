@@ -16,6 +16,7 @@ mod chunks;
 mod contexts;
 pub mod embeddings;
 mod grid;
+mod structural_profiles;
 mod profiles;
 mod registries;
 mod settings;
@@ -106,6 +107,9 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v4.sql"),
     include_str!("schema_v5.sql"),
     include_str!("schema_v6.sql"),
+    include_str!("schema_v7.sql"),
+    include_str!("schema_v8.sql"),
+    include_str!("schema_v9.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -141,6 +145,11 @@ impl Database {
             if version < target {
                 let tx = conn.transaction()?;
                 tx.execute_batch(sql)?;
+                
+                if target == 9 {
+                    migrate_v8_to_v9_profiles(&tx)?;
+                }
+
                 tx.pragma_update(None, "user_version", target)?;
                 tx.commit()?;
             }
@@ -152,6 +161,60 @@ impl Database {
     pub fn schema_version(&self) -> Result<i64> {
         Ok(self.conn.pragma_query_value(None, "user_version", |row| row.get(0))?)
     }
+}
+
+fn migrate_v8_to_v9_profiles(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    let mut stmt = tx.prepare("SELECT id, heading_triggers, definition_triggers, ignore_patterns, target_chunk_size FROM structural_profiles")?;
+    
+    struct OldProf {
+        id: i64,
+        headings: String,
+        defs: String,
+        ignores: String,
+        target: i64,
+    }
+    
+    let old_profiles: Vec<OldProf> = stmt.query_map([], |row| {
+        Ok(OldProf {
+            id: row.get(0)?,
+            headings: row.get(1)?,
+            defs: row.get(2)?,
+            ignores: row.get(3)?,
+            target: row.get(4)?,
+        })
+    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    
+    for p in old_profiles {
+        tx.execute("UPDATE structural_profiles SET max_chunk_chars = ?1, min_chunk_chars = 200 WHERE id = ?2", rusqlite::params![p.target, p.id])?;
+        
+        let mut insert = tx.prepare("INSERT INTO structural_patterns (profile_id, group_name, role, regex, flags, priority, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?;
+        
+        if !p.headings.trim().is_empty() {
+            let list: Vec<&str> = p.headings.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !list.is_empty() {
+                let regex = format!("^((?:{})\\s*[\\d.a-zA-Z]+)\\s*(.*)", list.join("|"));
+                insert.execute(rusqlite::params![p.id, "Überschriften", "heading_l1", regex, "i", 100, 0])?;
+            }
+        }
+        
+        if !p.defs.trim().is_empty() {
+            let list: Vec<&str> = p.defs.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !list.is_empty() {
+                let regex = format!("\\b(?:{})", list.join("|"));
+                insert.execute(rusqlite::params![p.id, "Definitionen", "definition", regex, "i", 50, 1])?;
+            }
+        }
+        
+        if !p.ignores.trim().is_empty() {
+            let list: Vec<&str> = p.ignores.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !list.is_empty() {
+                let regex = format!("(?:{})", list.join("|"));
+                insert.execute(rusqlite::params![p.id, "Ignorieren", "ignore", regex, "i", 200, 2])?;
+            }
+        }
+    }
+    
+    Ok(())
 }
 
 #[cfg(test)]

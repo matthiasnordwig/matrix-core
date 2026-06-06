@@ -10,6 +10,7 @@ pub mod segments;
 pub mod sentences;
 pub mod signatures;
 pub mod window;
+pub mod structural;
 
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};

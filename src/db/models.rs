@@ -169,11 +169,56 @@ pub struct NewChunkingProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuralPattern {
+    pub id: i64,
+    pub profile_id: i64,
+    pub group_name: String,
+    pub role: String,
+    pub regex: String,
+    pub flags: String,
+    pub priority: i64,
+    pub label: Option<String>,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewStructuralPattern {
+    pub group_name: String,
+    pub role: String,
+    pub regex: String,
+    pub flags: String,
+    pub priority: i64,
+    pub label: Option<String>,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuralProfile {
+    pub id: i64,
+    pub name: String,
+    pub min_chunk_chars: i64,
+    pub max_chunk_chars: i64,
+    pub patterns: Vec<StructuralPattern>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewStructuralProfile {
+    pub name: String,
+    pub min_chunk_chars: i64,
+    pub max_chunk_chars: i64,
+    pub patterns: Vec<NewStructuralPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context {
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
+    pub chunking_strategy: String,
     pub chunking_profile_id: Option<i64>,
+    pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
     pub status: ContextStatus,
@@ -185,7 +230,9 @@ pub struct Context {
 pub struct NewContext {
     pub name: String,
     pub description: Option<String>,
+    pub chunking_strategy: String,
     pub chunking_profile_id: Option<i64>,
+    pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
 }

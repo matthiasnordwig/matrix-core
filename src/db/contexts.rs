@@ -10,7 +10,9 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         id: row.get("id")?,
         name: row.get("name")?,
         description: row.get("description")?,
+        chunking_strategy: row.get("chunking_strategy")?,
         chunking_profile_id: row.get("chunking_profile_id")?,
+        structural_profile_id: row.get("structural_profile_id")?,
         embedding_model_id: row.get("embedding_model_id")?,
         embedding_dim: row.get("embedding_dim")?,
         status: row.get("status")?,
@@ -39,12 +41,14 @@ impl Database {
     pub fn create_context(&self, c: &NewContext) -> Result<Context> {
         self.conn.execute(
             "INSERT INTO contexts
-                (name, description, chunking_profile_id, embedding_model_id, embedding_dim)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 c.name,
                 c.description,
+                c.chunking_strategy,
                 c.chunking_profile_id,
+                c.structural_profile_id,
                 c.embedding_model_id,
                 c.embedding_dim,
             ],
@@ -87,14 +91,16 @@ impl Database {
     pub fn update_context(&self, id: i64, c: &NewContext) -> Result<Context> {
         self.conn.execute(
             "UPDATE contexts SET
-                name = ?2, description = ?3, chunking_profile_id = ?4,
-                embedding_model_id = ?5, embedding_dim = ?6, updated_at = unixepoch()
+                name = ?2, description = ?3, chunking_strategy = ?4, chunking_profile_id = ?5,
+                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id,
                 c.name,
                 c.description,
+                c.chunking_strategy,
                 c.chunking_profile_id,
+                c.structural_profile_id,
                 c.embedding_model_id,
                 c.embedding_dim,
             ],
