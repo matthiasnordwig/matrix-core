@@ -1,0 +1,33 @@
+# core/Cargo.toml
+[package]
+name = "matrix_core"
+version = "0.1.0"
+edition = "2024"
+
+# 💡 DAS HIER JETZT EINTRAGEN:
+[lib]
+name = "app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Local ONNX embedder on the Apple Neural Engine (CoreML EP). Off by default so
+# the core builds/tests with zero heavy/native deps.
+#   * `onnx`          — link against an externally provided ONNX Runtime
+#                       (iOS device build: set ORT_LIB_LOCATION to the static lib).
+#   * `onnx-download` — host/dev convenience: fetch a prebuilt ONNX Runtime.
+onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+onnx-download = ["onnx", "ort/download-binaries"]
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["coreml", "ndarray"] }
+tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
+ndarray = { version = "0.16", optional = true }
+
+# Patched ort-sys: links clang_rt.ios (not clang_rt.osx) on iOS targets so the ONNX
+# Runtime static lib links into the device build. Applies when core is the build root.
+[patch.crates-io]
+ort-sys = { path = "../vendor/ort-sys-2.0.0-rc.10" }

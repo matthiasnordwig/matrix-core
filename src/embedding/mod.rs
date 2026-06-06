@@ -1,0 +1,28 @@
+//! Embedding & retrieval.
+//!
+//! Core owns the *retrieval merge* (group by embedding space → per-space
+//! brute-force cosine → merge) and the [`QueryEmbedder`] trait. Concrete
+//! embedders that actually run a model are pluggable:
+//! - the local ONNX/ANE embedder lives behind the `onnx` cargo feature
+//!   ([`onnx`]); it needs the ONNX Runtime iOS static libs + model files.
+//! - a remote-API embedder is provided by the Tauri bridge.
+//!
+//! Crucially, there is **no global cross-model vector**: queries are embedded
+//! separately per embedding space and only the *scores* are merged.
+
+use crate::db::models::EmbeddingModel;
+use crate::Result;
+
+pub mod retrieval;
+
+#[cfg(feature = "onnx")]
+pub mod onnx;
+
+/// Produces a query vector in a specific model's embedding space. Implemented
+/// by concrete embedders (local ONNX, remote API, or a test fake).
+pub trait QueryEmbedder {
+    fn embed_query(&self, model: &EmbeddingModel, query: &str) -> Result<Vec<f32>>;
+}
+
+#[cfg(test)]
+mod tests;

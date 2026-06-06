@@ -1,0 +1,201 @@
+//! Staging tables: `prechunks` (resumable LLM orchestration) and `chunks`
+//! (the physical STAGING TABLE written after assembly).
+
+use rusqlite::{params, OptionalExtension, Row};
+
+use super::models::*;
+use super::{Database, Result};
+
+fn row_to_prechunk(row: &Row<'_>) -> rusqlite::Result<Prechunk> {
+    Ok(Prechunk {
+        id: row.get("id")?,
+        document_id: row.get("document_id")?,
+        idx: row.get("idx")?,
+        start_sentence: row.get("start_sentence")?,
+        end_sentence: row.get("end_sentence")?,
+        char_start: row.get("char_start")?,
+        char_end: row.get("char_end")?,
+        text: row.get("text")?,
+        llm_status: row.get("llm_status")?,
+        llm_response: row.get("llm_response")?,
+        attempts: row.get("attempts")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn row_to_chunk(row: &Row<'_>) -> rusqlite::Result<Chunk> {
+    Ok(Chunk {
+        id: row.get("id")?,
+        context_id: row.get("context_id")?,
+        document_id: row.get("document_id")?,
+        chunk_index: row.get("chunk_index")?,
+        char_start: row.get("char_start")?,
+        char_end: row.get("char_end")?,
+        text: row.get("text")?,
+        signature: row.get("signature")?,
+        is_omitted: row.get("is_omitted")?,
+        metadata: row.get("metadata")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+impl Database {
+    // --- prechunks ---------------------------------------------------------
+
+    pub fn create_prechunk(&self, p: &NewPrechunk) -> Result<Prechunk> {
+        self.conn.execute(
+            "INSERT INTO prechunks
+                (document_id, idx, start_sentence, end_sentence, char_start, char_end, text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                p.document_id,
+                p.idx,
+                p.start_sentence,
+                p.end_sentence,
+                p.char_start,
+                p.char_end,
+                p.text,
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(self.prechunk(id)?.expect("row just inserted must exist"))
+    }
+
+    pub fn prechunk(&self, id: i64) -> Result<Option<Prechunk>> {
+        Ok(self
+            .conn
+            .query_row("SELECT * FROM prechunks WHERE id = ?1", [id], row_to_prechunk)
+            .optional()?)
+    }
+
+    /// Record the LLM result for a pre-chunk (resumability checkpoint).
+    pub fn set_prechunk_result(
+        &self,
+        id: i64,
+        status: PrechunkStatus,
+        llm_response: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE prechunks
+                SET llm_status = ?2, llm_response = ?3,
+                    attempts = attempts + 1, updated_at = unixepoch()
+             WHERE id = ?1",
+            params![id, status, llm_response],
+        )?;
+        Ok(())
+    }
+
+    /// All pre-chunks of a document, ordered.
+    pub fn prechunks_for_document(&self, document_id: i64) -> Result<Vec<Prechunk>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM prechunks WHERE document_id = ?1 ORDER BY idx")?;
+        let rows = stmt.query_map([document_id], row_to_prechunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// All pre-chunks across a context's documents (for inspecting raw LLM output).
+    pub fn prechunks_for_context(&self, context_id: i64) -> Result<Vec<Prechunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.* FROM prechunks p
+             JOIN documents d ON d.id = p.document_id
+             WHERE d.context_id = ?1
+             ORDER BY p.document_id, p.idx",
+        )?;
+        let rows = stmt.query_map([context_id], row_to_prechunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Pre-chunks still awaiting an LLM result — the work-list to resume after a crash.
+    pub fn pending_prechunks(&self, document_id: i64) -> Result<Vec<Prechunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM prechunks
+             WHERE document_id = ?1 AND llm_status IN ('pending', 'error')
+             ORDER BY idx",
+        )?;
+        let rows = stmt.query_map([document_id], row_to_prechunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    // --- chunks (STAGING TABLE) -------------------------------------------
+
+    pub fn create_chunk(&self, c: &NewChunk) -> Result<Chunk> {
+        self.conn.execute(
+            "INSERT INTO chunks
+                (context_id, document_id, chunk_index, char_start, char_end,
+                 text, signature, is_omitted, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                c.context_id,
+                c.document_id,
+                c.chunk_index,
+                c.char_start,
+                c.char_end,
+                c.text,
+                c.signature,
+                c.is_omitted,
+                c.metadata,
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(self.chunk(id)?.expect("row just inserted must exist"))
+    }
+
+    pub fn chunk(&self, id: i64) -> Result<Option<Chunk>> {
+        Ok(self
+            .conn
+            .query_row("SELECT * FROM chunks WHERE id = ?1", [id], row_to_chunk)
+            .optional()?)
+    }
+
+    /// Staged chunks for a context, in chronological order. `include_omitted`
+    /// controls whether `leave_out` chunks are returned (default UI hides them).
+    pub fn list_chunks(&self, context_id: i64, include_omitted: bool) -> Result<Vec<Chunk>> {
+        let sql = if include_omitted {
+            "SELECT * FROM chunks WHERE context_id = ?1 ORDER BY document_id, chunk_index"
+        } else {
+            "SELECT * FROM chunks WHERE context_id = ?1 AND is_omitted = 0 \
+             ORDER BY document_id, chunk_index"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([context_id], row_to_chunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Non-omitted chunks in a context that still need a vector for `model_id` —
+    /// the work-list for the embedding stage. A chunk qualifies if it has no
+    /// embedding yet OR its stored embedding was produced by a *different* model
+    /// (stale after switching the context's embedding model). Re-embedding
+    /// overwrites via `INSERT OR REPLACE`, so `embed` is idempotent and
+    /// self-correcting across model changes.
+    pub fn chunks_needing_embedding(&self, context_id: i64, model_id: i64) -> Result<Vec<Chunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.* FROM chunks c
+             LEFT JOIN embeddings e ON e.chunk_id = c.id
+             WHERE c.context_id = ?1 AND c.is_omitted = 0
+               AND (e.chunk_id IS NULL OR e.embedding_model_id != ?2)
+             ORDER BY c.document_id, c.chunk_index",
+        )?;
+        let rows = stmt.query_map([context_id, model_id], row_to_chunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn count_chunks(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE context_id = ?1",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn delete_chunk(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM chunks WHERE id = ?1", [id])? > 0)
+    }
+
+    /// Remove all chunks of a document (used before re-staging on a re-run).
+    pub fn delete_chunks_for_document(&self, document_id: i64) -> Result<usize> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?)
+    }
+}
