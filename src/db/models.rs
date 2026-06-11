@@ -221,6 +221,7 @@ pub struct Context {
     pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
+    pub chunk_endpoint_id: Option<i64>,
     pub status: ContextStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -235,6 +236,7 @@ pub struct NewContext {
     pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
+    pub chunk_endpoint_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,4 +409,11 @@ pub struct GridChatUpsert {
     pub response: Option<String>,
     pub status: ChatStatus,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridRun {
+    pub run_id: String,
+    pub prompt: String,
+    pub updated_at: i64,
 }

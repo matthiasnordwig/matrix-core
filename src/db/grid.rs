@@ -134,4 +134,28 @@ impl Database {
             |row| row.get(0),
         )?)
     }
+
+    pub fn list_grid_runs(&self) -> Result<Vec<GridRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT run_id, MIN(prompt) as prompt, MAX(updated_at) as updated_at 
+             FROM grid_chat_results 
+             GROUP BY run_id 
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(GridRun {
+                run_id: row.get("run_id")?,
+                prompt: row.get("prompt")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn delete_grid_chat_run(&self, run_id: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM grid_chat_results WHERE run_id = ?1",
+            [run_id],
+        )? > 0)
+    }
 }

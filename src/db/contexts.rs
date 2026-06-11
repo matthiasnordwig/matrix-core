@@ -15,6 +15,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         structural_profile_id: row.get("structural_profile_id")?,
         embedding_model_id: row.get("embedding_model_id")?,
         embedding_dim: row.get("embedding_dim")?,
+        chunk_endpoint_id: row.get("chunk_endpoint_id")?,
         status: row.get("status")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -41,8 +42,8 @@ impl Database {
     pub fn create_context(&self, c: &NewContext) -> Result<Context> {
         self.conn.execute(
             "INSERT INTO contexts
-                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim, chunk_endpoint_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 c.name,
                 c.description,
@@ -51,6 +52,7 @@ impl Database {
                 c.structural_profile_id,
                 c.embedding_model_id,
                 c.embedding_dim,
+                c.chunk_endpoint_id,
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -92,7 +94,7 @@ impl Database {
         self.conn.execute(
             "UPDATE contexts SET
                 name = ?2, description = ?3, chunking_strategy = ?4, chunking_profile_id = ?5,
-                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, updated_at = unixepoch()
+                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, chunk_endpoint_id = ?9, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id,
@@ -103,6 +105,7 @@ impl Database {
                 c.structural_profile_id,
                 c.embedding_model_id,
                 c.embedding_dim,
+                c.chunk_endpoint_id,
             ],
         )?;
         self.context(id)?
@@ -110,6 +113,12 @@ impl Database {
     }
 
     pub fn delete_context(&self, id: i64) -> Result<bool> {
+        self.conn.execute(
+            "DELETE FROM grid_chat_results 
+             WHERE row_ref_type = 'chunk' 
+               AND row_ref_id IN (SELECT id FROM chunks WHERE context_id = ?1)",
+            [id],
+        )?;
         Ok(self
             .conn
             .execute("DELETE FROM contexts WHERE id = ?1", [id])?

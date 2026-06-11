@@ -58,6 +58,45 @@ impl Database {
         Ok(merged)
     }
 
+    pub fn retrieve_batch(
+        &self,
+        context_ids: &[i64],
+        queries_by_row: &[HashMap<i64, Vec<f32>>],
+        top_k: usize,
+    ) -> Result<Vec<Vec<ScoredChunk>>> {
+        let mut row_merged: Vec<Vec<ScoredChunk>> = vec![Vec::new(); queries_by_row.len()];
+        for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
+            for cid in ctxs {
+                let stored = self.scan_context_vectors(cid)?;
+                if stored.is_empty() {
+                    continue;
+                }
+                for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
+                    let Some(qvec) = query_by_model.get(&model_id) else {
+                        continue;
+                    };
+                    for sv in &stored {
+                        if sv.vector.len() == qvec.len() {
+                            row_merged[row_idx].push(ScoredChunk {
+                                chunk_id: sv.chunk_id,
+                                score: crate::db::embeddings::cosine(qvec, &sv.vector),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for merged in &mut row_merged {
+            merged.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            merged.truncate(top_k);
+        }
+        Ok(row_merged)
+    }
+
     /// Retrieve top-`k` chunks across `context_ids`, embedding the query per
     /// distinct model via `embedder`.
     pub fn retrieve(
