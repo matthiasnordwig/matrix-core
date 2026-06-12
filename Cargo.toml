@@ -17,6 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 #   * `onnx-download` — host/dev convenience: fetch a prebuilt ONNX Runtime.
 onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 onnx-download = ["onnx", "ort/download-binaries"]
+gguf = ["dep:llama-cpp-2"]
+gguf-metal = ["gguf", "llama-cpp-2/metal"]
+gguf-cuda = ["gguf", "llama-cpp-2/cuda"]
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -28,6 +31,7 @@ pdf_oxide = "0.3.60"
 ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["coreml", "ndarray"] }
 tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
 ndarray = { version = "0.16", optional = true }
+llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 
 # Patched ort-sys: links clang_rt.ios (not clang_rt.osx) on iOS targets so the ONNX
 # Runtime static lib links into the device build. Applies when core is the build root.
