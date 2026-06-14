@@ -21,17 +21,9 @@ fn get_backend() -> Result<&'static LlamaBackend, String> {
     BACKEND.get().ok_or_else(|| "Failed to set LlamaBackend".to_string())
 }
 
-#[derive(Clone, Copy)]
-pub enum ChatTemplate {
-    Phi3,
-    ChatML,
-    Llama3,
-}
-
 pub struct GgufEngine {
     model: LlamaModel,
     n_ctx: u32,
-    template: ChatTemplate,
 }
 
 impl GgufEngine {
@@ -58,40 +50,28 @@ impl GgufEngine {
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| format!("model load {model_path}: {e}"))?;
             
-        let lower_path = model_path.to_lowercase();
-        let template = if lower_path.contains("qwen") || lower_path.contains("chatml") {
-            ChatTemplate::ChatML
-        } else if lower_path.contains("llama-3") || lower_path.contains("llama3") {
-            ChatTemplate::Llama3
-        } else {
-            ChatTemplate::Phi3
-        };
-            
-        Ok(Self { model, n_ctx, template })
+        Ok(Self { model, n_ctx })
     }
 
-    pub fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, String> {
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32) -> Result<String, String> {
         let backend = get_backend()?;
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(self.n_ctx));
         let mut ctx = self.model.new_context(backend, ctx_params)
             .map_err(|e| format!("context create: {e}"))?;
 
-        // 1. Template
-        let (formatted_prompt, stop_tokens) = match self.template {
-            ChatTemplate::ChatML => (
-                format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", prompt),
-                vec!["<|im_end|>"]
-            ),
-            ChatTemplate::Llama3 => (
-                format!("<|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", prompt),
-                vec!["<|eot_id|>", "<|end_of_text|>"]
-            ),
-            ChatTemplate::Phi3 => (
-                format!("<|user|>\n{}<|end|>\n<|assistant|>\n", prompt),
-                vec!["<|end|>"]
-            ),
-        };
+        // 1. Template (read native from GGUF)
+        let tmpl = self.model.chat_template(None)
+            .map_err(|e| format!("model has no default chat template or invalid: {e}"))?;
+            
+        let mut chat_msgs = Vec::new();
+        for (role, content) in messages {
+            chat_msgs.push(llama_cpp_2::model::LlamaChatMessage::new(role.to_string(), content.to_string())
+                .map_err(|e| format!("invalid chat message: {e}"))?);
+        }
+        
+        let formatted_prompt = self.model.apply_chat_template(&tmpl, &chat_msgs, true)
+            .map_err(|e| format!("failed to apply chat template: {e}"))?;
 
         // 2. Tokenize
         let tokens = self.model.str_to_token(&formatted_prompt, llama_cpp_2::model::AddBos::Always)
@@ -125,22 +105,13 @@ impl GgufEngine {
             let mut candidates = llama_cpp_2::token::data_array::LlamaTokenDataArray::from_iter(ctx.candidates_ith(batch.n_tokens() - 1), false);
             let next_token = candidates.sample_token_greedy();
             
-            if next_token == self.model.token_eos() {
+            // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
+            if self.model.is_eog_token(next_token) {
                 break;
             }
 
             if let Ok(token_bytes) = self.model.token_to_piece_bytes(next_token, 128, true, None) {
                 let token_str = String::from_utf8_lossy(&token_bytes);
-                
-                let mut should_stop = false;
-                for stop in &stop_tokens {
-                    if token_str.contains(stop) {
-                        should_stop = true;
-                        break;
-                    }
-                }
-                if should_stop { break; }
-                
                 output.push_str(&token_str);
             }
 
