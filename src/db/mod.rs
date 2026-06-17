@@ -17,6 +17,7 @@ mod contexts;
 pub mod embeddings;
 mod grid;
 mod structural_profiles;
+mod grid_profiles;
 mod profiles;
 mod registries;
 mod settings;
@@ -98,6 +99,7 @@ sql_enum!(ChatStatus {
     ChatStatus::Error => "error",
 });
 sql_enum!(RowRefType { RowRefType::Chunk => "chunk", RowRefType::GridRow => "grid_row" });
+sql_enum!(GridDataFormat { GridDataFormat::Plain => "plain", GridDataFormat::Json => "json" });
 
 /// Ordered migrations; index i brings the schema to version i+1.
 const MIGRATIONS: &[&str] = &[
@@ -111,6 +113,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v8.sql"),
     include_str!("schema_v9.sql"),
     include_str!("schema_v10.sql"),
+    include_str!("schema_v11.sql"),
+    include_str!("schema_v12.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

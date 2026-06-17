@@ -63,6 +63,13 @@ pub enum RowRefType {
     GridRow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GridDataFormat {
+    Plain,
+    Json,
+}
+
 // --- Registries ------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +216,25 @@ pub struct NewStructuralProfile {
     pub min_chunk_chars: i64,
     pub max_chunk_chars: i64,
     pub patterns: Vec<NewStructuralPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridProfile {
+    pub id: i64,
+    pub name: String,
+    pub system_prompt: String,
+    pub data_format: GridDataFormat,
+    pub json_schema: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewGridProfile {
+    pub name: String,
+    pub system_prompt: String,
+    pub data_format: GridDataFormat,
+    pub json_schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
