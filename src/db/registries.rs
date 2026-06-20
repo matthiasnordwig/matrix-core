@@ -41,6 +41,7 @@ fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint> {
         tpm_limit: row.get("tpm_limit")?,
         rpm_limit: row.get("rpm_limit")?,
         max_concurrency: row.get("max_concurrency")?,
+        is_reasoning: row.get("is_reasoning")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -153,8 +154,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO llm_endpoints
                 (name, base_url, model_id, api_key_ref, timeout_ms, max_retries, provider,
-                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency, is_reasoning)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 e.name,
                 e.base_url,
@@ -169,6 +170,7 @@ impl Database {
                 e.tpm_limit,
                 e.rpm_limit,
                 e.max_concurrency,
+                e.is_reasoning,
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -202,7 +204,7 @@ impl Database {
                 name = ?2, base_url = ?3, model_id = ?4, api_key_ref = ?5,
                 timeout_ms = ?6, max_retries = ?7, provider = ?8, window_tokens = ?9,
                 context_window = ?10, output_reserve_tokens = ?11, tpm_limit = ?12,
-                rpm_limit = ?13, max_concurrency = ?14
+                rpm_limit = ?13, max_concurrency = ?14, is_reasoning = ?15
              WHERE id = ?1",
             params![
                 id,
@@ -219,6 +221,7 @@ impl Database {
                 e.tpm_limit,
                 e.rpm_limit,
                 e.max_concurrency,
+                e.is_reasoning,
             ],
         )?;
         self.llm_endpoint(id)?

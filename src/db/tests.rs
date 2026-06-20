@@ -48,6 +48,9 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             chunking_profile_id: Some(profile.id),
             embedding_model_id: Some(model.id),
             embedding_dim: Some(4),
+            chunk_endpoint_id: None,
+            chunking_strategy: "Semantic".into(),
+            structural_profile_id: None,
         })
         .unwrap();
 
@@ -69,7 +72,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 6);
+    assert_eq!(db.schema_version().unwrap(), 13);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);

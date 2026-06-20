@@ -37,3 +37,13 @@ llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 # Runtime static lib links into the device build. Applies when core is the build root.
 [patch.crates-io]
 ort-sys = { path = "../vendor/ort-sys-2.0.0-rc.10" }
+
+
+
+[[bin]]
+name = "test_grammar"
+path = "src/bin/test_grammar.rs"
+
+[[bin]]
+name = "test_translate"
+path = "src/bin/test_translate.rs"

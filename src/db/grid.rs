@@ -39,6 +39,7 @@ fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
         response: row.get("response")?,
         status: row.get("status")?,
         error: row.get("error")?,
+        prompt_snapshot: row.get("prompt_snapshot")?,
         updated_at: row.get("updated_at")?,
     })
 }
@@ -86,8 +87,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO grid_chat_results
                 (run_id, row_ref_type, row_ref_id, prompt, columns_context,
-                 retrieved_refs, response, status, error, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, unixepoch())
+                 retrieved_refs, response, status, error, prompt_snapshot, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
              ON CONFLICT(run_id, row_ref_type, row_ref_id) DO UPDATE SET
                 prompt = excluded.prompt,
                 columns_context = excluded.columns_context,
@@ -95,6 +96,7 @@ impl Database {
                 response = excluded.response,
                 status = excluded.status,
                 error = excluded.error,
+                prompt_snapshot = excluded.prompt_snapshot,
                 updated_at = unixepoch()",
             params![
                 r.run_id,
@@ -106,6 +108,7 @@ impl Database {
                 r.response,
                 r.status,
                 r.error,
+                r.prompt_snapshot,
             ],
         )?;
         Ok(self

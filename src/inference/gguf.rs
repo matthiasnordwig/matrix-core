@@ -53,7 +53,7 @@ impl GgufEngine {
         Ok(Self { model, n_ctx })
     }
 
-    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32) -> Result<String, String> {
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, is_reasoning: bool, json_schema: Option<&str>) -> Result<String, String> {
         let backend = get_backend()?;
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(self.n_ctx));
@@ -99,15 +99,47 @@ impl GgufEngine {
             n_past += chunk.len() as i32;
         }
 
+        let mut grammar_sampler = if let Some(schema) = json_schema {
+            let grammar_str = llama_cpp_2::json_schema_to_grammar(schema)
+                .map_err(|e| format!("invalid json schema: {}", e))?;
+            
+            if is_reasoning {
+                Some(llama_cpp_2::sampling::LlamaSampler::grammar_lazy(
+                    &self.model,
+                    &grammar_str,
+                    "root",
+                    &["</think>"],
+                    &[]
+                ).map_err(|e| format!("grammar lazy init: {:?}", e))?)
+            } else {
+                Some(llama_cpp_2::sampling::LlamaSampler::grammar(
+                    &self.model,
+                    &grammar_str,
+                    "root"
+                ).map_err(|e| format!("grammar init: {:?}", e))?)
+            }
+        } else {
+            None
+        };
+
         // 4. Sampling loop
         let mut output = String::new();
         for _ in 0..max_tokens {
             let mut candidates = llama_cpp_2::token::data_array::LlamaTokenDataArray::from_iter(ctx.candidates_ith(batch.n_tokens() - 1), false);
+            
+            if let Some(sampler) = &mut grammar_sampler {
+                sampler.apply(&mut candidates);
+            }
+            
             let next_token = candidates.sample_token_greedy();
             
             // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
             if self.model.is_eog_token(next_token) {
                 break;
+            }
+
+            if let Some(sampler) = &mut grammar_sampler {
+                sampler.accept(next_token);
             }
 
             if let Ok(token_bytes) = self.model.token_to_piece_bytes(next_token, 128, true, None) {

@@ -126,6 +126,7 @@ pub struct LlmEndpoint {
     pub tpm_limit: Option<i64>,
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
+    pub is_reasoning: bool,
     pub created_at: i64,
 }
 
@@ -144,6 +145,7 @@ pub struct NewLlmEndpoint {
     pub tpm_limit: Option<i64>,
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
+    pub is_reasoning: bool,
 }
 
 // --- Profiles & Contexts ---------------------------------------------------
@@ -420,6 +422,7 @@ pub struct GridChatResult {
     pub response: Option<String>,
     pub status: ChatStatus,
     pub error: Option<String>,
+    pub prompt_snapshot: Option<String>,
     pub updated_at: i64,
 }
 
@@ -435,6 +438,7 @@ pub struct GridChatUpsert {
     pub response: Option<String>,
     pub status: ChatStatus,
     pub error: Option<String>,
+    pub prompt_snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

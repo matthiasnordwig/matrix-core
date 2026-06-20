@@ -1,0 +1,1 @@
+ALTER TABLE llm_endpoints ADD COLUMN is_reasoning BOOLEAN NOT NULL DEFAULT 0;

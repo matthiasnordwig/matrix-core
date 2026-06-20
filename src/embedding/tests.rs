@@ -48,6 +48,9 @@ fn context_with_vectors(
             chunking_profile_id: None,
             embedding_model_id: Some(model_id),
             embedding_dim: Some(dim),
+            chunk_endpoint_id: None,
+            chunking_strategy: "Semantic".into(),
+            structural_profile_id: None,
         })
         .unwrap();
     let doc = db
