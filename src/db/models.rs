@@ -449,3 +449,66 @@ pub struct GridRun {
     pub prompt: String,
     pub updated_at: i64,
 }
+
+// --- Ontology (GraphRAG) ---------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyProfile {
+    pub id: i64,
+    pub name: String,
+    pub entity_types_json: String,
+    pub relation_types_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewOntologyProfile {
+    pub name: String,
+    pub entity_types_json: String,
+    pub relation_types_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyNode {
+    pub id: i64,
+    pub context_id: i64,
+    pub label: String,
+    pub entity_type: String,
+    pub description: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewOntologyNode {
+    pub context_id: i64,
+    pub label: String,
+    pub entity_type: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyEdge {
+    pub id: i64,
+    pub context_id: i64,
+    pub source_id: i64,
+    pub target_id: i64,
+    pub relation_type: String,
+    pub chunk_id: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewOntologyEdge {
+    pub context_id: i64,
+    pub source_id: i64,
+    pub target_id: i64,
+    pub relation_type: String,
+    pub chunk_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphContext {
+    pub nodes: Vec<String>,
+    pub edges: Vec<String>,
+}

@@ -19,7 +19,7 @@ use crate::{Database, Result};
 
 impl Database {
     /// Map each selected context to its embedding model id.
-    fn contexts_by_model(&self, context_ids: &[i64]) -> Result<HashMap<i64, Vec<i64>>> {
+    pub(crate) fn contexts_by_model(&self, context_ids: &[i64]) -> Result<HashMap<i64, Vec<i64>>> {
         let mut by_model: HashMap<i64, Vec<i64>> = HashMap::new();
         for &cid in context_ids {
             if let Some(ctx) = self.context(cid)?

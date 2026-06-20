@@ -21,6 +21,7 @@ mod grid_profiles;
 mod profiles;
 mod registries;
 mod settings;
+pub mod ontology;
 
 /// Errors surfaced by the persistence layer.
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +119,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v13.sql"),
     include_str!("schema_v14.sql"),
     include_str!("schema_v15.sql"),
+    include_str!("schema_v16.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
