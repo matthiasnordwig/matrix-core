@@ -16,6 +16,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         embedding_model_id: row.get("embedding_model_id")?,
         embedding_dim: row.get("embedding_dim")?,
         chunk_endpoint_id: row.get("chunk_endpoint_id")?,
+        extract_title_llm: row.get("extract_title_llm")?,
         status: row.get("status")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -42,8 +43,8 @@ impl Database {
     pub fn create_context(&self, c: &NewContext) -> Result<Context> {
         self.conn.execute(
             "INSERT INTO contexts
-                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim, chunk_endpoint_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim, chunk_endpoint_id, extract_title_llm)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 c.name,
                 c.description,
@@ -53,6 +54,7 @@ impl Database {
                 c.embedding_model_id,
                 c.embedding_dim,
                 c.chunk_endpoint_id,
+                c.extract_title_llm,
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -94,7 +96,7 @@ impl Database {
         self.conn.execute(
             "UPDATE contexts SET
                 name = ?2, description = ?3, chunking_strategy = ?4, chunking_profile_id = ?5,
-                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, chunk_endpoint_id = ?9, updated_at = unixepoch()
+                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, chunk_endpoint_id = ?9, extract_title_llm = ?10, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id,
@@ -106,6 +108,7 @@ impl Database {
                 c.embedding_model_id,
                 c.embedding_dim,
                 c.chunk_endpoint_id,
+                c.extract_title_llm,
             ],
         )?;
         self.context(id)?

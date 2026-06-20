@@ -250,6 +250,7 @@ pub struct Context {
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
     pub chunk_endpoint_id: Option<i64>,
+    pub extract_title_llm: bool,
     pub status: ContextStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -265,6 +266,7 @@ pub struct NewContext {
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
     pub chunk_endpoint_id: Option<i64>,
+    pub extract_title_llm: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
