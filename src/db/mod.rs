@@ -120,6 +120,9 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v14.sql"),
     include_str!("schema_v15.sql"),
     include_str!("schema_v16.sql"),
+    include_str!("schema_v17.sql"),
+    include_str!("schema_v18.sql"),
+    include_str!("schema_v19.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -167,9 +170,16 @@ impl Database {
         Ok(())
     }
 
-    /// Current `PRAGMA user_version`.
     pub fn schema_version(&self) -> Result<i64> {
         Ok(self.conn.pragma_query_value(None, "user_version", |row| row.get(0))?)
+    }
+
+    pub fn begin_transaction(&self) -> Result<()> {
+        self.conn.execute_batch("BEGIN TRANSACTION").map_err(CoreError::Sqlite)
+    }
+    
+    pub fn commit_transaction(&self) -> Result<()> {
+        self.conn.execute_batch("COMMIT").map_err(CoreError::Sqlite)
     }
 }
 

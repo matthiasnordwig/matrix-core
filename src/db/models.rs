@@ -458,6 +458,9 @@ pub struct OntologyProfile {
     pub name: String,
     pub entity_types_json: String,
     pub relation_types_json: String,
+    pub extract_prompt: Option<String>,
+    pub dedup_prompt: Option<String>,
+    pub community_prompt: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -467,6 +470,9 @@ pub struct NewOntologyProfile {
     pub name: String,
     pub entity_types_json: String,
     pub relation_types_json: String,
+    pub extract_prompt: Option<String>,
+    pub dedup_prompt: Option<String>,
+    pub community_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -476,6 +482,7 @@ pub struct OntologyNode {
     pub label: String,
     pub entity_type: String,
     pub description: String,
+    pub community_id: Option<i64>,
     pub created_at: i64,
 }
 
@@ -511,4 +518,16 @@ pub struct NewOntologyEdge {
 pub struct GraphContext {
     pub nodes: Vec<String>,
     pub edges: Vec<String>,
+    pub community_summaries: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyCommunity {
+    pub id: i64,
+    pub context_id: i64,
+    pub community_label: String,
+    pub node_count: i64,
+    pub summary_text: String,
+    pub created_at: i64,
+}
+
