@@ -1,0 +1,1 @@
+ALTER TABLE contexts ADD COLUMN auto_merge_ontology BOOLEAN NOT NULL DEFAULT 1;
