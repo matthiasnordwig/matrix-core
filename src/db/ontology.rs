@@ -298,6 +298,31 @@ impl Database {
         Ok(list)
     }
 
+    pub fn get_ontology_edges_for_sanitization(&self, context_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, source_id, target_id, relation_type FROM ontology_edges WHERE context_id = ?1")?;
+        let iter = stmt.query_map([context_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        let mut list = Vec::new();
+        for item in iter { if let Ok(i) = item { list.push(i); } }
+        Ok(list)
+    }
+
+    pub fn reverse_ontology_edge(&self, edge_id: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare("SELECT source_id, target_id FROM ontology_edges WHERE id = ?1")?;
+        let (source, target): (i64, i64) = stmt.query_row([edge_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        drop(stmt);
+        tx.execute("UPDATE ontology_edges SET source_id = ?1, target_id = ?2 WHERE id = ?3", rusqlite::params![target, source, edge_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_ontology_edge(&self, edge_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM ontology_edges WHERE id = ?1", rusqlite::params![edge_id])?;
+        Ok(())
+    }
+
     pub fn get_ontology_nodes_with_descriptions(&self, context_id: i64) -> Result<std::collections::HashMap<i64, (String, String)>> {
         let mut stmt = self.conn.prepare("SELECT id, label, description FROM ontology_nodes WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| {
@@ -753,5 +778,71 @@ impl Database {
             }
         }
         Ok(map)
+    }
+
+    pub fn insert_quarantined_chunk(&self, context_id: i64, chunk_id: i64, graph_json: &str, error_reason: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO ontology_quarantine (chunk_id, context_id, graph_json, error_reason) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![chunk_id, context_id, graph_json, error_reason],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_quarantined_chunks(&self, context_id: i64) -> Result<Vec<crate::db::models::OntologyQuarantineChunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chunk_id, context_id, graph_json, error_reason, created_at FROM ontology_quarantine WHERE context_id = ?1"
+        )?;
+        let rows = stmt.query_map([context_id], |row| {
+            Ok(crate::db::models::OntologyQuarantineChunk {
+                chunk_id: row.get(0)?,
+                context_id: row.get(1)?,
+                graph_json: row.get(2)?,
+                error_reason: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_quarantined_chunk(&self, chunk_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM ontology_quarantine WHERE chunk_id = ?1",
+            [chunk_id]
+        )?;
+        Ok(())
+    }
+
+    pub fn save_chunk_state(&self, context_id: i64, chunk_id: i64, completed_batches_json: &str, partial_graph_json: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ontology_chunk_states (context_id, chunk_id, completed_batches_json, partial_graph_json)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(context_id, chunk_id) DO UPDATE SET
+             completed_batches_json = excluded.completed_batches_json,
+             partial_graph_json = excluded.partial_graph_json",
+            rusqlite::params![context_id, chunk_id, completed_batches_json, partial_graph_json]
+        )?;
+        Ok(())
+    }
+
+    pub fn load_chunk_state(&self, context_id: i64, chunk_id: i64) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT completed_batches_json, partial_graph_json FROM ontology_chunk_states WHERE context_id = ?1 AND chunk_id = ?2"
+        )?;
+        let mut iter = stmt.query_map(rusqlite::params![context_id, chunk_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        if let Some(res) = iter.next() {
+            Ok(Some(res?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_chunk_state(&self, context_id: i64, chunk_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM ontology_chunk_states WHERE context_id = ?1 AND chunk_id = ?2",
+            rusqlite::params![context_id, chunk_id]
+        )?;
+        Ok(())
     }
 }

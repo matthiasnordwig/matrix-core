@@ -127,6 +127,7 @@ pub struct LlmEndpoint {
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
     pub is_reasoning: bool,
+    pub supports_structured_output: bool,
     pub created_at: i64,
 }
 
@@ -146,6 +147,7 @@ pub struct NewLlmEndpoint {
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
     pub is_reasoning: bool,
+    pub supports_structured_output: bool,
 }
 
 // --- Profiles & Contexts ---------------------------------------------------
@@ -249,7 +251,9 @@ pub struct Context {
     pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
-    pub chunk_endpoint_id: Option<i64>,
+    pub llm_id: Option<i64>,
+    pub fallback_llm_id: Option<i64>,
+    pub ontology_profile_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
     pub status: ContextStatus,
@@ -266,7 +270,9 @@ pub struct NewContext {
     pub structural_profile_id: Option<i64>,
     pub embedding_model_id: Option<i64>,
     pub embedding_dim: Option<i64>,
-    pub chunk_endpoint_id: Option<i64>,
+    pub llm_id: Option<i64>,
+    pub fallback_llm_id: Option<i64>,
+    pub ontology_profile_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
 }
@@ -533,3 +539,12 @@ pub struct OntologyCommunity {
     pub created_at: i64,
 }
 
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct OntologyQuarantineChunk {
+    pub chunk_id: i64,
+    pub context_id: i64,
+    pub graph_json: String,
+    pub error_reason: String,
+    pub created_at: String,
+}
