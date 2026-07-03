@@ -402,12 +402,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_ontology_nodes_missing_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare("SELECT id, description FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NULL")?;
+    pub fn get_ontology_nodes_missing_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, label, description FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NULL")?;
         let iter = stmt.query_map([context_id], |row| {
             let id: i64 = row.get(0)?;
-            let desc: String = row.get(1)?;
-            Ok((id, desc))
+            let label: String = row.get(1)?;
+            let desc: String = row.get(2)?;
+            Ok((id, label, desc))
         })?;
         
         let mut list = Vec::new();
@@ -941,18 +942,18 @@ impl Database {
 
     // --- Admin / Manual Curation ---
 
-    pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str) -> Result<()> {
+    pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ontology_nodes (context_id, label, entity_type, description) VALUES (?1, ?2, ?3, '')",
-            rusqlite::params![context_id, label, entity_type],
+            "INSERT INTO ontology_nodes (context_id, label, entity_type, description, vector_blob) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![context_id, label, entity_type, description, vector_blob],
         )?;
         Ok(())
     }
 
-    pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str) -> Result<()> {
+    pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
-            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2 WHERE id = ?3",
-            rusqlite::params![label, entity_type, id],
+            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, description = ?3, vector_blob = ?4 WHERE id = ?5",
+            rusqlite::params![label, entity_type, description, vector_blob, id],
         )?;
         Ok(())
     }
@@ -960,6 +961,10 @@ impl Database {
     pub fn delete_ontology_node(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM ontology_nodes WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    pub fn context_id_for_ontology_node(&self, id: i64) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT context_id FROM ontology_nodes WHERE id = ?1", [id], |row| row.get(0))?)
     }
 
     

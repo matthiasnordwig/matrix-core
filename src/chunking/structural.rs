@@ -21,6 +21,7 @@ struct ClassifiedLine {
     matched_role: Option<String>,
     extracted_abschnitt: Option<String>,
     extracted_titel: Option<String>,
+    is_mostly_bold: bool,
 }
 
 pub fn chunk_pdf_structurally(
@@ -60,6 +61,11 @@ pub fn chunk_pdf_structurally(
             priority: 100,
         });
         comps.push(CompiledPattern {
+            role: "heading_l1".to_string(),
+            regex: RegexBuilder::new(r"^(\d+(\.\d+)*\.?|\([a-zA-Z0-9]\))\s+[A-Za-zÄÖÜäöüß].{0,79}$").case_insensitive(true).build().unwrap(),
+            priority: 110,
+        });
+        comps.push(CompiledPattern {
             role: "definition".to_string(),
             regex: RegexBuilder::new(r"\b(?:means|shall mean|bezeichnet|gilt als|im Sinne)").case_insensitive(true).build().unwrap(),
             priority: 50,
@@ -71,6 +77,7 @@ pub fn chunk_pdf_structurally(
     let mut chunk_index = 0;
     
     let mut current_abschnitt: Option<String> = None;
+    let mut primary_abschnitt: Option<String> = None; // For major headings like '§ 1'
     let mut current_titel: Option<String> = None;
     
     let mut current_chunk_text = String::new();
@@ -126,6 +133,22 @@ pub fn chunk_pdf_structurally(
     let page_count = doc.page_count().unwrap_or(0);
     let mut classified_lines = Vec::new();
     
+    let mut global_char_count = 0;
+    let mut global_font_size_sum = 0.0;
+    for p in 0..page_count {
+        if let Ok(chars) = doc.extract_chars(p) {
+            global_char_count += chars.len();
+            for c in chars {
+                global_font_size_sum += c.font_size;
+            }
+        }
+    }
+    let baseline_font_size = if global_char_count > 0 {
+        global_font_size_sum / (global_char_count as f32)
+    } else {
+        12.0
+    };
+    
     for page_idx in 0..page_count {
         let chars = doc.extract_chars(page_idx).unwrap_or_default();
         if chars.is_empty() { continue; }
@@ -135,13 +158,6 @@ pub fn chunk_pdf_structurally(
             let y_key = (ch.bbox.y * 10.0).round() as i32;
             lines_by_y.entry(y_key).or_default().push(ch);
         }
-
-        let total_chars = chars.len();
-        let avg_font_size = if total_chars > 0 {
-            chars.iter().map(|c| c.font_size).sum::<f32>() / total_chars as f32
-        } else {
-            12.0
-        };
 
         let mut keys: Vec<i32> = lines_by_y.keys().copied().collect();
         if keys.is_empty() { continue; }
@@ -201,12 +217,6 @@ pub fn chunk_pdf_structurally(
                     break;
                 }
             }
-            
-            if matched_role.is_none() && (max_font_size > avg_font_size * 1.2 || is_mostly_bold) && line_text_trimmed.len() < 100 {
-                matched_role = Some("heading_l1".to_string());
-                extracted_titel = Some(line_text_trimmed.to_string());
-            }
-
             if matched_role.as_deref() == Some("ignore") {
                 continue;
             }
@@ -219,6 +229,7 @@ pub fn chunk_pdf_structurally(
                 matched_role,
                 extracted_abschnitt,
                 extracted_titel,
+                is_mostly_bold,
             });
         }
     }
@@ -233,13 +244,29 @@ pub fn chunk_pdf_structurally(
             let delta_y = (prev_y - line.y).abs() as f32 / 10.0;
             delta_y > line.max_font_size * 1.5
         } else {
-            false
+            true // Start of document or start of a new page is always a potential new paragraph
         };
         
         prev_y = line.y;
         prev_page = line.page_idx;
 
-        let role = line.matched_role.as_deref();
+        let mut matched_role = line.matched_role.clone();
+        let extracted_abschnitt = line.extracted_abschnitt.clone();
+        let mut extracted_titel = line.extracted_titel.clone();
+
+        if matched_role.is_none() && is_new_paragraph && line_text_trimmed.len() < 80 {
+            let ends_with_punctuation = line_text_trimmed.ends_with('.') 
+                || line_text_trimmed.ends_with(',') 
+                || line_text_trimmed.ends_with(':') 
+                || line_text_trimmed.ends_with(';');
+            
+            if !ends_with_punctuation && (line.max_font_size > baseline_font_size * 1.1 || line.is_mostly_bold) {
+                matched_role = Some("heading_l1".to_string());
+                extracted_titel = Some(line_text_trimmed.to_string());
+            }
+        }
+
+        let role = matched_role.as_deref();
         let is_heading = role.map_or(false, |r| r.starts_with("heading"));
         let is_definition = role == Some("definition");
         
@@ -267,12 +294,23 @@ pub fn chunk_pdf_structurally(
         }
         
         if is_heading {
-            if let Some(ref a) = line.extracted_abschnitt {
-                current_abschnitt = Some(a.clone());
+            if let Some(ref a) = extracted_abschnitt {
+                // Check if it's a major heading (contains letters other than just a-z enum)
+                let is_major = a.contains("Art") || a.contains('§') || a.contains("Kapitel") || a.contains("Abschnitt") || a.contains("TITEL") || a.contains("TITLE") || a.contains("CHAPTER");
+                if is_major {
+                    primary_abschnitt = Some(a.clone());
+                    current_abschnitt = Some(a.clone());
+                } else {
+                    if let Some(ref p) = primary_abschnitt {
+                        current_abschnitt = Some(format!("{} {}", p, a));
+                    } else {
+                        current_abschnitt = Some(a.clone());
+                    }
+                }
             }
-            if let Some(ref t) = line.extracted_titel {
+            if let Some(ref t) = extracted_titel {
                 current_titel = Some(t.clone());
-            } else if line.extracted_abschnitt.is_none() {
+            } else if extracted_abschnitt.is_none() {
                 current_titel = Some(line_text_trimmed.to_string());
             }
         }
