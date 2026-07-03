@@ -198,4 +198,17 @@ impl Database {
             .conn
             .execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?)
     }
+
+    pub fn list_chunks_by_page(&self, context_id: Option<i64>, page_number: i64) -> Result<Vec<Chunk>> {
+        let sql = match context_id {
+            Some(_) => "SELECT * FROM chunks WHERE context_id = ?1 AND is_omitted = 0 AND (CAST(json_extract(metadata, '$.page') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.Page') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.seite') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.Seite') AS INTEGER) = ?2) ORDER BY document_id, chunk_index",
+            None => "SELECT * FROM chunks WHERE is_omitted = 0 AND (CAST(json_extract(metadata, '$.page') AS INTEGER) = ?1 OR CAST(json_extract(metadata, '$.Page') AS INTEGER) = ?1 OR CAST(json_extract(metadata, '$.seite') AS INTEGER) = ?1 OR CAST(json_extract(metadata, '$.Seite') AS INTEGER) = ?1) ORDER BY document_id, chunk_index",
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = match context_id {
+            Some(cid) => stmt.query_map(rusqlite::params![cid, page_number], row_to_chunk)?,
+            None => stmt.query_map(rusqlite::params![page_number], row_to_chunk)?,
+        };
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
 }

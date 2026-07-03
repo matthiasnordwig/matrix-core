@@ -1,7 +1,7 @@
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
 use std::num::NonZeroU32;
 use std::sync::{OnceLock, Mutex};
 
@@ -32,31 +32,40 @@ impl GgufEngine {
         #[allow(unused_mut)]
         let mut model_params = LlamaModelParams::default();
         
-        // Disable mmap on iOS because iOS Personal Teams lack the Extended Virtual
-        // Addressing entitlement, meaning large mmaps will silently fail and return null.
-        #[cfg(target_os = "ios")]
-        {
-            model_params = model_params.with_use_mmap(false);
-        }
-        #[cfg(not(target_os = "ios"))]
-        {
-            model_params = model_params.with_use_mmap(true);
-        }
+        model_params = model_params.with_use_mmap(true);
         
         #[cfg(feature = "gguf-metal")]
         {
             model_params = model_params.with_n_gpu_layers(999);
         }
+        if !std::path::Path::new(model_path).exists() {
+            return Err(format!("FILE NOT FOUND! iOS sucht nach der Datei unter dem Pfad: {}", model_path));
+        }
+
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| format!("model load {model_path}: {e}"))?;
             
         Ok(Self { model, n_ctx })
     }
 
-    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, is_reasoning: bool, json_schema: Option<&str>) -> Result<String, String> {
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<String, String> {
         let backend = get_backend()?;
-        let ctx_params = LlamaContextParams::default()
+        let mut ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(self.n_ctx));
+
+        if let Some(q) = kv_quantization {
+            let kv_type = match q {
+                "Q8_0" => KvCacheType::Q8_0,
+                "Q4_0" => KvCacheType::Q4_0,
+                _ => KvCacheType::F16,
+            };
+            ctx_params = ctx_params.with_type_k(kv_type).with_type_v(kv_type);
+        }
+        
+        if let Some(t) = cpu_threads {
+            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
+        }
+
         let mut ctx = self.model.new_context(backend, ctx_params)
             .map_err(|e| format!("context create: {e}"))?;
 
@@ -99,48 +108,54 @@ impl GgufEngine {
             n_past += chunk.len() as i32;
         }
 
-        let mut grammar_sampler = if let Some(schema) = json_schema {
+        let mut samplers = vec![
+            llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
+            llama_cpp_2::sampling::LlamaSampler::top_k(40),
+            llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
+            llama_cpp_2::sampling::LlamaSampler::temp(0.7),
+            llama_cpp_2::sampling::LlamaSampler::dist(1337),
+        ];
+
+        if let Some(schema) = json_schema {
             let grammar_str = llama_cpp_2::json_schema_to_grammar(schema)
                 .map_err(|e| format!("invalid json schema: {}", e))?;
             
-            if is_reasoning {
-                Some(llama_cpp_2::sampling::LlamaSampler::grammar_lazy(
+            let grammar = if is_reasoning {
+                llama_cpp_2::sampling::LlamaSampler::grammar_lazy(
                     &self.model,
                     &grammar_str,
                     "root",
                     &["</think>"],
                     &[]
-                ).map_err(|e| format!("grammar lazy init: {:?}", e))?)
+                ).map_err(|e| format!("grammar lazy init: {:?}", e))?
             } else {
-                Some(llama_cpp_2::sampling::LlamaSampler::grammar(
+                llama_cpp_2::sampling::LlamaSampler::grammar(
                     &self.model,
                     &grammar_str,
                     "root"
-                ).map_err(|e| format!("grammar init: {:?}", e))?)
-            }
-        } else {
-            None
-        };
+                ).map_err(|e| format!("grammar init: {:?}", e))?
+            };
+            samplers.insert(0, grammar);
+        }
+
+        let mut chain = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
+
+        // Accept prompt tokens into the chain to avoid repeating the prompt
+        for &t in &tokens {
+            chain.accept(t);
+        }
 
         // 4. Sampling loop
         let mut output = String::new();
         for _ in 0..max_tokens {
-            let mut candidates = llama_cpp_2::token::data_array::LlamaTokenDataArray::from_iter(ctx.candidates_ith(batch.n_tokens() - 1), false);
-            
-            if let Some(sampler) = &mut grammar_sampler {
-                sampler.apply(&mut candidates);
-            }
-            
-            let next_token = candidates.sample_token_greedy();
+            let next_token = chain.sample(&ctx, batch.n_tokens() - 1);
             
             // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
             if self.model.is_eog_token(next_token) {
                 break;
             }
 
-            if let Some(sampler) = &mut grammar_sampler {
-                sampler.accept(next_token);
-            }
+            chain.accept(next_token);
 
             if let Ok(token_bytes) = self.model.token_to_piece_bytes(next_token, 128, true, None) {
                 let token_str = String::from_utf8_lossy(&token_bytes);

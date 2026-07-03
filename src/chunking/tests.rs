@@ -84,7 +84,7 @@ fn leave_out_drops_segments() {
 fn metadata_inherits_last_heading() {
     let r = resp(
         vec![
-            StartItem::Detailed { i: 0, abschnitt: Some("§1".into()), titel: Some("Titel".into()) },
+            StartItem::Detailed { i: 0, section: Some("§1".into()), title: Some("Titel".into()) },
             StartItem::Index(2),
         ],
         vec![],
@@ -99,7 +99,7 @@ fn metadata_inherits_last_heading() {
 fn response_json_is_lenient() {
     // bare ints and detailed objects mixed
     let r: LlmChunkResponse =
-        serde_json::from_str(r#"{"starts":[0,{"i":2,"titel":"X"}],"leave_out":[1]}"#).unwrap();
+        serde_json::from_str(r#"{"starts":[0,{"i":2,"title":"X"}],"leave_out":[1]}"#).unwrap();
     assert_eq!(r.starts.len(), 2);
     assert_eq!(r.leave_out, vec![1]);
 }

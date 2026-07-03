@@ -93,17 +93,17 @@ pub fn chunk_pdf_structurally(
             let sig_text: String = trimmed.chars().take(80).collect();
             let mut meta_map = serde_json::Map::new();
             if let Some(a) = abschnitt {
-                meta_map.insert("abschnitt".to_string(), serde_json::Value::String(a.clone()));
+                meta_map.insert("section".to_string(), serde_json::Value::String(a.clone()));
             } else {
-                meta_map.insert("abschnitt".to_string(), serde_json::Value::String("".to_string()));
+                meta_map.insert("section".to_string(), serde_json::Value::String("".to_string()));
             }
             if let Some(t) = titel {
-                meta_map.insert("titel".to_string(), serde_json::Value::String(t.clone()));
+                meta_map.insert("title".to_string(), serde_json::Value::String(t.clone()));
             } else {
-                meta_map.insert("titel".to_string(), serde_json::Value::String("".to_string()));
+                meta_map.insert("title".to_string(), serde_json::Value::String("".to_string()));
             }
             if let Some(p) = page {
-                meta_map.insert("seite".to_string(), serde_json::json!(p + 1));
+                meta_map.insert("page".to_string(), serde_json::json!(p + 1));
             }
             let metadata = serde_json::Value::Object(meta_map).to_string();
 

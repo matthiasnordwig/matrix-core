@@ -12,7 +12,7 @@ use serde::Deserialize;
 use super::segments::split_segments;
 use crate::db::models::NewChunk;
 
-/// A chunk start: either a bare index `12` or `{ "i": 12, "abschnitt": …, "titel": … }`.
+/// A chunk start: either a bare index `12` or `{ "i": 12, "section": …, "title": … }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum StartItem {
@@ -21,9 +21,9 @@ pub enum StartItem {
         #[serde(alias = "index", alias = "start", alias = "segment")]
         i: usize,
         #[serde(default)]
-        abschnitt: Option<String>,
+        section: Option<String>,
         #[serde(default)]
-        titel: Option<String>,
+        title: Option<String>,
     },
 }
 
@@ -31,7 +31,7 @@ impl StartItem {
     fn parts(&self) -> (usize, Option<String>, Option<String>) {
         match self {
             StartItem::Index(i) => (*i, None, None),
-            StartItem::Detailed { i, abschnitt, titel } => (*i, abschnitt.clone(), titel.clone()),
+            StartItem::Detailed { i, section, title } => (*i, section.clone(), title.clone()),
         }
     }
 }
@@ -107,7 +107,7 @@ pub fn assemble(
         let ti = non_empty(ti0).or_else(|| last_ti.clone());
         last_ab = ab.clone();
         last_ti = ti.clone();
-        let metadata = serde_json::json!({ "abschnitt": ab, "titel": ti }).to_string();
+        let metadata = serde_json::json!({ "section": ab, "title": ti }).to_string();
 
         chunks.push(NewChunk {
             context_id,

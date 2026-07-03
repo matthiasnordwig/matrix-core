@@ -48,7 +48,11 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             chunking_profile_id: Some(profile.id),
             embedding_model_id: Some(model.id),
             embedding_dim: Some(4),
-            chunk_endpoint_id: None,
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            extract_title_llm: None,
+            auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })
@@ -257,6 +261,9 @@ fn grid_chat_result_overwrites_no_history() {
     let run = "run-1";
     let mut upsert = GridChatUpsert {
         run_id: run.into(),
+        grid_id: 1,
+        system_prompt: "Sys".to_string(),
+        prompt_snapshot: "{}".to_string(),
         row_ref_type: RowRefType::GridRow,
         row_ref_id: 42,
         prompt: "Summarize".into(),

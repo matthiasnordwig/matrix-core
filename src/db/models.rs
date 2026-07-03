@@ -128,6 +128,8 @@ pub struct LlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    pub kv_quantization: Option<String>,
+    pub cpu_threads: Option<i64>,
     pub created_at: i64,
 }
 
@@ -148,6 +150,8 @@ pub struct NewLlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    pub kv_quantization: Option<String>,
+    pub cpu_threads: Option<i64>,
 }
 
 // --- Profiles & Contexts ---------------------------------------------------
@@ -509,7 +513,7 @@ pub struct OntologyEdge {
     pub source_id: i64,
     pub target_id: i64,
     pub relation_type: String,
-    pub chunk_id: i64,
+    pub chunk_ids: Vec<i64>,
     pub created_at: i64,
 }
 

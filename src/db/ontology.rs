@@ -97,17 +97,29 @@ impl Database {
 
     pub fn list_ontology_edges(&self, context_id: i64) -> Result<Vec<OntologyEdge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, context_id, source_id, target_id, relation_type, chunk_id, created_at 
-             FROM ontology_edges WHERE context_id = ?1"
+            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, GROUP_CONCAT(c.chunk_id) as chunk_ids, e.created_at 
+             FROM ontology_edges e
+             LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
+             WHERE e.context_id = ?1
+             GROUP BY e.id"
         )?;
         let rows = stmt.query_map([context_id], |row| {
+            let chunk_ids_str: Option<String> = row.get(5)?;
+            let mut chunk_ids = Vec::new();
+            if let Some(s) = chunk_ids_str {
+                for id_str in s.split(',') {
+                    if let Ok(id) = id_str.parse::<i64>() {
+                        chunk_ids.push(id);
+                    }
+                }
+            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
                 source_id: row.get(2)?,
                 target_id: row.get(3)?,
                 relation_type: row.get(4)?,
-                chunk_id: row.get(5)?,
+                chunk_ids,
                 created_at: row.get(6)?,
             })
         })?;
@@ -165,23 +177,43 @@ impl Database {
 
     pub fn create_ontology_edge(&self, new: &NewOntologyEdge) -> Result<OntologyEdge> {
         self.conn.execute(
-            "INSERT INTO ontology_edges (context_id, source_id, target_id, relation_type, chunk_id) 
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type, new.chunk_id],
+            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type) 
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
         )?;
-        let id = self.conn.last_insert_rowid();
+        let edge_id: i64 = self.conn.query_row(
+            "SELECT id FROM ontology_edges WHERE context_id = ?1 AND source_id = ?2 AND target_id = ?3 AND LOWER(relation_type) = LOWER(?4)",
+            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
+            |row| row.get(0)
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id) VALUES (?1, ?2)",
+            rusqlite::params![edge_id, new.chunk_id],
+        )?;
         let mut stmt = self.conn.prepare(
-            "SELECT id, context_id, source_id, target_id, relation_type, chunk_id, created_at 
-             FROM ontology_edges WHERE id = ?1"
+            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, GROUP_CONCAT(c.chunk_id) as chunk_ids, e.created_at 
+             FROM ontology_edges e
+             LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
+             WHERE e.id = ?1
+             GROUP BY e.id"
         )?;
-        let edge = stmt.query_row([id], |row| {
+        let edge = stmt.query_row([edge_id], |row| {
+            let chunk_ids_str: Option<String> = row.get(5)?;
+            let mut chunk_ids = Vec::new();
+            if let Some(s) = chunk_ids_str {
+                for id_str in s.split(',') {
+                    if let Ok(id) = id_str.parse::<i64>() {
+                        chunk_ids.push(id);
+                    }
+                }
+            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
                 source_id: row.get(2)?,
                 target_id: row.get(3)?,
                 relation_type: row.get(4)?,
-                chunk_id: row.get(5)?,
+                chunk_ids,
                 created_at: row.get(6)?,
             })
         })?;
@@ -190,8 +222,17 @@ impl Database {
 
     pub fn insert_ontology_edge_fast(&self, new: &NewOntologyEdge) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ontology_edges (context_id, source_id, target_id, relation_type, chunk_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type, new.chunk_id],
+            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
+        )?;
+        let edge_id: i64 = self.conn.query_row(
+            "SELECT id FROM ontology_edges WHERE context_id = ?1 AND source_id = ?2 AND target_id = ?3 AND LOWER(relation_type) = LOWER(?4)",
+            rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
+            |row| row.get(0)
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id) VALUES (?1, ?2)",
+            rusqlite::params![edge_id, new.chunk_id],
         )?;
         Ok(())
     }
@@ -418,9 +459,61 @@ impl Database {
     pub fn merge_ontology_nodes(&self, merges: &[(i64, i64)]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         for &(keep_id, drop_id) in merges {
-            tx.execute("UPDATE ontology_edges SET source_id = ?1 WHERE source_id = ?2", [keep_id, drop_id])?;
-            tx.execute("UPDATE ontology_edges SET target_id = ?1 WHERE target_id = ?2", [keep_id, drop_id])?;
-            tx.execute("DELETE FROM ontology_nodes WHERE id = ?1", [drop_id])?;
+            tx.execute("
+                INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id)
+                SELECT keep_edge.id, drop_chunk.chunk_id
+                FROM ontology_edges drop_edge
+                JOIN ontology_edges keep_edge 
+                  ON drop_edge.target_id = keep_edge.target_id 
+                 AND LOWER(drop_edge.relation_type) = LOWER(keep_edge.relation_type)
+                 AND keep_edge.source_id = ?1
+                JOIN ontology_edge_chunks drop_chunk ON drop_chunk.edge_id = drop_edge.id
+                WHERE drop_edge.source_id = ?2
+            ", rusqlite::params![keep_id, drop_id])?;
+            
+            tx.execute("
+                DELETE FROM ontology_edges 
+                WHERE id IN (
+                    SELECT drop_edge.id
+                    FROM ontology_edges drop_edge
+                    JOIN ontology_edges keep_edge 
+                      ON drop_edge.target_id = keep_edge.target_id 
+                     AND LOWER(drop_edge.relation_type) = LOWER(keep_edge.relation_type)
+                     AND keep_edge.source_id = ?1
+                    WHERE drop_edge.source_id = ?2
+                )
+            ", rusqlite::params![keep_id, drop_id])?;
+
+            tx.execute("UPDATE OR IGNORE ontology_edges SET source_id = ?1 WHERE source_id = ?2", rusqlite::params![keep_id, drop_id])?;
+
+            tx.execute("
+                INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id)
+                SELECT keep_edge.id, drop_chunk.chunk_id
+                FROM ontology_edges drop_edge
+                JOIN ontology_edges keep_edge 
+                  ON drop_edge.source_id = keep_edge.source_id 
+                 AND LOWER(drop_edge.relation_type) = LOWER(keep_edge.relation_type)
+                 AND keep_edge.target_id = ?1
+                JOIN ontology_edge_chunks drop_chunk ON drop_chunk.edge_id = drop_edge.id
+                WHERE drop_edge.target_id = ?2
+            ", rusqlite::params![keep_id, drop_id])?;
+
+            tx.execute("
+                DELETE FROM ontology_edges 
+                WHERE id IN (
+                    SELECT drop_edge.id
+                    FROM ontology_edges drop_edge
+                    JOIN ontology_edges keep_edge 
+                      ON drop_edge.source_id = keep_edge.source_id 
+                     AND LOWER(drop_edge.relation_type) = LOWER(keep_edge.relation_type)
+                     AND keep_edge.target_id = ?1
+                    WHERE drop_edge.target_id = ?2
+                )
+            ", rusqlite::params![keep_id, drop_id])?;
+
+            tx.execute("UPDATE OR IGNORE ontology_edges SET target_id = ?1 WHERE target_id = ?2", rusqlite::params![keep_id, drop_id])?;
+            
+            tx.execute("DELETE FROM ontology_nodes WHERE id = ?1", rusqlite::params![drop_id])?;
         }
         tx.commit()?;
         Ok(())
@@ -844,5 +937,95 @@ impl Database {
             rusqlite::params![context_id, chunk_id]
         )?;
         Ok(())
+    }
+
+    // --- Admin / Manual Curation ---
+
+    pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ontology_nodes (context_id, label, entity_type, description) VALUES (?1, ?2, ?3, '')",
+            rusqlite::params![context_id, label, entity_type],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2 WHERE id = ?3",
+            rusqlite::params![label, entity_type, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_ontology_node(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM ontology_nodes WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    
+    pub fn invert_ontology_edge(&self, id: i64) -> Result<()> {
+        let (source_id, target_id): (i64, i64) = self.conn.query_row(
+            "SELECT source_id, target_id FROM ontology_edges WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        self.conn.execute(
+            "UPDATE ontology_edges SET source_id = ?1, target_id = ?2 WHERE id = ?3",
+            rusqlite::params![target_id, source_id, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_ontology_edge(&self, id: i64, relation_type: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ontology_edges SET relation_type = ?1 WHERE id = ?2",
+            rusqlite::params![relation_type, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_ontology_edge_fast_primitive(&self, context_id: i64, source_id: i64, target_id: i64, relation_type: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ontology_edges (context_id, source_id, target_id, relation_type) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![context_id, source_id, target_id, relation_type],
+        )?;
+        Ok(())
+    }
+
+    pub fn add_ontology_edge_chunk(&self, edge_id: i64, chunk_id: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id) VALUES (?1, ?2)",
+            rusqlite::params![edge_id, chunk_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_ontology_edge_chunk(&self, edge_id: i64, chunk_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM ontology_edge_chunks WHERE edge_id = ?1 AND chunk_id = ?2",
+            rusqlite::params![edge_id, chunk_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_ontology_nodes_semantic(&self, context_id: i64, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+        let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
+        let rows = stmt.query_map([context_id], |row| {
+            let id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
+            Ok((id, vec))
+        })?;
+        
+        let mut results = Vec::new();
+        for r in rows {
+            let (id, v) = r?;
+            let score = crate::db::embeddings::cosine(query_vec, &v);
+            results.push((id, score));
+        }
+        
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        Ok(results)
     }
 }

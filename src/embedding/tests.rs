@@ -48,7 +48,11 @@ fn context_with_vectors(
             chunking_profile_id: None,
             embedding_model_id: Some(model_id),
             embedding_dim: Some(dim),
-            chunk_endpoint_id: None,
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            extract_title_llm: None,
+            auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })
