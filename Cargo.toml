@@ -43,7 +43,3 @@ ort-sys = { path = "../vendor/ort-sys-2.0.0-rc.10" }
 [[bin]]
 name = "test_grammar"
 path = "src/bin/test_grammar.rs"
-
-[[bin]]
-name = "test_translate"
-path = "src/bin/test_translate.rs"
