@@ -513,7 +513,7 @@ pub struct OntologyEdge {
     pub source_id: i64,
     pub target_id: i64,
     pub relation_type: String,
-    pub chunk_ids: Vec<i64>,
+    pub chunk_evidences: std::collections::HashMap<i64, Option<String>>,
     pub created_at: i64,
 }
 
@@ -524,6 +524,7 @@ pub struct NewOntologyEdge {
     pub target_id: i64,
     pub relation_type: String,
     pub chunk_id: i64,
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

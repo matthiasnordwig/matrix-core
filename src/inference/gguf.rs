@@ -48,10 +48,11 @@ impl GgufEngine {
         Ok(Self { model, n_ctx })
     }
 
-    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<String, String> {
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<String, String> {
         let backend = get_backend()?;
         let mut ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(self.n_ctx));
+            .with_n_ctx(NonZeroU32::new(self.n_ctx))
+            .with_n_batch(512);
 
         if let Some(q) = kv_quantization {
             let kv_type = match q {
@@ -108,7 +109,7 @@ impl GgufEngine {
             n_past += chunk.len() as i32;
         }
 
-        let mut samplers = vec![
+        let samplers = vec![
             llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
             llama_cpp_2::sampling::LlamaSampler::top_k(40),
             llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
@@ -116,26 +117,13 @@ impl GgufEngine {
             llama_cpp_2::sampling::LlamaSampler::dist(1337),
         ];
 
-        if let Some(schema) = json_schema {
-            let grammar_str = llama_cpp_2::json_schema_to_grammar(schema)
-                .map_err(|e| format!("invalid json schema: {}", e))?;
-            
-            let grammar = if is_reasoning {
-                llama_cpp_2::sampling::LlamaSampler::grammar_lazy(
-                    &self.model,
-                    &grammar_str,
-                    "root",
-                    &["</think>"],
-                    &[]
-                ).map_err(|e| format!("grammar lazy init: {:?}", e))?
-            } else {
-                llama_cpp_2::sampling::LlamaSampler::grammar(
-                    &self.model,
-                    &grammar_str,
-                    "root"
-                ).map_err(|e| format!("grammar init: {:?}", e))?
-            };
-            samplers.insert(0, grammar);
+        // WARNING: We are ignoring `json_schema` for GGUF models here.
+        // llama.cpp's `LlamaSampler::grammar` has a known issue where it aborts/segfaults 
+        // the entire process when initializing the state machine for complex, deeply nested 
+        // JSON schemas (like our Ontology schema with arrays of objects).
+        // The LLM will still output JSON due to the System Prompt, and extract.rs will parse it.
+        if json_schema.is_some() {
+            println!("WARN: json_schema was passed to GGUF but is ignored to prevent llama.cpp C++ parser crash.");
         }
 
         let mut chain = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
