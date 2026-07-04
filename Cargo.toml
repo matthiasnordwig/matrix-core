@@ -34,9 +34,10 @@ ndarray = { version = "0.16", optional = true }
 llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 
 # Patched ort-sys: links clang_rt.ios (not clang_rt.osx) on iOS targets so the ONNX
-# Runtime static lib links into the device build. Applies when core is the build root.
+# Runtime static lib links into the device build. Vendored in-repo (not ../vendor)
+# so this crate builds standalone, e.g. as a git dependency from another repo.
 [patch.crates-io]
-ort-sys = { path = "../vendor/ort-sys-2.0.0-rc.10" }
+ort-sys = { path = "vendor/ort-sys-2.0.0-rc.10" }
 
 
 
