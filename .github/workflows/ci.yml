@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # --lib: src/bin/ has stray debug bins that need the optional `gguf`
+      # feature to compile; unrelated to library correctness (see ISSUES.md).
+      - run: cargo test --lib
