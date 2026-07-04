@@ -2,3 +2,12 @@
 /target_xcode
 .env
 .aider*
+
+# Editor/OS-Ordner
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Windows-Ad-hoc-Kompilierreste (Cross-Platform-Build)
+*.exe
+*.pdb
