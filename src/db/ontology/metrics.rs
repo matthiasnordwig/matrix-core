@@ -10,12 +10,16 @@ impl Database {
             "INSERT INTO ontology_phase_metrics (phase_name, model_name, ms_per_chunk) VALUES (?1, ?2, ?3)",
             rusqlite::params![phase, model_name, ms_per_chunk],
         )?;
-        // Keep only the last 3 runs per phase + model
+        // Keep only the last 3 runs per phase + model. `created_at` has only
+        // second resolution (unixepoch()), so several fast local runs can tie
+        // on it — `id DESC` (monotonic rowid) breaks the tie by actual insert
+        // order instead of leaving it to SQLite's unspecified tie behavior,
+        // which previously could keep the oldest 3 rows instead of the newest.
         self.conn.execute(
             "DELETE FROM ontology_phase_metrics WHERE id NOT IN (
                 SELECT id FROM ontology_phase_metrics
                 WHERE phase_name = ?1 AND model_name = ?2
-                ORDER BY created_at DESC LIMIT 3
+                ORDER BY created_at DESC, id DESC LIMIT 3
             ) AND phase_name = ?1 AND model_name = ?2",
             rusqlite::params![phase, model_name],
         )?;

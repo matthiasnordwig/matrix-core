@@ -12,3 +12,6 @@ mod retrieval;
 mod metrics;
 mod dedup_cache;
 mod quarantine;
+
+#[cfg(test)]
+mod tests;

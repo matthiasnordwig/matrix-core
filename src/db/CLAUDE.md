@@ -12,3 +12,10 @@ Modell in den `*.rs`-Dateien der einzelnen CRUD-Module).
 Zeilen gewachsen) — jede Datei dort hat ein eigenes `impl Database { ... }`.
 
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
+
+**Tests:** `tests.rs` deckt CRUD-Round-Trips, FK-Constraints, Vector-Blob-Round-Trip
+und Cosine-Ranking ab; `ontology/tests.rs` deckt Profile/Nodes/Edges/Merge,
+Communities (inkl. NULL-Reset bei `delete_communities_for_context`), Lifecycle-
+Löschung, `retrieve_graph_with`/`_batch` (Hop-Expansion) sowie Metrics/Dedup-Cache/
+Quarantine ab. Bei Änderungen: `cargo test --lib db` laufen lassen, bei neuer
+CRUD-Logik ergänzen.
