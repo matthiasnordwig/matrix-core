@@ -43,6 +43,7 @@ fn seed_context_with_chunk(db: &Database, name: &str) -> (i64, i64) {
             llm_id: None,
             fallback_llm_id: None,
             ontology_profile_id: None,
+            ontology_pool_id: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
@@ -154,9 +155,11 @@ fn node_crud_and_lookups() {
     assert_eq!(db.get_ontology_nodes(ctx).unwrap()[0].1, "ORG");
 
     assert!(db.get_ontology_nodes_missing_embeddings(ctx).unwrap().iter().any(|(id, _, _)| *id == n.id));
+    assert_eq!(db.count_ontology_nodes_with_embeddings(ctx).unwrap(), 0);
     db.update_ontology_node_vector(n.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
     assert!(db.get_ontology_nodes_missing_embeddings(ctx).unwrap().is_empty());
     assert_eq!(db.get_ontology_nodes_with_embeddings(ctx).unwrap().len(), 1);
+    assert_eq!(db.count_ontology_nodes_with_embeddings(ctx).unwrap(), 1);
 
     db.update_ontology_node_community(n.id, Some(42)).unwrap();
     assert_eq!(db.list_ontology_nodes(ctx).unwrap()[0].community_id, Some(42));
@@ -234,6 +237,61 @@ fn edge_crud_and_curation() {
 
     db.delete_ontology_edge(e.id).unwrap();
     assert!(db.list_ontology_edges(ctx).unwrap().is_empty());
+}
+
+#[test]
+fn get_ontology_edge_id_resolves_natural_key() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx4b");
+    let a = node(&db, ctx, "A", "CONCEPT");
+    let b = node(&db, ctx, "B", "CONCEPT");
+
+    assert!(db.get_ontology_edge_id(ctx, a.id, b.id, "RELATED_TO").unwrap().is_none());
+
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "RELATED_TO");
+    let found = db.get_ontology_edge_id(ctx, a.id, b.id, "RELATED_TO").unwrap();
+    assert_eq!(found, Some(e.id));
+
+    // relation_type match is case-insensitive, mirroring create_ontology_edge's own lookup.
+    let found_ci = db.get_ontology_edge_id(ctx, a.id, b.id, "related_to").unwrap();
+    assert_eq!(found_ci, Some(e.id));
+}
+
+#[test]
+fn add_ontology_edge_chunk_with_evidence_inserts_and_updates() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx4c");
+    let a = node(&db, ctx, "A", "CONCEPT");
+    let b = node(&db, ctx, "B", "CONCEPT");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "RELATED_TO");
+
+    // Second evidence chunk, created purely via create_document/create_chunk
+    // helpers (seed_context_with_chunk only makes one chunk).
+    let doc = db.list_documents(ctx).unwrap().remove(0);
+    let chunk2 = db
+        .create_chunk(&NewChunk {
+            context_id: ctx,
+            document_id: doc.id,
+            chunk_index: 1,
+            char_start: 1,
+            char_end: 2,
+            text: "chunk2".into(),
+            signature: None,
+            is_omitted: false,
+            metadata: "{}".into(),
+        })
+        .unwrap();
+
+    db.add_ontology_edge_chunk_with_evidence(e.id, chunk2.id, Some("proof")).unwrap();
+    let edges = db.list_ontology_edges(ctx).unwrap();
+    let reloaded = edges.iter().find(|x| x.id == e.id).unwrap();
+    assert_eq!(reloaded.chunk_evidences.get(&chunk2.id), Some(&Some("proof".to_string())));
+
+    // Re-inserting with None must not clobber the existing evidence (COALESCE).
+    db.add_ontology_edge_chunk_with_evidence(e.id, chunk2.id, None).unwrap();
+    let edges = db.list_ontology_edges(ctx).unwrap();
+    let reloaded = edges.iter().find(|x| x.id == e.id).unwrap();
+    assert_eq!(reloaded.chunk_evidences.get(&chunk2.id), Some(&Some("proof".to_string())));
 }
 
 // --- communities (incl. the Uniper2 community-coloring regression) ---------

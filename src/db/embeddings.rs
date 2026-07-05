@@ -123,6 +123,16 @@ impl Database {
         }
     }
 
+    /// Count stored vectors for a context without loading them — used for
+    /// export size estimates (`scan_context_vectors` would decode every BLOB).
+    pub fn count_embeddings_for_context(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM embeddings WHERE context_id = ?1",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Load every vector for a context (one embedding space — the unit a
     /// brute-force scan operates over).
     pub fn scan_context_vectors(&self, context_id: i64) -> Result<Vec<StoredVector>> {

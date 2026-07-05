@@ -2,7 +2,7 @@
 
 use super::embeddings::{blob_to_vector, vector_to_blob};
 use super::models::*;
-use super::Database;
+use super::{CoreError, Database};
 
 fn db() -> Database {
     Database::open_in_memory().expect("open in-memory db")
@@ -51,6 +51,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             llm_id: None,
             fallback_llm_id: None,
             ontology_profile_id: None,
+            ontology_pool_id: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
@@ -76,7 +77,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 30);
+    assert_eq!(db.schema_version().unwrap(), 32);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -253,6 +254,8 @@ fn brute_force_cosine_ranks_nearest() {
 
     // Round-trip a stored vector exactly.
     assert_eq!(db.embedding_vector(chunk_ids[0]).unwrap().unwrap(), vectors[0]);
+
+    assert_eq!(db.count_embeddings_for_context(ctx_id).unwrap(), 3);
 }
 
 #[test]
@@ -291,4 +294,127 @@ fn settings_round_trip_any_serde_type() {
     let n: i64 = db.get_setting("max_parallel_chats").unwrap().unwrap();
     assert_eq!(n, 16);
     assert!(db.get_setting::<String>("missing").unwrap().is_none());
+}
+
+// --- llm_endpoint_pools -----------------------------------------------------
+
+fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
+    db.create_llm_endpoint(&NewLlmEndpoint {
+        name: name.into(),
+        base_url: "http://localhost:11434".into(),
+        model_id: "test-model".into(),
+        api_key_ref: None,
+        timeout_ms: 30_000,
+        max_retries: 1,
+        provider: provider.into(),
+        window_tokens: 1500,
+        context_window: 8192,
+        output_reserve_tokens: 512,
+        tpm_limit: None,
+        rpm_limit: None,
+        max_concurrency: 2,
+        is_reasoning: false,
+        supports_structured_output: false,
+        kv_quantization: None,
+        cpu_threads: None,
+    })
+    .unwrap()
+    .id
+}
+
+#[test]
+fn create_list_delete_pool_roundtrip() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool A".into() }).unwrap();
+    assert_eq!(db.list_pools().unwrap().len(), 1);
+    assert_eq!(db.pool(pool.id).unwrap().unwrap().name, "Pool A");
+
+    let renamed = db.rename_pool(pool.id, "Pool A renamed").unwrap();
+    assert_eq!(renamed.name, "Pool A renamed");
+
+    assert!(db.delete_pool(pool.id).unwrap());
+    assert!(db.pool(pool.id).unwrap().is_none());
+}
+
+#[test]
+fn set_pool_members_rejects_two_gguf_endpoints() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let gguf_a = seed_endpoint(&db, "local-a", "gguf");
+    let gguf_b = seed_endpoint(&db, "local-b", "gguf");
+
+    let err = db.set_pool_members(pool.id, &[gguf_a, gguf_b]).unwrap_err();
+    assert!(matches!(err, CoreError::InvalidPoolMembers(_)));
+    // rejected call must not have written anything
+    assert!(db.list_pool_members(pool.id).unwrap().is_empty());
+}
+
+#[test]
+fn set_pool_members_allows_one_gguf_plus_remote_endpoints() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let gguf = seed_endpoint(&db, "local", "gguf");
+    let remote_a = seed_endpoint(&db, "remote-a", "ollama");
+    let remote_b = seed_endpoint(&db, "remote-b", "openai");
+
+    let members = db.set_pool_members(pool.id, &[gguf, remote_a, remote_b]).unwrap();
+    assert_eq!(members.len(), 3);
+    assert_eq!(db.list_pool_members(pool.id).unwrap().len(), 3);
+}
+
+#[test]
+fn set_pool_members_replaces_full_list_atomically() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let a = seed_endpoint(&db, "a", "ollama");
+    let b = seed_endpoint(&db, "b", "ollama");
+    let gguf_1 = seed_endpoint(&db, "gguf-1", "gguf");
+    let gguf_2 = seed_endpoint(&db, "gguf-2", "gguf");
+
+    db.set_pool_members(pool.id, &[a, b]).unwrap();
+    assert_eq!(db.list_pool_members(pool.id).unwrap().len(), 2);
+
+    // second call violates the gguf constraint -> must leave first list intact
+    let err = db.set_pool_members(pool.id, &[gguf_1, gguf_2]).unwrap_err();
+    assert!(matches!(err, CoreError::InvalidPoolMembers(_)));
+    let members = db.list_pool_members(pool.id).unwrap();
+    assert_eq!(members.iter().map(|e| e.id).collect::<Vec<_>>(), vec![a, b]);
+}
+
+#[test]
+fn set_pool_members_preserves_order_via_position() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let a = seed_endpoint(&db, "a", "ollama");
+    let b = seed_endpoint(&db, "b", "ollama");
+    let c = seed_endpoint(&db, "c", "ollama");
+
+    db.set_pool_members(pool.id, &[c, a, b]).unwrap();
+    let members = db.list_pool_members(pool.id).unwrap();
+    assert_eq!(members.iter().map(|e| e.id).collect::<Vec<_>>(), vec![c, a, b]);
+}
+
+#[test]
+fn delete_pool_cascades_to_members() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let a = seed_endpoint(&db, "a", "ollama");
+    db.set_pool_members(pool.id, &[a]).unwrap();
+
+    db.delete_pool(pool.id).unwrap();
+    // pool is gone, so listing its members returns empty rather than erroring
+    assert!(db.list_pool_members(pool.id).unwrap().is_empty());
+}
+
+#[test]
+fn delete_llm_endpoint_cascades_out_of_pools() {
+    let db = db();
+    let pool = db.create_pool(&NewLlmEndpointPool { name: "Pool".into() }).unwrap();
+    let a = seed_endpoint(&db, "a", "ollama");
+    let b = seed_endpoint(&db, "b", "ollama");
+    db.set_pool_members(pool.id, &[a, b]).unwrap();
+
+    db.delete_llm_endpoint(a).unwrap();
+    let members = db.list_pool_members(pool.id).unwrap();
+    assert_eq!(members.iter().map(|e| e.id).collect::<Vec<_>>(), vec![b]);
 }

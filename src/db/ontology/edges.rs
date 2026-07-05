@@ -52,6 +52,22 @@ impl Database {
         Ok(out)
     }
 
+    /// The `SELECT id FROM ontology_edges WHERE ...` lookup duplicated inline
+    /// in `create_ontology_edge`/`insert_ontology_edge_fast`, extracted so
+    /// callers that only have the natural key (e.g. import remapping) can
+    /// resolve the id without re-deriving that query themselves.
+    pub fn get_ontology_edge_id(&self, context_id: i64, source_id: i64, target_id: i64, relation_type: &str) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM ontology_edges WHERE context_id = ?1 AND source_id = ?2 AND target_id = ?3 AND LOWER(relation_type) = LOWER(?4)"
+        )?;
+        let mut rows = stmt.query(rusqlite::params![context_id, source_id, target_id, relation_type])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn create_ontology_edge(&self, new: &NewOntologyEdge) -> Result<OntologyEdge> {
         self.conn.execute(
             "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type)
@@ -225,6 +241,21 @@ impl Database {
         self.conn.execute(
             "INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id) VALUES (?1, ?2)",
             rusqlite::params![edge_id, chunk_id],
+        )?;
+        Ok(())
+    }
+
+    /// Like `add_ontology_edge_chunk`, but also records (or updates) the
+    /// evidence text for that (edge, chunk) pair — needed when importing an
+    /// edge whose second-and-later evidence chunks would otherwise lose
+    /// their evidence text (unlike `create_ontology_edge`/
+    /// `insert_ontology_edge_fast`, which only accept one chunk_id/evidence
+    /// pair at creation time).
+    pub fn add_ontology_edge_chunk_with_evidence(&self, edge_id: i64, chunk_id: i64, evidence: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ontology_edge_chunks (edge_id, chunk_id, evidence) VALUES (?1, ?2, ?3)
+             ON CONFLICT(edge_id, chunk_id) DO UPDATE SET evidence = COALESCE(excluded.evidence, ontology_edge_chunks.evidence)",
+            rusqlite::params![edge_id, chunk_id, evidence],
         )?;
         Ok(())
     }

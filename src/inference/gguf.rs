@@ -28,6 +28,16 @@ pub struct GgufEngine {
 
 impl GgufEngine {
     pub fn load(model_path: &str, n_ctx: u32) -> Result<Self, String> {
+        // `n_ctx: 0` doesn't fail here — `with_n_ctx(NonZeroU32::new(0))` becomes
+        // `None`, which llama.cpp silently interprets as "use the model's own
+        // trained context length" — but the prompt-fits check in `generate()`
+        // below uses the *stored* `n_ctx` (still 0), so `available_ctx` computes
+        // to 0 and every single request fails with a confusing "Prompt zu lang:
+        // N Tokens (Verfügbar: 0 Kontext...)" forever, regardless of how small
+        // the prompt is. Fail loudly once here instead, with an actionable message.
+        if n_ctx == 0 {
+            return Err("Endpoint has no Context Window configured (0) — set a real Context Window value for this local model in Settings → Endpoints before using it.".to_string());
+        }
         let backend = get_backend()?;
         #[allow(unused_mut)]
         let mut model_params = LlamaModelParams::default();

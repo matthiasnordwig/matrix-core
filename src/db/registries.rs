@@ -25,7 +25,7 @@ fn row_to_embedding_model(row: &Row<'_>) -> rusqlite::Result<EmbeddingModel> {
     })
 }
 
-fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint> {
+pub(super) fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint> {
     Ok(LlmEndpoint {
         id: row.get("id")?,
         name: row.get("name")?,

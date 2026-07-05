@@ -18,6 +18,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         llm_id: row.get("llm_id")?,
         fallback_llm_id: row.get("fallback_llm_id")?,
         ontology_profile_id: row.get("ontology_profile_id")?,
+        ontology_pool_id: row.get("ontology_pool_id")?,
         extract_title_llm: row.get("extract_title_llm")?,
         auto_merge_ontology: row.get("auto_merge_ontology")?,
         status: row.get("status")?,
@@ -46,8 +47,8 @@ impl Database {
     pub fn create_context(&self, c: &NewContext) -> Result<Context> {
         self.conn.execute(
             "INSERT INTO contexts
-                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim, llm_id, fallback_llm_id, ontology_profile_id, extract_title_llm, auto_merge_ontology)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                (name, description, chunking_strategy, chunking_profile_id, structural_profile_id, embedding_model_id, embedding_dim, llm_id, fallback_llm_id, ontology_profile_id, ontology_pool_id, extract_title_llm, auto_merge_ontology)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 c.name,
                 c.description,
@@ -59,6 +60,7 @@ impl Database {
                 c.llm_id,
                 c.fallback_llm_id,
                 c.ontology_profile_id,
+                c.ontology_pool_id,
                 c.extract_title_llm,
                 c.auto_merge_ontology,
             ],
@@ -102,7 +104,7 @@ impl Database {
         self.conn.execute(
             "UPDATE contexts SET
                 name = ?2, description = ?3, chunking_strategy = ?4, chunking_profile_id = ?5,
-                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, llm_id = ?9, fallback_llm_id = ?10, ontology_profile_id = ?11, extract_title_llm = ?12, auto_merge_ontology = ?13, updated_at = unixepoch()
+                structural_profile_id = ?6, embedding_model_id = ?7, embedding_dim = ?8, llm_id = ?9, fallback_llm_id = ?10, ontology_profile_id = ?11, ontology_pool_id = ?12, extract_title_llm = ?13, auto_merge_ontology = ?14, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id,
@@ -116,6 +118,7 @@ impl Database {
                 c.llm_id,
                 c.fallback_llm_id,
                 c.ontology_profile_id,
+                c.ontology_pool_id,
                 c.extract_title_llm,
                 c.auto_merge_ontology,
             ],

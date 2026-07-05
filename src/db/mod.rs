@@ -20,6 +20,7 @@ mod structural_profiles;
 mod grid_profiles;
 mod profiles;
 mod registries;
+mod pools;
 mod settings;
 pub mod ontology;
 
@@ -38,6 +39,8 @@ pub enum CoreError {
     Embedding(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("invalid pool membership: {0}")]
+    InvalidPoolMembers(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -134,6 +137,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v28.sql"),
     include_str!("schema_v29.sql"),
     include_str!("schema_v30.sql"),
+    include_str!("schema_v31.sql"),
+    include_str!("schema_v32.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -191,6 +196,10 @@ impl Database {
     
     pub fn commit_transaction(&self) -> Result<()> {
         self.conn.execute_batch("COMMIT").map_err(CoreError::Sqlite)
+    }
+
+    pub fn rollback_transaction(&self) -> Result<()> {
+        self.conn.execute_batch("ROLLBACK").map_err(CoreError::Sqlite)
     }
 }
 

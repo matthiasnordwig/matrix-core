@@ -51,6 +51,7 @@ fn context_with_vectors(
             llm_id: None,
             fallback_llm_id: None,
             ontology_profile_id: None,
+            ontology_pool_id: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),

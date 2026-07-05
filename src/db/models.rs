@@ -154,6 +154,28 @@ pub struct NewLlmEndpoint {
     pub cpu_threads: Option<i64>,
 }
 
+/// A named pool of `llm_endpoints`; members are resolved via
+/// `Database::pool_members`/`list_pools_with_members`. Enforced invariant (see
+/// `Database::set_pool_members`): at most one member may have `provider == "gguf"`
+/// (only one on-device model can run at a time on this device).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmEndpointPool {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewLlmEndpointPool {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmEndpointPoolWithMembers {
+    pub pool: LlmEndpointPool,
+    pub members: Vec<LlmEndpoint>,
+}
+
 // --- Profiles & Contexts ---------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +280,10 @@ pub struct Context {
     pub llm_id: Option<i64>,
     pub fallback_llm_id: Option<i64>,
     pub ontology_profile_id: Option<i64>,
+    /// Endpoint pool used for ontology extraction/dedup/community instead of
+    /// `llm_id`, if set — persisted so the choice survives an app restart
+    /// (previously only ephemeral frontend state, see ISSUES.md).
+    pub ontology_pool_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
     pub status: ContextStatus,
@@ -277,6 +303,7 @@ pub struct NewContext {
     pub llm_id: Option<i64>,
     pub fallback_llm_id: Option<i64>,
     pub ontology_profile_id: Option<i64>,
+    pub ontology_pool_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
 }

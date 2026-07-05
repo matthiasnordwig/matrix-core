@@ -153,6 +153,17 @@ impl Database {
         Ok(list)
     }
 
+    /// Count nodes with a vector without decoding them — used for export
+    /// size estimates (`get_ontology_nodes_with_embeddings` would decode
+    /// every BLOB).
+    pub fn count_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn get_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
         let mut stmt = self.conn.prepare("SELECT id, entity_type, label, description, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
         let iter = stmt.query_map([context_id], |row| {
