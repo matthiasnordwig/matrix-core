@@ -31,6 +31,35 @@ impl Database {
         Ok(out)
     }
 
+    /// Single-node fetch (same columns as `list_ontology_nodes`) — used by the
+    /// edge-review "re-check" action (`recheck_edge_review` command), which
+    /// needs an edge's two endpoint nodes' *current* label/`entity_type`.
+    /// Deliberately not `get_ontology_nodes_with_descriptions` (misleadingly
+    /// named — it returns `(label, description)`, not `(label, entity_type)`,
+    /// see ISSUES.md): re-check wants the real `entity_type` field.
+    pub fn get_ontology_node(&self, id: i64) -> Result<Option<OntologyNode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, context_id, label, entity_type, raw_entity_type, description, community_id, created_at
+             FROM ontology_nodes WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map([id], |row| {
+            Ok(OntologyNode {
+                id: row.get(0)?,
+                context_id: row.get(1)?,
+                label: row.get(2)?,
+                entity_type: row.get(3)?,
+                raw_entity_type: row.get(4)?,
+                description: row.get(5)?,
+                community_id: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
     /// Like `list_ontology_nodes`, but `entity_type` reflects the context's
     /// active lens: `COALESCE(active-lens resolved_type, raw_entity_type)`.
     /// With `active_lens_id = NULL` the LEFT JOIN never matches, so every row

@@ -52,6 +52,77 @@ fn edge_review_cascade_deletes_when_edge_is_deleted() {
     assert!(db.list_ontology_edge_reviews(ctx).unwrap().is_empty());
 }
 
+#[test]
+fn get_ontology_edge_review_single_fetch_matches_list() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13b");
+    let a = node(&db, ctx, "GHG Protocol", "STANDARD");
+    let b = node(&db, ctx, "Uniper", "ORGANIZATION");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "APPLIES_TO");
+    db.insert_ontology_edge_review(ctx, e.id, Some(chunk_id), "APPLIES_TO", Some("quote"), "lint: self_loop: X").unwrap();
+
+    let listed = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(listed.len(), 1);
+    let fetched = db.get_ontology_edge_review(listed[0].id).unwrap().expect("row must exist");
+    assert_eq!(fetched.id, listed[0].id);
+    assert_eq!(fetched.edge_id, e.id);
+    assert_eq!(fetched.reason, "lint: self_loop: X");
+    assert_eq!(fetched.source_label, "GHG Protocol");
+
+    assert!(db.get_ontology_edge_review(999_999).unwrap().is_none());
+}
+
+#[test]
+fn bulk_delete_ontology_edge_reviews_removes_only_given_ids() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13c");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let c = node(&db, ctx, "C", "ORGANIZATION");
+    let e1 = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+    let e2 = edge(&db, ctx, chunk_id, b.id, c.id, "REL");
+    let e3 = edge(&db, ctx, chunk_id, a.id, c.id, "REL");
+    db.insert_ontology_edge_review(ctx, e1.id, Some(chunk_id), "REL", None, "lint: self_loop: a").unwrap();
+    db.insert_ontology_edge_review(ctx, e2.id, Some(chunk_id), "REL", None, "lint: self_loop: b").unwrap();
+    db.insert_ontology_edge_review(ctx, e3.id, Some(chunk_id), "REL", None, "LLM verdict: unclear").unwrap();
+
+    let rows = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(rows.len(), 3);
+    let to_delete: Vec<i64> = rows.iter().filter(|r| r.reason.starts_with("lint:")).map(|r| r.id).collect();
+    assert_eq!(to_delete.len(), 2);
+
+    let n = db.bulk_delete_ontology_edge_reviews(&to_delete).unwrap();
+    assert_eq!(n, 2);
+
+    let remaining = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].reason, "LLM verdict: unclear");
+
+    // Empty slice is a no-op, not an error.
+    assert_eq!(db.bulk_delete_ontology_edge_reviews(&[]).unwrap(), 0);
+}
+
+#[test]
+fn bulk_delete_ontology_edges_cascades_their_reviews() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13d");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let c = node(&db, ctx, "C", "ORGANIZATION");
+    let e1 = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+    let e2 = edge(&db, ctx, chunk_id, b.id, c.id, "REL");
+    db.insert_ontology_edge_review(ctx, e1.id, Some(chunk_id), "REL", None, "lint: self_loop: a").unwrap();
+    db.insert_ontology_edge_review(ctx, e2.id, Some(chunk_id), "REL", None, "lint: self_loop: b").unwrap();
+
+    let n = db.bulk_delete_ontology_edges(&[e1.id, e2.id]).unwrap();
+    assert_eq!(n, 2);
+    assert!(db.list_ontology_edge_reviews(ctx).unwrap().is_empty());
+    assert!(db.get_ontology_edge(e1.id).unwrap().is_none());
+    assert!(db.get_ontology_edge(e2.id).unwrap().is_none());
+
+    assert_eq!(db.bulk_delete_ontology_edges(&[]).unwrap(), 0);
+}
+
 // --- lenses (non-destructive schema materialization) -----------------------
 
 #[test]

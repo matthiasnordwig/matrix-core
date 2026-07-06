@@ -111,6 +111,38 @@ fn merge_ontology_nodes_rewires_edges_and_drops_duplicate() {
 }
 
 #[test]
+fn get_ontology_node_single_fetch_matches_list_shape() {
+    let db = db();
+    let (ctx, _chunk_id) = seed_context_with_chunk(&db, "CtxGetNode");
+    let n = node(&db, ctx, "Uniper", "ORGANIZATION");
+
+    let fetched = db.get_ontology_node(n.id).unwrap().expect("node must exist");
+    assert_eq!(fetched.id, n.id);
+    assert_eq!(fetched.label, "Uniper");
+    assert_eq!(fetched.entity_type, "ORGANIZATION");
+
+    assert!(db.get_ontology_node(999_999).unwrap().is_none());
+}
+
+#[test]
+fn get_ontology_edge_single_fetch_matches_list_shape() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxGetEdge");
+    let a = node(&db, ctx, "A", "ORG");
+    let b = node(&db, ctx, "B", "ORG");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+
+    let fetched = db.get_ontology_edge(e.id).unwrap().expect("edge must exist");
+    assert_eq!(fetched.id, e.id);
+    assert_eq!(fetched.source_id, a.id);
+    assert_eq!(fetched.target_id, b.id);
+    assert_eq!(fetched.relation_type, "REL");
+    assert_eq!(fetched.chunk_evidences.get(&chunk_id), Some(&None), "evidence round-trips same as list_ontology_edges");
+
+    assert!(db.get_ontology_edge(999_999).unwrap().is_none());
+}
+
+#[test]
 fn list_for_active_lens_applies_type_resolution_reversal_and_deletion() {
     let db = db();
     let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxLens");

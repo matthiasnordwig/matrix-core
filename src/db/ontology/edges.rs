@@ -53,6 +53,54 @@ impl Database {
         Ok(out)
     }
 
+    /// Single-edge fetch with the same shape as `list_ontology_edges` (incl.
+    /// `chunk_evidences`) — used by the edge-review "re-check" action
+    /// (`recheck_edge_review` command), which needs one edge's *current* DB
+    /// state to re-run `lint::lint_one_edge` against.
+    pub fn get_ontology_edge(&self, edge_id: i64) -> Result<Option<OntologyEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, e.raw_relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
+             FROM ontology_edges e
+             LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
+             WHERE e.id = ?1
+             GROUP BY e.id"
+        )?;
+        let mut rows = stmt.query_map([edge_id], |row| {
+            let chunk_data_str: Option<String> = row.get(6)?;
+            let mut chunk_evidences = std::collections::HashMap::new();
+            if let Some(s) = chunk_data_str {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(arr) = parsed.as_array() {
+                        for item in arr {
+                            if let Some(obj) = item.as_object() {
+                                if let Some(cid_val) = obj.get("chunk_id") {
+                                    if let Some(cid) = cid_val.as_i64() {
+                                        let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                        chunk_evidences.insert(cid, ev);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(OntologyEdge {
+                id: row.get(0)?,
+                context_id: row.get(1)?,
+                source_id: row.get(2)?,
+                target_id: row.get(3)?,
+                relation_type: row.get(4)?,
+                raw_relation_type: row.get(5)?,
+                chunk_evidences,
+                created_at: row.get(7)?,
+            })
+        })?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
     /// Like `list_ontology_edges`, but applies the context's active lens as a
     /// display-time overlay (mirrors `retrieval.rs`, which the chat/grid graph
     /// context already uses): `deleted`-verdict edges are excluded, `reversed`
