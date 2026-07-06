@@ -148,6 +148,20 @@ impl Database {
             .optional()?)
     }
 
+    /// Batch fetch (avoids N+1 when a caller needs many chunks by id, e.g.
+    /// Grid history loading). Order is unspecified — callers index by `id`.
+    pub fn chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<Chunk>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT * FROM chunks WHERE id IN ({placeholders})");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params = rusqlite::params_from_iter(ids.iter());
+        let rows = stmt.query_map(params, row_to_chunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Staged chunks for a context, in chronological order. `include_omitted`
     /// controls whether `leave_out` chunks are returned (default UI hides them).
     pub fn list_chunks(&self, context_id: i64, include_omitted: bool) -> Result<Vec<Chunk>> {

@@ -145,6 +145,39 @@ fn staging_chunk_index_is_unique() {
 }
 
 #[test]
+fn chunks_by_ids_batch_fetch() {
+    let db = db();
+    let (_m, _p, ctx_id, doc_id) = seed(&db);
+
+    let mk = |idx: i64| NewChunk {
+        context_id: ctx_id,
+        document_id: doc_id,
+        chunk_index: idx,
+        char_start: 0,
+        char_end: 10,
+        text: format!("chunk {idx}"),
+        signature: None,
+        is_omitted: false,
+        metadata: "{}".into(),
+    };
+    let a = db.create_chunk(&mk(0)).unwrap();
+    let b = db.create_chunk(&mk(1)).unwrap();
+    let _c = db.create_chunk(&mk(2)).unwrap();
+
+    let fetched = db.chunks_by_ids(&[a.id, b.id]).unwrap();
+    assert_eq!(fetched.len(), 2);
+    let texts: Vec<&str> = fetched.iter().map(|c| c.text.as_str()).collect();
+    assert!(texts.contains(&"chunk 0"));
+    assert!(texts.contains(&"chunk 1"));
+
+    assert!(db.chunks_by_ids(&[]).unwrap().is_empty());
+
+    // Non-existent ids are silently skipped, not an error.
+    let partial = db.chunks_by_ids(&[a.id, 999_999]).unwrap();
+    assert_eq!(partial.len(), 1);
+}
+
+#[test]
 fn prechunk_resume_workflow() {
     let db = db();
     let (_m, _p, _ctx, doc_id) = seed(&db);
