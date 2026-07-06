@@ -54,8 +54,7 @@ fn node_crud_and_lookups() {
         "label lookup is case-insensitive"
     );
 
-    db.update_ontology_node_type(n.id, "ORG").unwrap();
-    assert_eq!(db.get_ontology_nodes_raw(ctx).unwrap()[0].1, "ORG");
+    assert_eq!(db.get_ontology_nodes_raw(ctx).unwrap()[0].1, "PERSON", "raw type mirrors type at insert");
 
     assert!(db.get_ontology_nodes_missing_embeddings(ctx).unwrap().iter().any(|(id, _, _)| *id == n.id));
     assert_eq!(db.count_ontology_nodes_with_embeddings(ctx).unwrap(), 0);
@@ -295,17 +294,15 @@ fn edge_crud_and_curation() {
     assert_eq!(counts[&a.id], 1);
     assert_eq!(counts[&b.id], 1);
 
-    db.reverse_ontology_edge(e.id).unwrap();
+    db.invert_ontology_edge(e.id).unwrap();
     let edges = db.list_ontology_edges(ctx).unwrap();
-    assert_eq!(edges[0].source_id, b.id);
+    assert_eq!(edges[0].source_id, b.id, "invert swaps source and target");
     assert_eq!(edges[0].target_id, a.id);
 
     db.invert_ontology_edge(e.id).unwrap();
-    let edges = db.list_ontology_edges(ctx).unwrap();
-    assert_eq!(edges[0].source_id, a.id, "invert flips it back");
+    assert_eq!(db.list_ontology_edges(ctx).unwrap()[0].source_id, a.id, "inverting again flips it back");
 
-    db.update_ontology_edge_type(e.id, "PART_OF").unwrap();
-    assert_eq!(db.get_ontology_edges(ctx).unwrap()[0].1, "PART_OF");
+    assert_eq!(db.get_ontology_edges(ctx).unwrap()[0].1, "RELATED_TO", "relation type unchanged by inversion");
 
     db.delete_ontology_edge(e.id).unwrap();
     assert!(db.list_ontology_edges(ctx).unwrap().is_empty());

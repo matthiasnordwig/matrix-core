@@ -154,18 +154,6 @@ impl Database {
         Ok(())
     }
 
-    /// Updates both `entity_type` and `raw_entity_type` together — this is
-    /// the manual-curation path (a user's correction supersedes whatever the
-    /// LLM originally extracted), not lens materialization (which never
-    /// touches these columns, see `ontology_lens_node_types`).
-    pub fn update_ontology_node_type(&self, node_id: i64, new_type: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE ontology_nodes SET entity_type = ?1, raw_entity_type = ?1 WHERE id = ?2",
-            rusqlite::params![new_type, node_id],
-        )?;
-        Ok(())
-    }
-
     pub fn update_ontology_node_community(&self, node_id: i64, community_id: Option<i64>) -> Result<()> {
         self.conn.execute("UPDATE ontology_nodes SET community_id = ?1 WHERE id = ?2", rusqlite::params![community_id, node_id])?;
         Ok(())
@@ -418,8 +406,9 @@ impl Database {
     }
 
     /// Manual curation: a user's edit supersedes whatever was extracted, so
-    /// `raw_entity_type` is updated alongside `entity_type` (same reasoning
-    /// as `update_ontology_node_type` above).
+    /// `raw_entity_type` is updated alongside `entity_type` (lens
+    /// materialization never touches these columns, see
+    /// `ontology_lens_node_types`).
     pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
             "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, raw_entity_type = ?2, description = ?3, vector_blob = ?4 WHERE id = ?5",

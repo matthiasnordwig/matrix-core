@@ -133,7 +133,7 @@ fn raw_type_mirrors_type_at_insert_and_manual_edit() {
     assert_eq!(a.entity_type, "COUNTRY");
     assert_eq!(a.raw_entity_type, "COUNTRY");
 
-    db.update_ontology_node_type(a.id, "STATE").unwrap();
+    db.update_ontology_node(a.id, "Bundesrepublik Deutschland", "STATE", "", &[]).unwrap();
     let reloaded = db.list_ontology_nodes(ctx).unwrap().into_iter().find(|n| n.id == a.id).unwrap();
     assert_eq!(reloaded.entity_type, "STATE");
     assert_eq!(reloaded.raw_entity_type, "STATE", "manual edit must update raw type too, not just the display type");

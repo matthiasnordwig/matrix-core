@@ -254,11 +254,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_ontology_edge_type(&self, edge_id: i64, new_type: &str) -> Result<()> {
-        self.conn.execute("UPDATE ontology_edges SET relation_type = ?1 WHERE id = ?2", rusqlite::params![new_type, edge_id])?;
-        Ok(())
-    }
-
     pub fn get_ontology_edges(&self, context_id: i64) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare("SELECT id, relation_type FROM ontology_edges WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -277,16 +272,6 @@ impl Database {
         let mut list = Vec::new();
         for item in iter { if let Ok(i) = item { list.push(i); } }
         Ok(list)
-    }
-
-    pub fn reverse_ontology_edge(&self, edge_id: i64) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        let mut stmt = tx.prepare("SELECT source_id, target_id FROM ontology_edges WHERE id = ?1")?;
-        let (source, target): (i64, i64) = stmt.query_row([edge_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        drop(stmt);
-        tx.execute("UPDATE ontology_edges SET source_id = ?1, target_id = ?2 WHERE id = ?3", rusqlite::params![target, source, edge_id])?;
-        tx.commit()?;
-        Ok(())
     }
 
     pub fn delete_ontology_edge(&self, edge_id: i64) -> Result<()> {
