@@ -344,6 +344,13 @@ impl Database {
 
             tx.execute("UPDATE OR IGNORE ontology_edges SET target_id = ?1 WHERE target_id = ?2", rusqlite::params![keep_id, drop_id])?;
 
+            // Rewiring can turn an edge that connected the two merged nodes
+            // (keep<->drop) into a self-loop keep->keep — a meaningless "A
+            // relates to A" artifact the duplicate-collapse above doesn't
+            // catch (it only merges edges sharing the *other* endpoint). Drop
+            // any self-loop on the winner; evidence rows cascade with the edge.
+            tx.execute("DELETE FROM ontology_edges WHERE source_id = ?1 AND target_id = ?1", rusqlite::params![keep_id])?;
+
             tx.execute("DELETE FROM ontology_nodes WHERE id = ?1", rusqlite::params![drop_id])?;
             executed.push((keep_id, drop_id));
         }

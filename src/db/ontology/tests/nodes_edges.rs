@@ -173,6 +173,27 @@ fn list_for_active_lens_with_no_lens_matches_raw_view() {
 }
 
 #[test]
+fn merge_dropping_an_edge_between_the_two_nodes_leaves_no_self_loop() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxLoop");
+    let keep = node(&db, ctx, "Uniper", "CORPORATION");
+    let dup = node(&db, ctx, "Uniper Group", "CORPORATION");
+    let other = node(&db, ctx, "Bob", "PERSON");
+    // An edge connecting the two soon-to-be-merged nodes becomes keep->keep
+    // after rewiring — that self-loop must be cleaned up, not persisted.
+    edge(&db, ctx, chunk_id, keep.id, dup.id, "OWNS");
+    // A normal edge on the winner must survive untouched.
+    edge(&db, ctx, chunk_id, keep.id, other.id, "EMPLOYS");
+
+    db.merge_ontology_nodes(&[(keep.id, dup.id)]).unwrap();
+
+    let edges = db.list_ontology_edges(ctx).unwrap();
+    assert!(!edges.iter().any(|e| e.source_id == e.target_id), "no self-loop must remain");
+    assert_eq!(edges.len(), 1, "only the unrelated edge survives");
+    assert_eq!(edges[0].relation_type, "EMPLOYS");
+}
+
+#[test]
 fn merge_with_missing_winner_is_skipped_not_an_error() {
     // Regression for the production FK abort: a stale dedup candidate can
     // elect an already-deleted node as winner. The merge must skip that pair
