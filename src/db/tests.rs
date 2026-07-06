@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 39);
+    assert_eq!(db.schema_version().unwrap(), 40);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -385,6 +385,39 @@ fn grid_chat_result_same_row_uid_updates() {
     assert_eq!(result.status, ChatStatus::Done);
     assert_eq!(result.response.as_deref(), Some("recovered"));
     assert_eq!(db.count_grid_chat_results(run).unwrap(), 1);
+}
+
+/// `grid_run_meta` holds the run's system prompt once; a second upsert for
+/// the same `run_id` replaces it in place rather than erroring or duplicating.
+#[test]
+fn delete_grid_chat_run_also_drops_run_meta() {
+    let db = db();
+    db.upsert_grid_run_meta("run-x", "sys").unwrap();
+    assert!(db.grid_run_system_prompt("run-x").unwrap().is_some());
+    db.delete_grid_chat_run("run-x").unwrap();
+    assert!(db.grid_run_system_prompt("run-x").unwrap().is_none());
+}
+
+#[test]
+fn grid_run_meta_upsert_replaces_in_place() {
+    let db = db();
+    db.upsert_grid_run_meta("run-meta", "You are a helpful assistant.").unwrap();
+    assert_eq!(
+        db.grid_run_system_prompt("run-meta").unwrap().as_deref(),
+        Some("You are a helpful assistant.")
+    );
+
+    db.upsert_grid_run_meta("run-meta", "Updated prompt.").unwrap();
+    assert_eq!(
+        db.grid_run_system_prompt("run-meta").unwrap().as_deref(),
+        Some("Updated prompt.")
+    );
+}
+
+#[test]
+fn grid_run_system_prompt_missing_run_returns_none() {
+    let db = db();
+    assert_eq!(db.grid_run_system_prompt("no-such-run").unwrap(), None);
 }
 
 #[test]

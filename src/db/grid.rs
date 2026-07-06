@@ -2,7 +2,7 @@
 //! results (`grid_chat_results`). Chat is not history-aware, so a cell upsert
 //! overwrites the row's prior result for the same run.
 
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 
 use super::models::*;
 use super::{Database, Result};
@@ -160,9 +160,35 @@ impl Database {
     }
 
     pub fn delete_grid_chat_run(&self, run_id: &str) -> Result<bool> {
+        // Also drop the run's metadata row (system prompt) so deleting a run
+        // leaves no orphan in `grid_run_meta`.
+        self.conn.execute("DELETE FROM grid_run_meta WHERE run_id = ?1", [run_id])?;
         Ok(self.conn.execute(
             "DELETE FROM grid_chat_results WHERE run_id = ?1",
             [run_id],
         )? > 0)
+    }
+
+    // --- run metadata (AP7: system prompt stored once per run instead of
+    // duplicated inside every row's `prompt_snapshot`) -----------------------
+
+    pub fn upsert_grid_run_meta(&self, run_id: &str, system_prompt: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO grid_run_meta (run_id, system_prompt) VALUES (?1, ?2)
+             ON CONFLICT(run_id) DO UPDATE SET system_prompt = excluded.system_prompt",
+            params![run_id, system_prompt],
+        )?;
+        Ok(())
+    }
+
+    pub fn grid_run_system_prompt(&self, run_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT system_prompt FROM grid_run_meta WHERE run_id = ?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 }
