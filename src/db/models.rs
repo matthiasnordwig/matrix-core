@@ -284,6 +284,16 @@ pub struct Context {
     /// `llm_id`, if set — persisted so the choice survives an app restart
     /// (previously only ephemeral frontend state, see ISSUES.md).
     pub ontology_pool_id: Option<i64>,
+    /// Optional dedicated endpoint/pool used ONLY for the extraction +
+    /// polarity-verification phases (see BACKLOG.md "Phasen-getrennte
+    /// Modellwahl", `schema_v36.sql`) — the judgment-critical phases where a
+    /// stronger/different model plausibly helps most. Dedup/community keep
+    /// using the main source (`llm_id`/`ontology_pool_id`) regardless. At
+    /// most one of `ontology_extract_llm_id`/`ontology_extract_pool_id`
+    /// should be set at a time (same convention as `llm_id`/`ontology_pool_id`);
+    /// both `None` = today's behavior (one source for everything).
+    pub ontology_extract_llm_id: Option<i64>,
+    pub ontology_extract_pool_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
     /// The lens (see `OntologyLens`) currently used to filter/relabel this
@@ -309,6 +319,8 @@ pub struct NewContext {
     pub fallback_llm_id: Option<i64>,
     pub ontology_profile_id: Option<i64>,
     pub ontology_pool_id: Option<i64>,
+    pub ontology_extract_llm_id: Option<i64>,
+    pub ontology_extract_pool_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
 }

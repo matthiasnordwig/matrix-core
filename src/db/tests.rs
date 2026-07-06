@@ -52,6 +52,8 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             fallback_llm_id: None,
             ontology_profile_id: None,
             ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
@@ -77,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 35);
+    assert_eq!(db.schema_version().unwrap(), 36);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);

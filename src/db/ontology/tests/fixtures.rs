@@ -46,6 +46,8 @@ pub(super) fn seed_context_with_chunk(db: &Database, name: &str) -> (i64, i64) {
             fallback_llm_id: None,
             ontology_profile_id: None,
             ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
