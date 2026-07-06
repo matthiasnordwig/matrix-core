@@ -506,6 +506,16 @@ pub struct GridRun {
     pub updated_at: i64,
 }
 
+/// Per-run metadata stored once (not per row): the system prompt and the
+/// grid-profile JSON schema the run was created with (`{mode,fields}` string,
+/// `None` for plain-text profiles). Lets history loading gate row explosion on
+/// the run's own mode instead of the currently selected profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridRunMeta {
+    pub system_prompt: String,
+    pub json_schema: Option<String>,
+}
+
 // --- Ontology (GraphRAG) ---------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

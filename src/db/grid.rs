@@ -172,22 +172,32 @@ impl Database {
     // --- run metadata (AP7: system prompt stored once per run instead of
     // duplicated inside every row's `prompt_snapshot`) -----------------------
 
-    pub fn upsert_grid_run_meta(&self, run_id: &str, system_prompt: &str) -> Result<()> {
+    pub fn upsert_grid_run_meta(&self, run_id: &str, system_prompt: &str, json_schema: Option<&str>) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO grid_run_meta (run_id, system_prompt) VALUES (?1, ?2)
-             ON CONFLICT(run_id) DO UPDATE SET system_prompt = excluded.system_prompt",
-            params![run_id, system_prompt],
+            "INSERT INTO grid_run_meta (run_id, system_prompt, json_schema) VALUES (?1, ?2, ?3)
+             ON CONFLICT(run_id) DO UPDATE SET
+                system_prompt = excluded.system_prompt,
+                json_schema = excluded.json_schema",
+            params![run_id, system_prompt, json_schema],
         )?;
         Ok(())
     }
 
     pub fn grid_run_system_prompt(&self, run_id: &str) -> Result<Option<String>> {
+        Ok(self.grid_run_meta(run_id)?.map(|m| m.system_prompt))
+    }
+
+    /// The run's stored system prompt + grid-profile JSON schema (the
+    /// `{mode,fields}` string, `None` for plain-text profiles). Used by history
+    /// loading to gate row explosion on the run's own mode. `None` for runs
+    /// created before `grid_run_meta` existed.
+    pub fn grid_run_meta(&self, run_id: &str) -> Result<Option<GridRunMeta>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT system_prompt FROM grid_run_meta WHERE run_id = ?1",
+                "SELECT system_prompt, json_schema FROM grid_run_meta WHERE run_id = ?1",
                 [run_id],
-                |row| row.get(0),
+                |row| Ok(GridRunMeta { system_prompt: row.get(0)?, json_schema: row.get(1)? }),
             )
             .optional()?)
     }

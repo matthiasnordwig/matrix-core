@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 40);
+    assert_eq!(db.schema_version().unwrap(), 41);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -392,22 +392,34 @@ fn grid_chat_result_same_row_uid_updates() {
 #[test]
 fn delete_grid_chat_run_also_drops_run_meta() {
     let db = db();
-    db.upsert_grid_run_meta("run-x", "sys").unwrap();
+    db.upsert_grid_run_meta("run-x", "sys", None).unwrap();
     assert!(db.grid_run_system_prompt("run-x").unwrap().is_some());
     db.delete_grid_chat_run("run-x").unwrap();
     assert!(db.grid_run_system_prompt("run-x").unwrap().is_none());
 }
 
 #[test]
+fn grid_run_meta_stores_and_reads_json_schema() {
+    let db = db();
+    db.upsert_grid_run_meta("run-s", "sys", Some("{\"mode\":\"array\"}")).unwrap();
+    let m = db.grid_run_meta("run-s").unwrap().unwrap();
+    assert_eq!(m.system_prompt, "sys");
+    assert_eq!(m.json_schema.as_deref(), Some("{\"mode\":\"array\"}"));
+    // plain profile → NULL schema
+    db.upsert_grid_run_meta("run-p", "sys2", None).unwrap();
+    assert!(db.grid_run_meta("run-p").unwrap().unwrap().json_schema.is_none());
+}
+
+#[test]
 fn grid_run_meta_upsert_replaces_in_place() {
     let db = db();
-    db.upsert_grid_run_meta("run-meta", "You are a helpful assistant.").unwrap();
+    db.upsert_grid_run_meta("run-meta", "You are a helpful assistant.", None).unwrap();
     assert_eq!(
         db.grid_run_system_prompt("run-meta").unwrap().as_deref(),
         Some("You are a helpful assistant.")
     );
 
-    db.upsert_grid_run_meta("run-meta", "Updated prompt.").unwrap();
+    db.upsert_grid_run_meta("run-meta", "Updated prompt.", Some("{\"mode\":\"array\"}")).unwrap();
     assert_eq!(
         db.grid_run_system_prompt("run-meta").unwrap().as_deref(),
         Some("Updated prompt.")
