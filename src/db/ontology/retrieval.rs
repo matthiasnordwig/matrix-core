@@ -93,6 +93,12 @@ impl Database {
         // Construct CTE query
         let in_placeholders = std::iter::repeat("?").take(hit_node_ids.len()).collect::<Vec<_>>().join(",");
 
+        // The two traversal branches join each context's own `active_lens_id`
+        // (edges carry `context_id` directly) so multi-context retrieval
+        // applies each context's own lens rather than needing a single lens
+        // id passed in — a lens-`deleted` edge is excluded from traversal;
+        // reversal doesn't affect *reachability* here (the CTE already unions
+        // both directions), only the display formatting below.
         let query = format!("
             WITH RECURSIVE traverse(node_id, depth) AS (
                 SELECT id, 0 FROM ontology_nodes WHERE id IN ({})
@@ -100,12 +106,16 @@ impl Database {
                 SELECT e.target_id, t.depth + 1
                 FROM traverse t
                 JOIN ontology_edges e ON e.source_id = t.node_id
-                WHERE t.depth < ?
+                JOIN contexts c ON c.id = e.context_id
+                LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
+                WHERE t.depth < ? AND COALESCE(v.verdict, 'valid') != 'deleted'
                 UNION
                 SELECT e.source_id, t.depth + 1
                 FROM traverse t
                 JOIN ontology_edges e ON e.target_id = t.node_id
-                WHERE t.depth < ?
+                JOIN contexts c ON c.id = e.context_id
+                LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
+                WHERE t.depth < ? AND COALESCE(v.verdict, 'valid') != 'deleted'
             )
             SELECT DISTINCT node_id FROM traverse;
         ", in_placeholders);
@@ -126,19 +136,39 @@ impl Database {
 
         let exp_placeholders = std::iter::repeat("?").take(expanded_node_ids.len()).collect::<Vec<_>>().join(",");
 
-        let mut n_stmt = self.conn.prepare_cached(&format!("SELECT label, description FROM ontology_nodes WHERE id IN ({})", exp_placeholders))?;
+        // Node type shown to the LLM is the active-lens-resolved type,
+        // falling back to the raw type where no lens/no mapping row exists
+        // (NULL active_lens_id, e.g. a pre-Lens context, naturally produces
+        // no LEFT JOIN match here).
+        let mut n_stmt = self.conn.prepare_cached(&format!("
+            SELECT n.label, COALESCE(lnt.resolved_type, n.raw_entity_type), n.description
+            FROM ontology_nodes n
+            JOIN contexts c ON c.id = n.context_id
+            LEFT JOIN ontology_lens_node_types lnt ON lnt.node_id = n.id AND lnt.lens_id = c.active_lens_id
+            WHERE n.id IN ({exp_placeholders})
+        "))?;
         let nodes = n_stmt.query_map(rusqlite::params_from_iter(expanded_node_ids.iter()), |row| {
             let label: String = row.get(0)?;
-            let desc: String = row.get(1)?;
-            Ok(format!("{}: {}", label, desc))
+            let entity_type: String = row.get(1)?;
+            let desc: String = row.get(2)?;
+            Ok(format!("{} ({}): {}", label, entity_type, desc))
         })?.filter_map(|r| r.ok()).collect();
 
+        // Reversed edges swap source/target in the SELECT rather than
+        // mutating the underlying row (the lens is a display-time overlay,
+        // see BACKLOG.md's Lens system); deleted edges are excluded outright.
         let mut e_stmt = self.conn.prepare_cached(&format!("
-            SELECT s.label, e.relation_type, t.label
+            SELECT
+                CASE WHEN v.verdict = 'reversed' THEN t.label ELSE s.label END,
+                COALESCE(v.resolved_relation_type, e.raw_relation_type),
+                CASE WHEN v.verdict = 'reversed' THEN s.label ELSE t.label END
             FROM ontology_edges e
             JOIN ontology_nodes s ON e.source_id = s.id
             JOIN ontology_nodes t ON e.target_id = t.id
+            JOIN contexts c ON c.id = e.context_id
+            LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
             WHERE e.source_id IN ({exp_placeholders}) AND e.target_id IN ({exp_placeholders})
+              AND COALESCE(v.verdict, 'valid') != 'deleted'
         "))?;
 
         let mut double_params = Vec::with_capacity(expanded_node_ids.len() * 2);
@@ -245,12 +275,16 @@ impl Database {
                     SELECT e.target_id, t.depth + 1
                     FROM traverse t
                     JOIN ontology_edges e ON e.source_id = t.node_id
-                    WHERE t.depth < ?
+                    JOIN contexts c ON c.id = e.context_id
+                    LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
+                    WHERE t.depth < ? AND COALESCE(v.verdict, 'valid') != 'deleted'
                     UNION
                     SELECT e.source_id, t.depth + 1
                     FROM traverse t
                     JOIN ontology_edges e ON e.target_id = t.node_id
-                    WHERE t.depth < ?
+                    JOIN contexts c ON c.id = e.context_id
+                    LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
+                    WHERE t.depth < ? AND COALESCE(v.verdict, 'valid') != 'deleted'
                 )
                 SELECT DISTINCT node_id FROM traverse;
             ", placeholders);
@@ -271,19 +305,32 @@ impl Database {
 
             let exp_placeholders = std::iter::repeat("?").take(expanded_node_ids.len()).collect::<Vec<_>>().join(",");
 
-            let mut n_stmt = self.conn.prepare_cached(&format!("SELECT label, description FROM ontology_nodes WHERE id IN ({})", exp_placeholders))?;
+            let mut n_stmt = self.conn.prepare_cached(&format!("
+                SELECT n.label, COALESCE(lnt.resolved_type, n.raw_entity_type), n.description
+                FROM ontology_nodes n
+                JOIN contexts c ON c.id = n.context_id
+                LEFT JOIN ontology_lens_node_types lnt ON lnt.node_id = n.id AND lnt.lens_id = c.active_lens_id
+                WHERE n.id IN ({exp_placeholders})
+            "))?;
             let nodes = n_stmt.query_map(rusqlite::params_from_iter(expanded_node_ids.iter()), |row| {
                 let label: String = row.get(0)?;
-                let desc: String = row.get(1)?;
-                Ok(format!("{}: {}", label, desc))
+                let entity_type: String = row.get(1)?;
+                let desc: String = row.get(2)?;
+                Ok(format!("{} ({}): {}", label, entity_type, desc))
             })?.filter_map(|r| r.ok()).collect();
 
             let mut e_stmt = self.conn.prepare_cached(&format!("
-                SELECT s.label, e.relation_type, t.label
+                SELECT
+                    CASE WHEN v.verdict = 'reversed' THEN t.label ELSE s.label END,
+                    COALESCE(v.resolved_relation_type, e.raw_relation_type),
+                    CASE WHEN v.verdict = 'reversed' THEN s.label ELSE t.label END
                 FROM ontology_edges e
                 JOIN ontology_nodes s ON e.source_id = s.id
                 JOIN ontology_nodes t ON e.target_id = t.id
+                JOIN contexts c ON c.id = e.context_id
+                LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
                 WHERE e.source_id IN ({exp_placeholders}) AND e.target_id IN ({exp_placeholders})
+                  AND COALESCE(v.verdict, 'valid') != 'deleted'
             "))?;
 
             let mut double_params = Vec::with_capacity(expanded_node_ids.len() * 2);

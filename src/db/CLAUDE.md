@@ -18,5 +18,9 @@ Cosine-Ranking sowie `pools.rs`' `set_pool_members`-Invariante (max. 1 gguf-Mitg
 atomarer Replace, `position`-Reihenfolge, Cascade-Deletes) ab; `ontology/tests.rs`
 deckt Profile/Nodes/Edges/Merge, Communities (inkl. NULL-Reset bei
 `delete_communities_for_context`), Lifecycle-Löschung, `retrieve_graph_with`/`_batch`
-(Hop-Expansion) sowie Metrics/Dedup-Cache/Quarantine ab. Bei Änderungen:
+(Hop-Expansion, inkl. Lens-Join: aktive-Lens-Typauflösung, `reversed`-Anzeige-Swap,
+`deleted`-Traversal-Ausschluss), Metrics/Dedup-Cache/Quarantine, das Lens-System
+(`get_or_create_lens`-Upsert-in-place, `delete_lens`-Fallback auf `active_lens_id=NULL`)
+sowie `raw_*_type`-Mirroring bei Insert/manueller Kuration ab. `ontology/schema_suggestions.rs`
+hat eigene `#[cfg(test)] mod tests` am Dateiende (Häufigkeits-Threshold). Bei Änderungen:
 `cargo test --lib db` laufen lassen, bei neuer CRUD-Logik ergänzen.

@@ -10,14 +10,14 @@ use crate::db::models::{OntologyEdge, NewOntologyEdge};
 impl Database {
     pub fn list_ontology_edges(&self, context_id: i64) -> Result<Vec<OntologyEdge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
+            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, e.raw_relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
              FROM ontology_edges e
              LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
              WHERE e.context_id = ?1
              GROUP BY e.id"
         )?;
         let rows = stmt.query_map([context_id], |row| {
-            let chunk_data_str: Option<String> = row.get(5)?;
+            let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
             if let Some(s) = chunk_data_str {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
@@ -41,8 +41,9 @@ impl Database {
                 source_id: row.get(2)?,
                 target_id: row.get(3)?,
                 relation_type: row.get(4)?,
+                raw_relation_type: row.get(5)?,
                 chunk_evidences,
-                created_at: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
@@ -68,10 +69,12 @@ impl Database {
         }
     }
 
+    /// `raw_relation_type` mirrors `relation_type` at insert time — see
+    /// `nodes.rs::create_ontology_node`'s doc comment for the same reasoning.
     pub fn create_ontology_edge(&self, new: &NewOntologyEdge) -> Result<OntologyEdge> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type, raw_relation_type)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
             rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
         )?;
         let edge_id: i64 = self.conn.query_row(
@@ -84,14 +87,14 @@ impl Database {
             rusqlite::params![edge_id, new.chunk_id],
         )?;
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
+            "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, e.raw_relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
              FROM ontology_edges e
              LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
              WHERE e.id = ?1
              GROUP BY e.id"
         )?;
         let edge = stmt.query_row([edge_id], |row| {
-            let chunk_data_str: Option<String> = row.get(5)?;
+            let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
             if let Some(s) = chunk_data_str {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
@@ -115,8 +118,9 @@ impl Database {
                 source_id: row.get(2)?,
                 target_id: row.get(3)?,
                 relation_type: row.get(4)?,
+                raw_relation_type: row.get(5)?,
                 chunk_evidences,
-                created_at: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         Ok(edge)
@@ -124,7 +128,7 @@ impl Database {
 
     pub fn insert_ontology_edge_fast(&self, new: &NewOntologyEdge) -> Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR IGNORE INTO ontology_edges (context_id, source_id, target_id, relation_type, raw_relation_type) VALUES (?1, ?2, ?3, ?4, ?4)",
             rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
         )?;
         let edge_id: i64 = self.conn.query_row(
@@ -152,8 +156,10 @@ impl Database {
         Ok(list)
     }
 
-    pub fn get_ontology_edges_for_sanitization(&self, context_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
-        let mut stmt = self.conn.prepare("SELECT id, source_id, target_id, relation_type FROM ontology_edges WHERE context_id = ?1")?;
+    /// Feeds `materialize_lens`'s exhaustive resolve loop (every edge, not
+    /// just ones violating a constraint — see BACKLOG.md's Lens system).
+    pub fn get_ontology_edges_raw(&self, context_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, source_id, target_id, raw_relation_type FROM ontology_edges WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
@@ -179,6 +185,30 @@ impl Database {
 
     pub fn get_ontology_edges_full(&self, context_id: i64) -> Result<Vec<(i64, i64, String)>> {
         let mut stmt = self.conn.prepare("SELECT source_id, target_id, relation_type FROM ontology_edges WHERE context_id = ?1")?;
+        let iter = stmt.query_map([context_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+
+        let mut list = Vec::new();
+        for item in iter {
+            if let Ok(i) = item { list.push(i); }
+        }
+        Ok(list)
+    }
+
+    /// Like `get_ontology_edges_full`, but excludes edges the context's
+    /// active lens verdicted `'deleted'` and uses the lens-resolved relation
+    /// type (falling back to raw where no lens/no mapping row exists) — see
+    /// BACKLOG.md's Lens system. Used by community detection so a lens's
+    /// "removed" edges don't shape community structure.
+    pub fn get_ontology_edges_full_for_lens(&self, context_id: i64) -> Result<Vec<(i64, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.source_id, e.target_id, COALESCE(v.resolved_relation_type, e.raw_relation_type)
+             FROM ontology_edges e
+             JOIN contexts c ON c.id = e.context_id
+             LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = c.active_lens_id
+             WHERE e.context_id = ?1 AND COALESCE(v.verdict, 'valid') != 'deleted'"
+        )?;
         let iter = stmt.query_map([context_id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
@@ -221,9 +251,12 @@ impl Database {
         Ok(())
     }
 
+    /// Manual curation: mirrors `update_ontology_node`'s reasoning — a user's
+    /// edit supersedes the extracted value, so `raw_relation_type` is updated
+    /// alongside `relation_type`.
     pub fn update_ontology_edge(&self, id: i64, relation_type: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE ontology_edges SET relation_type = ?1 WHERE id = ?2",
+            "UPDATE ontology_edges SET relation_type = ?1, raw_relation_type = ?1 WHERE id = ?2",
             rusqlite::params![relation_type, id],
         )?;
         Ok(())
@@ -231,7 +264,7 @@ impl Database {
 
     pub fn insert_ontology_edge_fast_primitive(&self, context_id: i64, source_id: i64, target_id: i64, relation_type: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ontology_edges (context_id, source_id, target_id, relation_type) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO ontology_edges (context_id, source_id, target_id, relation_type, raw_relation_type) VALUES (?1, ?2, ?3, ?4, ?4)",
             rusqlite::params![context_id, source_id, target_id, relation_type],
         )?;
         Ok(())

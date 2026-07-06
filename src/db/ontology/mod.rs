@@ -12,6 +12,9 @@ mod retrieval;
 mod metrics;
 mod dedup_cache;
 mod quarantine;
+mod edge_reviews;
+mod lenses;
+mod schema_suggestions;
 
 #[cfg(test)]
 mod tests;

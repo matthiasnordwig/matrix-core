@@ -21,6 +21,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         ontology_pool_id: row.get("ontology_pool_id")?,
         extract_title_llm: row.get("extract_title_llm")?,
         auto_merge_ontology: row.get("auto_merge_ontology")?,
+        active_lens_id: row.get("active_lens_id")?,
         status: row.get("status")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,

@@ -9,7 +9,7 @@ use crate::db::models::{OntologyNode, NewOntologyNode};
 impl Database {
     pub fn list_ontology_nodes(&self, context_id: i64) -> Result<Vec<OntologyNode>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, context_id, label, entity_type, description, community_id, created_at
+            "SELECT id, context_id, label, entity_type, raw_entity_type, description, community_id, created_at
              FROM ontology_nodes WHERE context_id = ?1"
         )?;
         let rows = stmt.query_map([context_id], |row| {
@@ -18,9 +18,10 @@ impl Database {
                 context_id: row.get(1)?,
                 label: row.get(2)?,
                 entity_type: row.get(3)?,
-                description: row.get(4)?,
-                community_id: row.get(5)?,
-                created_at: row.get(6)?,
+                raw_entity_type: row.get(4)?,
+                description: row.get(5)?,
+                community_id: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
@@ -30,15 +31,19 @@ impl Database {
         Ok(out)
     }
 
+    /// `raw_entity_type` mirrors `entity_type` at insert time — nothing has
+    /// snapped anything yet, so they start out identical (see BACKLOG.md's
+    /// Lens system: only `materialize_lens` reads/writes a distinct resolved
+    /// type from here on, in the separate `ontology_lens_node_types` table).
     pub fn create_ontology_node(&self, new: &NewOntologyNode) -> Result<OntologyNode> {
         self.conn.execute(
-            "INSERT INTO ontology_nodes (context_id, label, entity_type, description)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO ontology_nodes (context_id, label, entity_type, raw_entity_type, description)
+             VALUES (?1, ?2, ?3, ?3, ?4)",
             rusqlite::params![new.context_id, new.label, new.entity_type, new.description],
         )?;
         let id = self.conn.last_insert_rowid();
         let mut stmt = self.conn.prepare(
-            "SELECT id, context_id, label, entity_type, description, community_id, created_at
+            "SELECT id, context_id, label, entity_type, raw_entity_type, description, community_id, created_at
              FROM ontology_nodes WHERE id = ?1"
         )?;
         let node = stmt.query_row([id], |row| {
@@ -47,9 +52,10 @@ impl Database {
                 context_id: row.get(1)?,
                 label: row.get(2)?,
                 entity_type: row.get(3)?,
-                description: row.get(4)?,
-                community_id: row.get(5)?,
-                created_at: row.get(6)?,
+                raw_entity_type: row.get(4)?,
+                description: row.get(5)?,
+                community_id: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         Ok(node)
@@ -57,7 +63,7 @@ impl Database {
 
     pub fn insert_ontology_node_fast(&self, new: &NewOntologyNode) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO ontology_nodes (context_id, label, entity_type, description) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO ontology_nodes (context_id, label, entity_type, raw_entity_type, description) VALUES (?1, ?2, ?3, ?3, ?4)",
             rusqlite::params![new.context_id, new.label, new.entity_type, new.description],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -83,8 +89,15 @@ impl Database {
         Ok(())
     }
 
+    /// Updates both `entity_type` and `raw_entity_type` together — this is
+    /// the manual-curation path (a user's correction supersedes whatever the
+    /// LLM originally extracted), not lens materialization (which never
+    /// touches these columns, see `ontology_lens_node_types`).
     pub fn update_ontology_node_type(&self, node_id: i64, new_type: &str) -> Result<()> {
-        self.conn.execute("UPDATE ontology_nodes SET entity_type = ?1 WHERE id = ?2", rusqlite::params![new_type, node_id])?;
+        self.conn.execute(
+            "UPDATE ontology_nodes SET entity_type = ?1, raw_entity_type = ?1 WHERE id = ?2",
+            rusqlite::params![new_type, node_id],
+        )?;
         Ok(())
     }
 
@@ -113,8 +126,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_ontology_nodes(&self, context_id: i64) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare("SELECT id, entity_type FROM ontology_nodes WHERE context_id = ?1")?;
+    /// Feeds `materialize_lens`'s exhaustive resolve loop (every node, not
+    /// just ones whose raw type isn't allowed — see BACKLOG.md's Lens system).
+    pub fn get_ontology_nodes_raw(&self, context_id: i64) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, raw_entity_type FROM ontology_nodes WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut list = Vec::new();
         for item in iter { if let Ok(i) = item { list.push(i); } }
@@ -166,6 +181,39 @@ impl Database {
 
     pub fn get_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
         let mut stmt = self.conn.prepare("SELECT id, entity_type, label, description, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
+        let iter = stmt.query_map([context_id], |row| {
+            let blob: Vec<u8> = row.get(4)?;
+            let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                vec
+            ))
+        })?;
+
+        let mut list = Vec::new();
+        for item in iter {
+            if let Ok(i) = item { list.push(i); }
+        }
+        Ok(list)
+    }
+
+    /// Like `get_ontology_nodes_with_embeddings`, but the type in tuple
+    /// position `.1` is the context's *active lens*-resolved type (falling
+    /// back to the raw type where no lens/no mapping row exists) instead of
+    /// the raw type directly — used by dedup bucketing so pair volume scales
+    /// with the schema's type count, not with however many distinct raw
+    /// types extraction happened to produce (see BACKLOG.md's Lens system).
+    pub fn get_ontology_nodes_with_embeddings_and_lens_type(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, COALESCE(lnt.resolved_type, o.raw_entity_type), o.label, o.description, o.vector_blob
+             FROM ontology_nodes o
+             JOIN contexts c ON c.id = o.context_id
+             LEFT JOIN ontology_lens_node_types lnt ON lnt.node_id = o.id AND lnt.lens_id = c.active_lens_id
+             WHERE o.context_id = ?1 AND o.vector_blob IS NOT NULL"
+        )?;
         let iter = stmt.query_map([context_id], |row| {
             let blob: Vec<u8> = row.get(4)?;
             let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -250,15 +298,18 @@ impl Database {
 
     pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ontology_nodes (context_id, label, entity_type, description, vector_blob) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO ontology_nodes (context_id, label, entity_type, raw_entity_type, description, vector_blob) VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
             rusqlite::params![context_id, label, entity_type, description, vector_blob],
         )?;
         Ok(())
     }
 
+    /// Manual curation: a user's edit supersedes whatever was extracted, so
+    /// `raw_entity_type` is updated alongside `entity_type` (same reasoning
+    /// as `update_ontology_node_type` above).
     pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
-            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, description = ?3, vector_blob = ?4 WHERE id = ?5",
+            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, raw_entity_type = ?2, description = ?3, vector_blob = ?4 WHERE id = ?5",
             rusqlite::params![label, entity_type, description, vector_blob, id],
         )?;
         Ok(())

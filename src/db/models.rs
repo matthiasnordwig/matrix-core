@@ -286,6 +286,11 @@ pub struct Context {
     pub ontology_pool_id: Option<i64>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
+    /// The lens (see `OntologyLens`) currently used to filter/relabel this
+    /// context's graph for retrieval/dedup/community — `None` means "show raw,
+    /// unfiltered" (the only possible state for a pre-Lens context, and the
+    /// state a context falls back to if its active lens is deleted).
+    pub active_lens_id: Option<i64>,
     pub status: ContextStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -520,6 +525,15 @@ pub struct OntologyNode {
     pub context_id: i64,
     pub label: String,
     pub entity_type: String,
+    /// The type the LLM actually produced at extraction time, kept permanently
+    /// (never overwritten by lens materialization) — see
+    /// `core/src/db/ontology/lenses.rs`/BACKLOG.md's "Lens" system.
+    /// `#[serde(default)]` so a context bundle exported before this field
+    /// existed still deserializes on import (falls back to `entity_type`'s
+    /// value being re-derived at insert time, not this default directly —
+    /// see `context_transfer::import`).
+    #[serde(default)]
+    pub raw_entity_type: String,
     pub description: String,
     pub community_id: Option<i64>,
     pub created_at: i64,
@@ -540,6 +554,12 @@ pub struct OntologyEdge {
     pub source_id: i64,
     pub target_id: i64,
     pub relation_type: String,
+    /// The relation type the LLM actually produced at extraction time, kept
+    /// permanently — see `OntologyNode::raw_entity_type`/BACKLOG.md's Lens
+    /// system. `#[serde(default)]` for the same reason as
+    /// `OntologyNode::raw_entity_type`.
+    #[serde(default)]
+    pub raw_relation_type: String,
     pub chunk_evidences: std::collections::HashMap<i64, Option<String>>,
     pub created_at: i64,
 }
@@ -571,6 +591,25 @@ pub struct OntologyCommunity {
     pub created_at: i64,
 }
 
+/// Materializes one `OntologyProfile`'s cosine-snap + relation-constraint
+/// resolution against a context's permanently-kept raw types, without
+/// mutating them (see `OntologyNode::raw_entity_type`/BACKLOG.md's Lens
+/// system). A context's `active_lens_id` picks which lens (if any) filters/
+/// relabels its graph for retrieval/dedup/community.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyLens {
+    pub id: i64,
+    pub context_id: i64,
+    pub name: String,
+    pub ontology_profile_id: i64,
+    /// Whether this lens was ever materialized as part of an actual
+    /// extraction run (as opposed to a standalone "Add Lens" re-labeling
+    /// call against already-stored raw data) — purely informational, used
+    /// only to warn before deleting it.
+    pub is_extraction_lens: bool,
+    pub created_at: i64,
+}
+
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct OntologyQuarantineChunk {
@@ -579,4 +618,26 @@ pub struct OntologyQuarantineChunk {
     pub graph_json: String,
     pub error_reason: String,
     pub created_at: String,
+}
+
+/// Non-blocking counterpart to `OntologyQuarantineChunk`: an edge whose
+/// evidence hinted at a possible negation/polarity error, but stage-2 LLM
+/// verification came back "unclear" or failed — see
+/// `ontology/extract/verify.rs`. Doesn't block the pipeline, just flags the
+/// edge for later human review.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OntologyEdgeReview {
+    pub id: i64,
+    pub context_id: i64,
+    pub edge_id: i64,
+    pub chunk_id: Option<i64>,
+    pub relation_type: String,
+    pub evidence: Option<String>,
+    pub reason: String,
+    pub created_at: i64,
+    /// Denormalized from the edge's source/target nodes at read time (see
+    /// `list_ontology_edge_reviews`) so the UI viewer doesn't need a second
+    /// round-trip to render the reviewed triplet.
+    pub source_label: String,
+    pub target_label: String,
 }
