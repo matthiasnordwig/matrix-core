@@ -15,6 +15,7 @@ mod quarantine;
 mod edge_reviews;
 mod lenses;
 mod schema_suggestions;
+mod type_vector_cache;
 
 #[cfg(test)]
 mod tests;
