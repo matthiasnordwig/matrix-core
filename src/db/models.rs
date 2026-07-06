@@ -470,6 +470,7 @@ pub struct NewGridRow {
 pub struct GridChatResult {
     pub id: i64,
     pub run_id: String,
+    pub row_uid: String,
     pub row_ref_type: RowRefType,
     pub row_ref_id: i64,
     pub prompt: String,
@@ -486,6 +487,7 @@ pub struct GridChatResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridChatUpsert {
     pub run_id: String,
+    pub row_uid: String,
     pub row_ref_type: RowRefType,
     pub row_ref_id: i64,
     pub prompt: String,

@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 38);
+    assert_eq!(db.schema_version().unwrap(), 39);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -265,6 +265,7 @@ fn grid_chat_result_overwrites_no_history() {
     let run = "run-1";
     let mut upsert = GridChatUpsert {
         run_id: run.into(),
+        row_uid: "grid_row:42".into(),
         prompt_snapshot: Some("{}".to_string()),
         row_ref_type: RowRefType::GridRow,
         row_ref_id: 42,
@@ -286,6 +287,71 @@ fn grid_chat_result_overwrites_no_history() {
     // overwrite, not append
     assert_eq!(db.count_grid_chat_results(run).unwrap(), 1);
     assert_eq!(db.list_grid_chat_results(run).unwrap().len(), 1);
+}
+
+/// Two rows with the same `(run_id, row_ref_id)` but distinct `row_uid`
+/// (as produced by a JSON explode) must persist as two separate records.
+#[test]
+fn grid_chat_result_distinct_row_uid_keeps_both() {
+    let db = db();
+    let run = "run-explode";
+    let base = GridChatUpsert {
+        run_id: run.into(),
+        row_uid: String::new(),
+        prompt_snapshot: None,
+        row_ref_type: RowRefType::Chunk,
+        row_ref_id: 7,
+        prompt: "p".into(),
+        columns_context: None,
+        retrieved_refs: None,
+        response: Some("first".into()),
+        status: ChatStatus::Done,
+        error: None,
+    };
+
+    let mut a = base.clone();
+    a.row_uid = "7:e0".into();
+    db.upsert_grid_chat_result(&a).unwrap();
+
+    let mut b = base.clone();
+    b.row_uid = "7:e1".into();
+    b.response = Some("second".into());
+    db.upsert_grid_chat_result(&b).unwrap();
+
+    assert_eq!(db.count_grid_chat_results(run).unwrap(), 2);
+    let rows = db.list_grid_chat_results(run).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r.row_ref_id == 7));
+}
+
+/// A second upsert with the same `(run_id, row_uid)` updates in place.
+#[test]
+fn grid_chat_result_same_row_uid_updates() {
+    let db = db();
+    let run = "run-retry";
+    let mut upsert = GridChatUpsert {
+        run_id: run.into(),
+        row_uid: "chunk:9".into(),
+        prompt_snapshot: None,
+        row_ref_type: RowRefType::Chunk,
+        row_ref_id: 9,
+        prompt: "p".into(),
+        columns_context: None,
+        retrieved_refs: None,
+        response: None,
+        status: ChatStatus::Error,
+        error: Some("boom".into()),
+    };
+    db.upsert_grid_chat_result(&upsert).unwrap();
+
+    upsert.status = ChatStatus::Done;
+    upsert.error = None;
+    upsert.response = Some("recovered".into());
+    let result = db.upsert_grid_chat_result(&upsert).unwrap();
+
+    assert_eq!(result.status, ChatStatus::Done);
+    assert_eq!(result.response.as_deref(), Some("recovered"));
+    assert_eq!(db.count_grid_chat_results(run).unwrap(), 1);
 }
 
 #[test]

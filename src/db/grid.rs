@@ -31,6 +31,7 @@ fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
     Ok(GridChatResult {
         id: row.get("id")?,
         run_id: row.get("run_id")?,
+        row_uid: row.get("row_uid")?,
         row_ref_type: row.get("row_ref_type")?,
         row_ref_id: row.get("row_ref_id")?,
         prompt: row.get("prompt")?,
@@ -86,10 +87,12 @@ impl Database {
     pub fn upsert_grid_chat_result(&self, r: &GridChatUpsert) -> Result<GridChatResult> {
         self.conn.execute(
             "INSERT INTO grid_chat_results
-                (run_id, row_ref_type, row_ref_id, prompt, columns_context,
+                (run_id, row_uid, row_ref_type, row_ref_id, prompt, columns_context,
                  retrieved_refs, response, status, error, prompt_snapshot, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
-             ON CONFLICT(run_id, row_ref_type, row_ref_id) DO UPDATE SET
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, unixepoch())
+             ON CONFLICT(run_id, row_uid) DO UPDATE SET
+                row_ref_type = excluded.row_ref_type,
+                row_ref_id = excluded.row_ref_id,
                 prompt = excluded.prompt,
                 columns_context = excluded.columns_context,
                 retrieved_refs = excluded.retrieved_refs,
@@ -100,6 +103,7 @@ impl Database {
                 updated_at = unixepoch()",
             params![
                 r.run_id,
+                r.row_uid,
                 r.row_ref_type,
                 r.row_ref_id,
                 r.prompt,
@@ -115,8 +119,8 @@ impl Database {
             .conn
             .query_row(
                 "SELECT * FROM grid_chat_results
-                 WHERE run_id = ?1 AND row_ref_type = ?2 AND row_ref_id = ?3",
-                params![r.run_id, r.row_ref_type, r.row_ref_id],
+                 WHERE run_id = ?1 AND row_uid = ?2",
+                params![r.run_id, r.row_uid],
                 row_to_chat_result,
             )?)
     }
