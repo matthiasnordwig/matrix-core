@@ -682,3 +682,20 @@ pub struct OntologyEdgeReview {
     pub source_label: String,
     pub target_label: String,
 }
+
+/// One row of `ontology_merge_log` (schema_v38, see ISSUES.md
+/// "ontology_dedup_cache — keine Merge-Historie ..."): records the losing
+/// node's label/type right before `merge_ontology_nodes` hard-deletes it.
+/// Purely additive/retrospective — never read by the extraction/dedup
+/// pipeline itself, only for later retrieval (`list_ontology_merge_log`) and
+/// `scripts/eval_extraction.py`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeLogEntry {
+    pub id: i64,
+    pub context_id: i64,
+    pub winner_id: i64,
+    pub loser_id: i64,
+    pub loser_label: String,
+    pub loser_entity_type: String,
+    pub merged_at: i64,
+}

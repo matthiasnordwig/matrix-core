@@ -4,7 +4,8 @@
 //! originally grouped under an "Admin / Manual Curation" comment at the
 //! bottom of that file; they're grouped here by entity instead.
 use crate::db::{Database, Result};
-use crate::db::models::{OntologyNode, NewOntologyNode};
+use crate::db::models::{OntologyNode, NewOntologyNode, MergeLogEntry};
+use rusqlite::OptionalExtension;
 
 impl Database {
     pub fn list_ontology_nodes(&self, context_id: i64) -> Result<Vec<OntologyNode>> {
@@ -310,13 +311,19 @@ impl Database {
 
     /// Merges each `(keep, drop)` pair: rewires the loser's edges onto the
     /// winner, collapses would-be duplicate edges (evidence chunks carried
-    /// over), then hard-deletes the loser node. Returns the pairs actually
-    /// executed: a pair whose WINNER no longer exists is skipped instead of
-    /// failing the whole transaction — with `PRAGMA foreign_keys = ON`, the
-    /// edge-rewire UPDATE would otherwise hit a FOREIGN KEY error and roll
-    /// back every merge in the batch (seen in production when a stale dedup
-    /// candidate elected an already-merged node as winner; chain resolution
-    /// happens in the caller, this is the last-line safety net).
+    /// over), logs the loser's label/type to `ontology_merge_log` (schema_v38,
+    /// see ISSUES.md "ontology_dedup_cache — keine Merge-Historie ..." — the
+    /// log write and the DELETE below happen in the same transaction, so the
+    /// history survives the hard-delete atomically), then hard-deletes the
+    /// loser node. Returns the pairs actually executed: a pair whose WINNER no
+    /// longer exists is skipped instead of failing the whole transaction —
+    /// with `PRAGMA foreign_keys = ON`, the edge-rewire UPDATE would otherwise
+    /// hit a FOREIGN KEY error and roll back every merge in the batch (seen in
+    /// production when a stale dedup candidate elected an already-merged node
+    /// as winner; chain resolution happens in the caller, this is the
+    /// last-line safety net). A pair whose LOSER no longer exists (already
+    /// merged away by an earlier pair in the same batch) is skipped the same
+    /// way — nothing left to log or delete.
     pub fn merge_ontology_nodes(&self, merges: &[(i64, i64)]) -> Result<Vec<(i64, i64)>> {
         let tx = self.conn.unchecked_transaction()?;
         let mut executed = Vec::with_capacity(merges.len());
@@ -329,6 +336,16 @@ impl Database {
             if !keeper_alive {
                 continue;
             }
+            let loser: Option<(i64, String, String)> = tx
+                .query_row(
+                    "SELECT context_id, label, entity_type FROM ontology_nodes WHERE id = ?1",
+                    [drop_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((context_id, loser_label, loser_entity_type)) = loser else {
+                continue;
+            };
             tx.execute("
                 INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id)
                 SELECT keep_edge.id, drop_chunk.chunk_id
@@ -390,11 +407,43 @@ impl Database {
             // any self-loop on the winner; evidence rows cascade with the edge.
             tx.execute("DELETE FROM ontology_edges WHERE source_id = ?1 AND target_id = ?1", rusqlite::params![keep_id])?;
 
+            tx.execute(
+                "INSERT INTO ontology_merge_log (context_id, winner_id, loser_id, loser_label, loser_entity_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![context_id, keep_id, drop_id, loser_label, loser_entity_type],
+            )?;
+
             tx.execute("DELETE FROM ontology_nodes WHERE id = ?1", rusqlite::params![drop_id])?;
             executed.push((keep_id, drop_id));
         }
         tx.commit()?;
         Ok(executed)
+    }
+
+    /// Reads back `ontology_merge_log` for a context (schema_v38, see
+    /// ISSUES.md "ontology_dedup_cache — keine Merge-Historie ..."), newest
+    /// first. Never called by the extraction/dedup pipeline itself — only
+    /// for later retrieval (e.g. `scripts/eval_extraction.py`) and the
+    /// `list_ontology_merge_log` Tauri command.
+    pub fn list_ontology_merge_log(&self, context_id: i64) -> Result<Vec<MergeLogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, context_id, winner_id, loser_id, loser_label, loser_entity_type, merged_at
+             FROM ontology_merge_log
+             WHERE context_id = ?1
+             ORDER BY id DESC"
+        )?;
+        let rows = stmt.query_map([context_id], |row| {
+            Ok(MergeLogEntry {
+                id: row.get(0)?,
+                context_id: row.get(1)?,
+                winner_id: row.get(2)?,
+                loser_id: row.get(3)?,
+                loser_label: row.get(4)?,
+                loser_entity_type: row.get(5)?,
+                merged_at: row.get(6)?,
+            })
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {

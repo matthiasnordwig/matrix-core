@@ -277,6 +277,35 @@ fn merge_with_missing_winner_is_skipped_not_an_error() {
     assert_eq!(db.list_ontology_edges(ctx).unwrap().len(), 1, "its edges must be untouched");
 }
 
+#[test]
+fn merge_ontology_nodes_logs_loser_label_and_type_before_deleting_it() {
+    // Regression for ISSUES.md "ontology_dedup_cache — keine Merge-Historie
+    // ...": merge_ontology_nodes hard-deletes the losing node row, so its
+    // label/type must be captured in ontology_merge_log *before* the DELETE,
+    // in the same transaction, or the history is unrecoverable.
+    let db = db();
+    let (ctx, _chunk_id) = seed_context_with_chunk(&db, "CtxMergeLog");
+    let keep = node(&db, ctx, "OpenAI", "ORG");
+    let dup = node(&db, ctx, "Open AI", "ORG");
+
+    let executed = db.merge_ontology_nodes(&[(keep.id, dup.id)]).unwrap();
+    assert_eq!(executed, vec![(keep.id, dup.id)]);
+
+    let log = db.list_ontology_merge_log(ctx).unwrap();
+    assert_eq!(log.len(), 1, "exactly one merge log row");
+    let entry = &log[0];
+    assert_eq!(entry.context_id, ctx);
+    assert_eq!(entry.winner_id, keep.id);
+    assert_eq!(entry.loser_id, dup.id);
+    assert_eq!(entry.loser_label, "Open AI");
+    assert_eq!(entry.loser_entity_type, "ORG");
+
+    // The log must survive the loser's deletion, not merely predate it.
+    let nodes = db.list_ontology_nodes(ctx).unwrap();
+    assert!(nodes.iter().all(|n| n.id != dup.id), "loser node must actually be gone");
+    assert!(nodes.iter().any(|n| n.id == keep.id), "winner must survive");
+}
+
 // --- edges ------------------------------------------------------------------
 
 #[test]
