@@ -98,7 +98,8 @@ fn merge_ontology_nodes_rewires_edges_and_drops_duplicate() {
     edge(&db, ctx, chunk_id, keep.id, other.id, "FOUNDED_BY");
     edge(&db, ctx, chunk_id, dup.id, other.id, "FOUNDED_BY");
 
-    db.merge_ontology_nodes(&[(keep.id, dup.id)]).unwrap();
+    let executed = db.merge_ontology_nodes(&[(keep.id, dup.id)]).unwrap();
+    assert_eq!(executed, vec![(keep.id, dup.id)]);
 
     let edges = db.list_ontology_edges(ctx).unwrap();
     assert_eq!(edges.len(), 1, "duplicate edge must collapse into one");
@@ -107,6 +108,29 @@ fn merge_ontology_nodes_rewires_edges_and_drops_duplicate() {
     let nodes = db.list_ontology_nodes(ctx).unwrap();
     assert_eq!(nodes.len(), 2, "the dropped duplicate node itself must be gone");
     assert!(nodes.iter().all(|n| n.id != dup.id));
+}
+
+#[test]
+fn merge_with_missing_winner_is_skipped_not_an_error() {
+    // Regression for the production FK abort: a stale dedup candidate can
+    // elect an already-deleted node as winner. The merge must skip that pair
+    // (and report it as not executed) instead of failing the transaction —
+    // with foreign_keys=ON, rewiring edges onto a dead id is an FK error
+    // that would roll back every merge in the batch.
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx4");
+    let dead = node(&db, ctx, "Ghost", "ORG");
+    let alive = node(&db, ctx, "Survivor", "ORG");
+    let other = node(&db, ctx, "Bystander", "PERSON");
+    edge(&db, ctx, chunk_id, alive.id, other.id, "RELATED_TO");
+    db.delete_ontology_node(dead.id).unwrap();
+
+    let executed = db.merge_ontology_nodes(&[(dead.id, alive.id)]).unwrap();
+
+    assert!(executed.is_empty(), "pair with dead winner must be skipped");
+    let nodes = db.list_ontology_nodes(ctx).unwrap();
+    assert!(nodes.iter().any(|n| n.id == alive.id), "loser must survive a skipped merge");
+    assert_eq!(db.list_ontology_edges(ctx).unwrap().len(), 1, "its edges must be untouched");
 }
 
 // --- edges ------------------------------------------------------------------

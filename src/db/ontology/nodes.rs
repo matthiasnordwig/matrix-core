@@ -233,9 +233,27 @@ impl Database {
         Ok(list)
     }
 
-    pub fn merge_ontology_nodes(&self, merges: &[(i64, i64)]) -> Result<()> {
+    /// Merges each `(keep, drop)` pair: rewires the loser's edges onto the
+    /// winner, collapses would-be duplicate edges (evidence chunks carried
+    /// over), then hard-deletes the loser node. Returns the pairs actually
+    /// executed: a pair whose WINNER no longer exists is skipped instead of
+    /// failing the whole transaction — with `PRAGMA foreign_keys = ON`, the
+    /// edge-rewire UPDATE would otherwise hit a FOREIGN KEY error and roll
+    /// back every merge in the batch (seen in production when a stale dedup
+    /// candidate elected an already-merged node as winner; chain resolution
+    /// happens in the caller, this is the last-line safety net).
+    pub fn merge_ontology_nodes(&self, merges: &[(i64, i64)]) -> Result<Vec<(i64, i64)>> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut executed = Vec::with_capacity(merges.len());
         for &(keep_id, drop_id) in merges {
+            let keeper_alive: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ontology_nodes WHERE id = ?1)",
+                [keep_id],
+                |row| row.get(0),
+            )?;
+            if !keeper_alive {
+                continue;
+            }
             tx.execute("
                 INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id)
                 SELECT keep_edge.id, drop_chunk.chunk_id
@@ -291,9 +309,10 @@ impl Database {
             tx.execute("UPDATE OR IGNORE ontology_edges SET target_id = ?1 WHERE target_id = ?2", rusqlite::params![keep_id, drop_id])?;
 
             tx.execute("DELETE FROM ontology_nodes WHERE id = ?1", rusqlite::params![drop_id])?;
+            executed.push((keep_id, drop_id));
         }
         tx.commit()?;
-        Ok(())
+        Ok(executed)
     }
 
     pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
