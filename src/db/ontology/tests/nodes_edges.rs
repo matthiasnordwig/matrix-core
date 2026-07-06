@@ -125,6 +125,36 @@ fn get_ontology_node_single_fetch_matches_list_shape() {
 }
 
 #[test]
+fn get_ontology_nodes_with_types_returns_entity_type_not_description() {
+    // Regression: the structural-lint step (ontology/mod.rs, "1b") loads
+    // node_labels as (label, entity_type) and the LabelEqualsType rule
+    // compares label against that second field. It must be entity_type, not
+    // the free-text description — a node whose description happens to equal
+    // its label (but whose type differs) must NOT look like label == type.
+    let db = db();
+    let (ctx, _chunk_id) = seed_context_with_chunk(&db, "CtxNodeTypes");
+    let n = db
+        .create_ontology_node(&NewOntologyNode {
+            context_id: ctx,
+            label: "Uniper".into(),
+            entity_type: "ORGANIZATION".into(),
+            description: "Uniper".into(), // description == label on purpose
+        })
+        .unwrap();
+
+    let types = db.get_ontology_nodes_with_types(ctx).unwrap();
+    assert_eq!(
+        types.get(&n.id),
+        Some(&("Uniper".to_string(), "ORGANIZATION".to_string())),
+        "second field must be entity_type, not description"
+    );
+
+    // Contrast: the description variant yields the description in that slot.
+    let descs = db.get_ontology_nodes_with_descriptions(ctx).unwrap();
+    assert_eq!(descs.get(&n.id), Some(&("Uniper".to_string(), "Uniper".to_string())));
+}
+
+#[test]
 fn get_ontology_edge_single_fetch_matches_list_shape() {
     let db = db();
     let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxGetEdge");

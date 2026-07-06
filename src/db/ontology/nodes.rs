@@ -217,6 +217,28 @@ impl Database {
         Ok(map)
     }
 
+    /// Batched `id -> (label, entity_type)` for a whole context. Mirrors
+    /// `get_ontology_node`'s `label, entity_type` columns, just for every node
+    /// at once. Distinct from `get_ontology_nodes_with_descriptions` (which
+    /// yields the free-text *description* as the second field) — callers that
+    /// reason about a node's *type* (e.g. the `LabelEqualsType` structural
+    /// lint) must use this one, not the description variant.
+    pub fn get_ontology_nodes_with_types(&self, context_id: i64) -> Result<std::collections::HashMap<i64, (String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, label, entity_type FROM ontology_nodes WHERE context_id = ?1")?;
+        let iter = stmt.query_map([context_id], |row| {
+            let id: i64 = row.get(0)?;
+            let label: String = row.get(1)?;
+            let entity_type: String = row.get(2)?;
+            Ok((id, (label, entity_type)))
+        })?;
+
+        let mut map = std::collections::HashMap::new();
+        for item in iter {
+            if let Ok((id, val)) = item { map.insert(id, val); }
+        }
+        Ok(map)
+    }
+
     pub fn get_ontology_nodes_missing_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String)>> {
         let mut stmt = self.conn.prepare("SELECT id, label, description FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NULL")?;
         let iter = stmt.query_map([context_id], |row| {
