@@ -12,7 +12,6 @@ fn row_to_profile(row: &Row<'_>) -> rusqlite::Result<ChunkingProfile> {
         prompt: row.get("prompt")?,
         overlap_ratio: row.get("overlap_ratio")?,
         max_signature_len: row.get("max_signature_len")?,
-        llm_endpoint_id: row.get("llm_endpoint_id")?,
         metadata_fields: row.get("metadata_fields")?,
         match_strategy: row.get("match_strategy")?,
         fuzzy_threshold: row.get("fuzzy_threshold")?,
@@ -26,14 +25,13 @@ impl Database {
         self.conn.execute(
             "INSERT INTO chunking_profiles
                 (name, prompt, overlap_ratio, max_signature_len,
-                 llm_endpoint_id, metadata_fields, match_strategy, fuzzy_threshold)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 metadata_fields, match_strategy, fuzzy_threshold)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 p.name,
                 p.prompt,
                 p.overlap_ratio,
                 p.max_signature_len,
-                p.llm_endpoint_id,
                 p.metadata_fields,
                 p.match_strategy,
                 p.fuzzy_threshold,
@@ -72,8 +70,8 @@ impl Database {
         self.conn.execute(
             "UPDATE chunking_profiles SET
                 name = ?2, prompt = ?3, overlap_ratio = ?4,
-                max_signature_len = ?5, llm_endpoint_id = ?6, metadata_fields = ?7,
-                match_strategy = ?8, fuzzy_threshold = ?9, updated_at = unixepoch()
+                max_signature_len = ?5, metadata_fields = ?6,
+                match_strategy = ?7, fuzzy_threshold = ?8, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id,
@@ -81,7 +79,6 @@ impl Database {
                 p.prompt,
                 p.overlap_ratio,
                 p.max_signature_len,
-                p.llm_endpoint_id,
                 p.metadata_fields,
                 p.match_strategy,
                 p.fuzzy_threshold,

@@ -34,7 +34,6 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             prompt: "Split this: {{pre_chunk}}".into(),
             overlap_ratio: 0.2,
             max_signature_len: 80,
-            llm_endpoint_id: None,
             metadata_fields: "[]".into(),
             match_strategy: MatchStrategy::ExactForward,
             fuzzy_threshold: None,
