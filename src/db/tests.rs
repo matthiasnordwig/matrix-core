@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 41);
+    assert_eq!(db.schema_version().unwrap(), 42);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -308,6 +308,7 @@ fn grid_chat_result_overwrites_no_history() {
         response: None,
         status: ChatStatus::Queued,
         error: None,
+        row_source_text: None,
     };
     db.upsert_grid_chat_result(&upsert).unwrap();
 
@@ -340,6 +341,7 @@ fn grid_chat_result_distinct_row_uid_keeps_both() {
         response: Some("first".into()),
         status: ChatStatus::Done,
         error: None,
+        row_source_text: None,
     };
 
     let mut a = base.clone();
@@ -374,6 +376,7 @@ fn grid_chat_result_same_row_uid_updates() {
         response: None,
         status: ChatStatus::Error,
         error: Some("boom".into()),
+        row_source_text: None,
     };
     db.upsert_grid_chat_result(&upsert).unwrap();
 
@@ -424,6 +427,45 @@ fn grid_run_meta_upsert_replaces_in_place() {
         db.grid_run_system_prompt("run-meta").unwrap().as_deref(),
         Some("Updated prompt.")
     );
+}
+
+/// Upload rows (`RowRefType::GridRow`, schema_v42) carry their source text
+/// alongside the chat result since there's no `chunks` row to reconstruct it
+/// from on history load; ordinary chunk-backed rows keep it NULL.
+#[test]
+fn grid_chat_result_round_trips_row_source_text() {
+    let db = db();
+    let run = "run-upload";
+    let upsert = GridChatUpsert {
+        run_id: run.into(),
+        row_uid: "upload:-1".into(),
+        prompt_snapshot: None,
+        row_ref_type: RowRefType::GridRow,
+        row_ref_id: -1,
+        prompt: "Summarize this row".into(),
+        columns_context: None,
+        retrieved_refs: None,
+        response: Some("done".into()),
+        status: ChatStatus::Done,
+        error: None,
+        row_source_text: Some("Alice, 34, Berlin".into()),
+    };
+    let result = db.upsert_grid_chat_result(&upsert).unwrap();
+    assert_eq!(result.row_source_text.as_deref(), Some("Alice, 34, Berlin"));
+
+    let listed = db.list_grid_chat_results(run).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].row_source_text.as_deref(), Some("Alice, 34, Berlin"));
+    assert_eq!(listed[0].row_ref_type, RowRefType::GridRow);
+
+    // Ordinary chunk-backed row stays NULL.
+    let mut chunk_row = upsert.clone();
+    chunk_row.row_uid = "chunk:5".into();
+    chunk_row.row_ref_type = RowRefType::Chunk;
+    chunk_row.row_ref_id = 5;
+    chunk_row.row_source_text = None;
+    let chunk_result = db.upsert_grid_chat_result(&chunk_row).unwrap();
+    assert!(chunk_result.row_source_text.is_none());
 }
 
 #[test]

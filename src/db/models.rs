@@ -56,6 +56,13 @@ pub enum ChatStatus {
     Error,
 }
 
+/// `Chunk` = row is backed by a real `chunks` row (`row_ref_id` = chunk id).
+/// `GridRow` = repurposed for Excel/CSV upload rows (the `grid_sheets`/
+/// `grid_rows` tables this variant was originally named for are dead code —
+/// no command creates them): `row_ref_id` is a synthetic, per-run-stable id
+/// the frontend assigns (negative index), and `row_source_text` on
+/// `GridChatResult`/`GridChatUpsert` carries the row's source text since
+/// there's no `chunks` row to reconstruct it from on history load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowRefType {
@@ -480,6 +487,10 @@ pub struct GridChatResult {
     pub status: ChatStatus,
     pub error: Option<String>,
     pub prompt_snapshot: Option<String>,
+    /// Source text of an upload row (`row_ref_type = GridRow`), so history
+    /// loading can rebuild a synthetic `Chunk` without a real `chunks` row.
+    /// `NULL` for chunk-backed rows (schema_v42).
+    pub row_source_text: Option<String>,
     pub updated_at: i64,
 }
 
@@ -497,6 +508,7 @@ pub struct GridChatUpsert {
     pub status: ChatStatus,
     pub error: Option<String>,
     pub prompt_snapshot: Option<String>,
+    pub row_source_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
