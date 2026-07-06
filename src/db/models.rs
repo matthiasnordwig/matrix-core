@@ -547,6 +547,11 @@ pub struct OntologyNode {
     #[serde(default)]
     pub raw_entity_type: String,
     pub description: String,
+    /// Legacy single-valued community assignment. Since per-lens communities
+    /// (schema_v37) this column is **no longer written** by the pipeline —
+    /// membership lives in `ontology_community_members` (per lens, a node can
+    /// be in different communities under different lenses). Kept readable for
+    /// pre-v37 databases/bundles only.
     pub community_id: Option<i64>,
     pub created_at: i64,
 }
@@ -600,7 +605,33 @@ pub struct OntologyCommunity {
     pub community_label: String,
     pub node_count: i64,
     pub summary_text: String,
+    /// Which lens this community was computed under; `None` = raw/unfiltered
+    /// view (and all pre-v37 legacy rows). `#[serde(default)]` for bundles
+    /// exported before per-lens communities existed.
+    #[serde(default)]
+    pub lens_id: Option<i64>,
+    /// Summary-cache key: member node ids sorted ascending, comma-joined.
+    /// `None` on legacy rows (they never cache-hit). Always derived from
+    /// live node ids at (re)compute time — see schema_v37.sql.
+    #[serde(default)]
+    pub members_key: Option<String>,
     pub created_at: i64,
+}
+
+/// `OntologyCommunity` plus its member node ids — what the frontend needs to
+/// build the node→community map for coloring/filtering (replaces reading the
+/// legacy `ontology_nodes.community_id`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyCommunityWithMembers {
+    pub id: i64,
+    pub context_id: i64,
+    pub community_label: String,
+    pub node_count: i64,
+    pub summary_text: String,
+    pub lens_id: Option<i64>,
+    pub members_key: Option<String>,
+    pub created_at: i64,
+    pub member_ids: Vec<i64>,
 }
 
 /// Materializes one `OntologyProfile`'s cosine-snap + relation-constraint

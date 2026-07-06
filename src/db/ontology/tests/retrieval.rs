@@ -103,3 +103,72 @@ fn retrieve_graph_batch_matches_single_query_result() {
     assert!(batch[0].nodes.iter().any(|n| n.starts_with("A (CONCEPT):")));
     assert!(batch[1].nodes.iter().any(|n| n.starts_with("B (CONCEPT):")));
 }
+
+#[test]
+fn retrieval_matches_only_active_lens_and_raw_communities() {
+    // Regression test for the per-lens community filter (schema_v37,
+    // architecture-review 2026-07-06): the community cosine scan must only
+    // consider the context's active lens plus lens_id NULL (raw/legacy) rows
+    // — a community computed under a non-active lens must not leak into
+    // retrieval even if its vector matches the query perfectly.
+    let db = db();
+    let (ctx, _chunk_id) = seed_context_with_chunk(&db, "Ctx10");
+    let profile_a = db
+        .create_ontology_profile(&NewOntologyProfile {
+            name: "LensProfileA".into(),
+            entity_types_json: "[]".into(),
+            relation_types_json: "[]".into(),
+            extract_prompt: None,
+            dedup_prompt: None,
+            community_prompt: None,
+        })
+        .unwrap();
+    let profile_b = db
+        .create_ontology_profile(&NewOntologyProfile {
+            name: "LensProfileB".into(),
+            entity_types_json: "[]".into(),
+            relation_types_json: "[]".into(),
+            extract_prompt: None,
+            dedup_prompt: None,
+            community_prompt: None,
+        })
+        .unwrap();
+    let lens_a = db.get_or_create_lens(ctx, "LensA", profile_a.id, true).unwrap();
+    let lens_b = db.get_or_create_lens(ctx, "LensB", profile_b.id, false).unwrap();
+    db.set_context_active_lens(ctx, Some(lens_a.id)).unwrap();
+
+    // Three communities with identical, perfectly-matching vectors — only
+    // lens membership differs.
+    let ca = db.create_ontology_community(ctx, "CommA", 2, "summary under lens A", Some(lens_a.id), Some("1,2")).unwrap();
+    let cb = db.create_ontology_community(ctx, "CommB", 2, "summary under lens B", Some(lens_b.id), Some("1,2")).unwrap();
+    let cr = db.create_ontology_community(ctx, "CommRaw", 2, "raw/legacy summary", None, None).unwrap();
+    for id in [ca, cb, cr] {
+        db.update_community_vector(id, &vector_to_blob(&[1.0, 0.0])).unwrap();
+    }
+
+    let model_id = 1i64;
+    let mut query = std::collections::HashMap::new();
+    query.insert(model_id, vec![1.0f32, 0.0]);
+
+    // Active lens A: its own community + the raw/legacy row match, lens B's
+    // must not.
+    let result = db.retrieve_graph_with(&[ctx], &query, 1, 1, 5).unwrap();
+    assert!(result.community_summaries.iter().any(|s| s.contains("summary under lens A")));
+    assert!(result.community_summaries.iter().any(|s| s.contains("raw/legacy summary")));
+    assert!(
+        !result.community_summaries.iter().any(|s| s.contains("summary under lens B")),
+        "a non-active lens's community leaked into retrieval: {:?}", result.community_summaries
+    );
+
+    // The batch variant applies the same filter.
+    let batch = db.retrieve_graph_batch(&[ctx], &[query.clone()], 1, 1, 5).unwrap();
+    assert_eq!(batch.len(), 1);
+    assert!(batch[0].community_summaries.iter().any(|s| s.contains("summary under lens A")));
+    assert!(!batch[0].community_summaries.iter().any(|s| s.contains("summary under lens B")));
+
+    // Raw view (no active lens): only the lens_id-NULL row may match.
+    db.set_context_active_lens(ctx, None).unwrap();
+    let raw_result = db.retrieve_graph_with(&[ctx], &query, 1, 1, 5).unwrap();
+    assert_eq!(raw_result.community_summaries.len(), 1, "{:?}", raw_result.community_summaries);
+    assert!(raw_result.community_summaries[0].contains("raw/legacy summary"));
+}

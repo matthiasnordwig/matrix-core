@@ -2,6 +2,7 @@
 // in-memory database. Split into focused files (convention: CLAUDE.md
 // "tests.rs > ~600 lines -> split into tests/foo.rs + mod tests { mod foo; }")
 // once the original flat tests.rs approached that size.
+mod communities;
 mod fixtures;
 mod nodes_edges;
 mod retrieval;

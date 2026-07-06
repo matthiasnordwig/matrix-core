@@ -204,7 +204,7 @@ fn delete_communities_resets_node_community_id_to_null() {
     let db = db();
     let (ctx, _chunk) = seed_context_with_chunk(&db, "Ctx5");
     let n = node(&db, ctx, "A", "CONCEPT");
-    let comm_id = db.create_ontology_community(ctx, "Cluster 1", 1, "summary").unwrap();
+    let comm_id = db.create_ontology_community(ctx, "Cluster 1", 1, "summary", None, None).unwrap();
     db.update_ontology_node_community(n.id, Some(comm_id)).unwrap();
     assert_eq!(db.list_ontology_nodes(ctx).unwrap()[0].community_id, Some(comm_id));
 

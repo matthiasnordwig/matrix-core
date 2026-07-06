@@ -48,8 +48,17 @@ impl Database {
                 scored.truncate(top_k_nodes);
                 hit_node_ids.extend(scored.into_iter().map(|s| s.1));
 
-                // Brute force cosine on ontology_communities
-                let mut stmt_comm = self.conn.prepare("SELECT id, vector_blob FROM ontology_communities WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
+                // Brute force cosine on ontology_communities. Communities are
+                // per-lens since schema_v37 — only the context's active lens
+                // (plus lens_id NULL = raw-view/legacy rows) may match, same
+                // active_lens_id-join pattern as the edge traversal below;
+                // otherwise a community computed under a non-active lens
+                // would leak into retrieval.
+                let mut stmt_comm = self.conn.prepare(
+                    "SELECT co.id, co.vector_blob FROM ontology_communities co
+                     JOIN contexts c ON c.id = co.context_id
+                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL
+                       AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)")?;
                 let iter_comm = stmt_comm.query_map([cid], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
@@ -75,7 +84,12 @@ impl Database {
         let mut community_summaries = Vec::new();
         if !hit_community_ids.is_empty() {
             let placeholders = std::iter::repeat("?").take(hit_community_ids.len()).collect::<Vec<_>>().join(",");
-            let query = format!("SELECT community_label, summary_text FROM ontology_communities WHERE id IN ({})", placeholders);
+            // Defensive re-check of the lens filter (ids above are already
+                // lens-filtered, but keep the invariant local to the query).
+                let query = format!(
+                    "SELECT co.community_label, co.summary_text FROM ontology_communities co
+                     JOIN contexts c ON c.id = co.context_id
+                     WHERE co.id IN ({}) AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)", placeholders);
             let mut stmt = self.conn.prepare_cached(&query)?;
             let summaries = stmt.query_map(rusqlite::params_from_iter(hit_community_ids.iter()), |row| {
                 let label: String = row.get(0)?;
@@ -208,7 +222,12 @@ impl Database {
                 })?;
                 for item in iter { if let Ok(i) = item { cached_nodes.push(i); } }
 
-                let mut stmt_comm = self.conn.prepare("SELECT id, vector_blob FROM ontology_communities WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
+                // Per-lens filter — same reasoning as retrieve_graph_with above.
+                let mut stmt_comm = self.conn.prepare(
+                    "SELECT co.id, co.vector_blob FROM ontology_communities co
+                     JOIN contexts c ON c.id = co.context_id
+                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL
+                       AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)")?;
                 let iter_comm = stmt_comm.query_map([cid], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
@@ -252,7 +271,12 @@ impl Database {
             let mut community_summaries = Vec::new();
             if !hit_community_ids.is_empty() {
                 let placeholders = std::iter::repeat("?").take(hit_community_ids.len()).collect::<Vec<_>>().join(",");
-                let query = format!("SELECT community_label, summary_text FROM ontology_communities WHERE id IN ({})", placeholders);
+                // Defensive re-check of the lens filter (ids above are already
+                // lens-filtered, but keep the invariant local to the query).
+                let query = format!(
+                    "SELECT co.community_label, co.summary_text FROM ontology_communities co
+                     JOIN contexts c ON c.id = co.context_id
+                     WHERE co.id IN ({}) AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)", placeholders);
                 let mut stmt = self.conn.prepare_cached(&query)?;
                 let summaries = stmt.query_map(rusqlite::params_from_iter(hit_community_ids.iter()), |row| {
                     let label: String = row.get(0)?;
