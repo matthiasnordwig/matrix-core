@@ -31,6 +31,42 @@ impl Database {
         Ok(out)
     }
 
+    /// Like `list_ontology_nodes`, but `entity_type` reflects the context's
+    /// active lens: `COALESCE(active-lens resolved_type, raw_entity_type)`.
+    /// With `active_lens_id = NULL` the LEFT JOIN never matches, so every row
+    /// falls back to its raw type (identical to the raw view). Used by the
+    /// Ontology graph tab so the visualization matches the lens the chat/grid
+    /// retrieval already applies (see `retrieval.rs`); the raw variant above
+    /// stays for the pipeline/export paths that must see un-lensed data.
+    pub fn list_ontology_nodes_for_active_lens(&self, context_id: i64) -> Result<Vec<OntologyNode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.id, n.context_id, n.label,
+                    COALESCE(lnt.resolved_type, n.raw_entity_type) AS entity_type,
+                    n.raw_entity_type, n.description, n.community_id, n.created_at
+             FROM ontology_nodes n
+             JOIN contexts c ON c.id = n.context_id
+             LEFT JOIN ontology_lens_node_types lnt ON lnt.node_id = n.id AND lnt.lens_id = c.active_lens_id
+             WHERE n.context_id = ?1"
+        )?;
+        let rows = stmt.query_map([context_id], |row| {
+            Ok(OntologyNode {
+                id: row.get(0)?,
+                context_id: row.get(1)?,
+                label: row.get(2)?,
+                entity_type: row.get(3)?,
+                raw_entity_type: row.get(4)?,
+                description: row.get(5)?,
+                community_id: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// `raw_entity_type` mirrors `entity_type` at insert time — nothing has
     /// snapped anything yet, so they start out identical (see BACKLOG.md's
     /// Lens system: only `materialize_lens` reads/writes a distinct resolved

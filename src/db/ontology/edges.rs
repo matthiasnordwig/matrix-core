@@ -53,6 +53,69 @@ impl Database {
         Ok(out)
     }
 
+    /// Like `list_ontology_edges`, but applies the context's active lens as a
+    /// display-time overlay (mirrors `retrieval.rs`, which the chat/grid graph
+    /// context already uses): `deleted`-verdict edges are excluded, `reversed`
+    /// edges have their source/target swapped in the result, and
+    /// `relation_type` becomes `COALESCE(resolved_relation_type,
+    /// raw_relation_type)`. With `active_lens_id = NULL` no verdict row
+    /// matches, so every edge shows raw/unfiltered. Used by the Ontology graph
+    /// tab; the raw variant above stays for the pipeline/export paths.
+    /// The swap is display-only — `id` still identifies the stored edge, so
+    /// curation actions keyed on it are unaffected.
+    pub fn list_ontology_edges_for_active_lens(&self, context_id: i64) -> Result<Vec<OntologyEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.context_id,
+                    CASE WHEN v.verdict = 'reversed' THEN e.target_id ELSE e.source_id END AS source_id,
+                    CASE WHEN v.verdict = 'reversed' THEN e.source_id ELSE e.target_id END AS target_id,
+                    COALESCE(v.resolved_relation_type, e.raw_relation_type) AS relation_type,
+                    e.raw_relation_type,
+                    json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data,
+                    e.created_at
+             FROM ontology_edges e
+             JOIN contexts ctx ON ctx.id = e.context_id
+             LEFT JOIN ontology_lens_edge_verdicts v ON v.edge_id = e.id AND v.lens_id = ctx.active_lens_id
+             LEFT JOIN ontology_edge_chunks c ON e.id = c.edge_id
+             WHERE e.context_id = ?1 AND COALESCE(v.verdict, 'valid') != 'deleted'
+             GROUP BY e.id"
+        )?;
+        let rows = stmt.query_map([context_id], |row| {
+            let chunk_data_str: Option<String> = row.get(6)?;
+            let mut chunk_evidences = std::collections::HashMap::new();
+            if let Some(s) = chunk_data_str {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(arr) = parsed.as_array() {
+                        for item in arr {
+                            if let Some(obj) = item.as_object() {
+                                if let Some(cid_val) = obj.get("chunk_id") {
+                                    if let Some(cid) = cid_val.as_i64() {
+                                        let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                        chunk_evidences.insert(cid, ev);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(OntologyEdge {
+                id: row.get(0)?,
+                context_id: row.get(1)?,
+                source_id: row.get(2)?,
+                target_id: row.get(3)?,
+                relation_type: row.get(4)?,
+                raw_relation_type: row.get(5)?,
+                chunk_evidences,
+                created_at: row.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// The `SELECT id FROM ontology_edges WHERE ...` lookup duplicated inline
     /// in `create_ontology_edge`/`insert_ontology_edge_fast`, extracted so
     /// callers that only have the natural key (e.g. import remapping) can

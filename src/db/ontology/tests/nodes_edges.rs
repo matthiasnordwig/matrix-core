@@ -111,6 +111,68 @@ fn merge_ontology_nodes_rewires_edges_and_drops_duplicate() {
 }
 
 #[test]
+fn list_for_active_lens_applies_type_resolution_reversal_and_deletion() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxLens");
+    let profile = db
+        .create_ontology_profile(&NewOntologyProfile {
+            name: "Lens".into(),
+            entity_types_json: "[\"PERSON\"]".into(),
+            relation_types_json: "[\"KNOWS\"]".into(),
+            extract_prompt: None,
+            dedup_prompt: None,
+            community_prompt: None,
+        })
+        .unwrap();
+    let a = node(&db, ctx, "Alice", "ACTOR");
+    let b = node(&db, ctx, "Bob", "ACTOR");
+    let c = node(&db, ctx, "Carol", "ACTOR");
+    let keep = edge(&db, ctx, chunk_id, a.id, b.id, "linked_to");
+    let rev = edge(&db, ctx, chunk_id, b.id, c.id, "linked_to");
+    let del = edge(&db, ctx, chunk_id, a.id, c.id, "linked_to");
+
+    let lens = db.get_or_create_lens(ctx, "Lens", profile.id, true).unwrap();
+    db.set_context_active_lens(ctx, Some(lens.id)).unwrap();
+    db.upsert_lens_node_type(lens.id, a.id, "PERSON").unwrap();
+    db.upsert_lens_edge_verdict(lens.id, keep.id, "valid", Some("KNOWS")).unwrap();
+    db.upsert_lens_edge_verdict(lens.id, rev.id, "reversed", Some("KNOWS")).unwrap();
+    db.upsert_lens_edge_verdict(lens.id, del.id, "deleted", None).unwrap();
+
+    // Raw listing ignores the lens entirely (this is what the Ontology tab
+    // used to call — hence "always the raw graph").
+    let raw_nodes = db.list_ontology_nodes(ctx).unwrap();
+    assert_eq!(raw_nodes.iter().find(|n| n.id == a.id).unwrap().entity_type, "ACTOR");
+    assert_eq!(db.list_ontology_edges(ctx).unwrap().len(), 3, "raw view keeps deleted edges");
+
+    // Lens-aware listing resolves the type, swaps the reversed edge, drops
+    // the deleted one.
+    let nodes = db.list_ontology_nodes_for_active_lens(ctx).unwrap();
+    assert_eq!(nodes.iter().find(|n| n.id == a.id).unwrap().entity_type, "PERSON", "resolved type");
+    assert_eq!(nodes.iter().find(|n| n.id == b.id).unwrap().entity_type, "ACTOR", "no lens row -> raw fallback");
+
+    let edges = db.list_ontology_edges_for_active_lens(ctx).unwrap();
+    assert_eq!(edges.len(), 2, "deleted edge excluded");
+    let rev_shown = edges.iter().find(|e| e.id == rev.id).unwrap();
+    assert_eq!(rev_shown.source_id, c.id, "reversed: source/target swapped for display");
+    assert_eq!(rev_shown.target_id, b.id);
+    assert_eq!(rev_shown.relation_type, "KNOWS", "resolved relation type");
+    assert!(!edges.iter().any(|e| e.id == del.id));
+}
+
+#[test]
+fn list_for_active_lens_with_no_lens_matches_raw_view() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "CtxNoLens");
+    let a = node(&db, ctx, "Alice", "ACTOR");
+    let b = node(&db, ctx, "Bob", "ACTOR");
+    edge(&db, ctx, chunk_id, a.id, b.id, "linked_to");
+    // active_lens_id stays NULL: lens-aware listing must equal the raw view.
+    let lens_nodes = db.list_ontology_nodes_for_active_lens(ctx).unwrap();
+    assert_eq!(lens_nodes.iter().find(|n| n.id == a.id).unwrap().entity_type, "ACTOR");
+    assert_eq!(db.list_ontology_edges_for_active_lens(ctx).unwrap().len(), 1);
+}
+
+#[test]
 fn merge_with_missing_winner_is_skipped_not_an_error() {
     // Regression for the production FK abort: a stale dedup candidate can
     // elect an already-deleted node as winner. The merge must skip that pair
