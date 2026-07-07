@@ -65,3 +65,57 @@ fn chunk_state_save_load_delete_round_trip() {
     db.delete_chunk_state(ctx, chunk_id).unwrap();
     assert_eq!(db.load_chunk_state(ctx, chunk_id).unwrap(), None);
 }
+
+// --- persistent ontology run log (schema_v43) -------------------------------
+
+#[test]
+fn run_log_round_trip() {
+    let db = db();
+    let (ctx, _chunk) = seed_context_with_chunk(&db, "runlog");
+    db.insert_ontology_run_log(
+        "run-1", ctx, "community_summarization",
+        1000, Some(1050),
+        10, 7, 3,
+        Some("boom"),
+    ).unwrap();
+
+    let rows = db.list_ontology_run_log(ctx).unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.run_id, "run-1");
+    assert_eq!(row.context_id, ctx);
+    assert_eq!(row.phase, "community_summarization");
+    assert_eq!(row.started_at, 1000);
+    assert_eq!(row.finished_at, Some(1050));
+    assert_eq!(row.attempted, 10);
+    assert_eq!(row.succeeded, 7);
+    assert_eq!(row.failed, 3);
+    assert_eq!(row.sample_error, Some("boom".to_string()));
+}
+
+#[test]
+fn run_log_orders_most_recent_first() {
+    let db = db();
+    let (ctx, _chunk) = seed_context_with_chunk(&db, "runlog2");
+    db.insert_ontology_run_log("run-a", ctx, "community_summarization", 1000, Some(1010), 1, 1, 0, None).unwrap();
+    db.insert_ontology_run_log("run-b", ctx, "community_summarization", 2000, Some(2010), 1, 1, 0, None).unwrap();
+
+    let rows = db.list_ontology_run_log(ctx).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].started_at, 2000);
+    assert_eq!(rows[0].run_id, "run-b");
+    assert_eq!(rows[1].started_at, 1000);
+    assert_eq!(rows[1].run_id, "run-a");
+}
+
+#[test]
+fn run_log_nullable_fields_round_trip_as_none() {
+    let db = db();
+    let (ctx, _chunk) = seed_context_with_chunk(&db, "runlog3");
+    db.insert_ontology_run_log("run-c", ctx, "community_summarization", 3000, None, 0, 0, 0, None).unwrap();
+
+    let rows = db.list_ontology_run_log(ctx).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].finished_at, None);
+    assert_eq!(rows[0].sample_error, None);
+}

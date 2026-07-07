@@ -723,3 +723,22 @@ pub struct MergeLogEntry {
     pub loser_entity_type: String,
     pub merged_at: i64,
 }
+
+/// One row of `ontology_run_log` (schema_v43): per-phase success/failure
+/// counters that survive app restart, unlike the in-memory applog ring
+/// buffer. Only the community-summarization phase writes rows for now (see
+/// BACKLOG.md) — data source for the Ontology admin window's optional status
+/// lines, never consulted by the pipeline itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyRunLogEntry {
+    pub id: i64,
+    pub run_id: String,
+    pub context_id: i64,
+    pub phase: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub attempted: i64,
+    pub succeeded: i64,
+    pub failed: i64,
+    pub sample_error: Option<String>,
+}

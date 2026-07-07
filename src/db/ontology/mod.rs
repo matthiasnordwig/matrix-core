@@ -10,6 +10,7 @@ mod communities;
 mod lifecycle;
 mod retrieval;
 mod metrics;
+mod run_log;
 mod dedup_cache;
 mod quarantine;
 mod edge_reviews;
