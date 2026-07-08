@@ -194,6 +194,21 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// All embeddable (non-omitted) chunks of a context, regardless of whether
+    /// they already have a vector — used by the "re-embed all" path. Safe to
+    /// re-embed in place: `insert_embedding` is `INSERT OR REPLACE`, so each
+    /// chunk's vector is overwritten, never duplicated or transiently missing.
+    /// Mirrors `chunks_needing_embedding`'s ordering.
+    pub fn chunks_embeddable(&self, context_id: i64) -> Result<Vec<Chunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.* FROM chunks c
+             WHERE c.context_id = ?1 AND c.is_omitted = 0
+             ORDER BY c.document_id, c.chunk_index",
+        )?;
+        let rows = stmt.query_map([context_id], row_to_chunk)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn count_chunks(&self, context_id: i64) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM chunks WHERE context_id = ?1",
