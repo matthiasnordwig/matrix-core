@@ -150,6 +150,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v41.sql"),
     include_str!("schema_v42.sql"),
     include_str!("schema_v43.sql"),
+    include_str!("schema_v44.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

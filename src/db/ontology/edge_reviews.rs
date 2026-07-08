@@ -29,7 +29,7 @@ impl Database {
     /// viewer can render the triplet without a second round-trip.
     pub fn list_ontology_edge_reviews(&self, context_id: i64) -> Result<Vec<OntologyEdgeReview>> {
         let mut stmt = self.conn.prepare(
-            "SELECT r.id, r.context_id, r.edge_id, r.chunk_id, r.relation_type, r.evidence, r.reason, r.created_at, s.label, t.label
+            "SELECT r.id, r.context_id, r.edge_id, r.chunk_id, r.relation_type, r.evidence, r.reason, r.created_at, r.attempts, s.label, t.label
              FROM ontology_edge_reviews r
              JOIN ontology_edges e ON e.id = r.edge_id
              JOIN ontology_nodes s ON s.id = e.source_id
@@ -46,8 +46,9 @@ impl Database {
                 evidence: row.get(5)?,
                 reason: row.get(6)?,
                 created_at: row.get(7)?,
-                source_label: row.get(8)?,
-                target_label: row.get(9)?,
+                attempts: row.get(8)?,
+                source_label: row.get(9)?,
+                target_label: row.get(10)?,
             })
         })?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -63,7 +64,7 @@ impl Database {
     /// to re-run the originating lint rule.
     pub fn get_ontology_edge_review(&self, id: i64) -> Result<Option<OntologyEdgeReview>> {
         let mut stmt = self.conn.prepare(
-            "SELECT r.id, r.context_id, r.edge_id, r.chunk_id, r.relation_type, r.evidence, r.reason, r.created_at, s.label, t.label
+            "SELECT r.id, r.context_id, r.edge_id, r.chunk_id, r.relation_type, r.evidence, r.reason, r.created_at, r.attempts, s.label, t.label
              FROM ontology_edge_reviews r
              JOIN ontology_edges e ON e.id = r.edge_id
              JOIN ontology_nodes s ON s.id = e.source_id
@@ -80,8 +81,9 @@ impl Database {
                 evidence: row.get(5)?,
                 reason: row.get(6)?,
                 created_at: row.get(7)?,
-                source_label: row.get(8)?,
-                target_label: row.get(9)?,
+                attempts: row.get(8)?,
+                source_label: row.get(9)?,
+                target_label: row.get(10)?,
             })
         })?;
         match rows.next() {
@@ -120,5 +122,66 @@ impl Database {
         let params = rusqlite::params_from_iter(edge_ids.iter());
         let n = self.conn.execute(&sql, params)?;
         Ok(n)
+    }
+
+    /// Records (or re-records) a failed polarity verification for an edge and
+    /// returns the resulting `attempts` count. Unlike `insert_ontology_edge_review`,
+    /// this **dedups per edge**: if a `verification call failed` row already
+    /// exists for `edge_id`, it bumps `attempts` and refreshes the reason/error
+    /// instead of inserting a duplicate — so re-running the pipeline (or a manual
+    /// re-verify) accumulates attempts on one row rather than piling up copies.
+    /// Only the `verification call failed:%` class is matched; an `LLM verdict`
+    /// row for the same edge is left untouched.
+    pub fn upsert_verification_failure(
+        &self,
+        context_id: i64,
+        edge_id: i64,
+        chunk_id: Option<i64>,
+        relation_type: &str,
+        evidence: Option<&str>,
+        err: &str,
+    ) -> Result<i64> {
+        let reason = format!("verification call failed: {err}");
+        let existing: Option<(i64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT id, attempts FROM ontology_edge_reviews
+                 WHERE edge_id = ?1 AND reason LIKE 'verification call failed:%'
+                 LIMIT 1",
+                [edge_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        match existing {
+            Some((row_id, attempts)) => {
+                let new_attempts = attempts + 1;
+                self.conn.execute(
+                    "UPDATE ontology_edge_reviews SET attempts = ?1, reason = ?2, chunk_id = ?3, evidence = ?4 WHERE id = ?5",
+                    rusqlite::params![new_attempts, reason, chunk_id, evidence, row_id],
+                )?;
+                Ok(new_attempts)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO ontology_edge_reviews (context_id, edge_id, chunk_id, relation_type, evidence, reason, attempts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
+                    rusqlite::params![context_id, edge_id, chunk_id, relation_type, evidence, reason],
+                )?;
+                Ok(1)
+            }
+        }
+    }
+
+    /// Updates a review row's `reason` + `attempts` in place. Used by the
+    /// re-verify command when an edge still can't be resolved: bump `attempts`
+    /// and refresh the error, or convert a `verification call failed` row into a
+    /// genuine `LLM verdict: unclear` once the model finally returns a verdict.
+    /// Resolved edges are removed via `delete_ontology_edge_review` instead.
+    pub fn update_edge_review(&self, id: i64, reason: &str, attempts: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ontology_edge_reviews SET reason = ?1, attempts = ?2 WHERE id = ?3",
+            rusqlite::params![reason, attempts, id],
+        )?;
+        Ok(())
     }
 }

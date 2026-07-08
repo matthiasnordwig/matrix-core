@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 43);
+    assert_eq!(db.schema_version().unwrap(), 44);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -290,6 +290,49 @@ fn brute_force_cosine_ranks_nearest() {
     assert_eq!(db.embedding_vector(chunk_ids[0]).unwrap().unwrap(), vectors[0]);
 
     assert_eq!(db.count_embeddings_for_context(ctx_id).unwrap(), 3);
+}
+
+#[test]
+fn chunks_embeddable_returns_all_non_omitted_regardless_of_embedding() {
+    let db = db();
+    let (model_id, _p, ctx_id, doc_id) = seed(&db);
+
+    let mk = |idx: i64, omitted: bool| NewChunk {
+        context_id: ctx_id,
+        document_id: doc_id,
+        chunk_index: idx,
+        char_start: 0,
+        char_end: 1,
+        text: format!("chunk {idx}"),
+        signature: None,
+        is_omitted: omitted,
+        metadata: "{}".into(),
+    };
+    let a = db.create_chunk(&mk(0, false)).unwrap();
+    let _b = db.create_chunk(&mk(1, false)).unwrap();
+    let _omitted = db.create_chunk(&mk(2, true)).unwrap();
+
+    // Embed only the first chunk.
+    db.insert_embedding(&NewEmbedding {
+        chunk_id: a.id,
+        context_id: ctx_id,
+        document_id: doc_id,
+        embedding_model_id: model_id,
+        dim: 4,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+    })
+    .unwrap();
+
+    // "needing" excludes the already-embedded chunk (and always the omitted one).
+    let needing = db.chunks_needing_embedding(ctx_id, model_id).unwrap();
+    assert_eq!(needing.len(), 1, "only the un-embedded, non-omitted chunk");
+
+    // "embeddable" (re-embed path) returns every non-omitted chunk, embedded or
+    // not — but never the omitted one — ordered by (document_id, chunk_index).
+    let embeddable = db.chunks_embeddable(ctx_id).unwrap();
+    assert_eq!(embeddable.len(), 2);
+    assert_eq!(embeddable.iter().map(|c| c.chunk_index).collect::<Vec<_>>(), vec![0, 1]);
+    assert!(embeddable.iter().all(|c| !c.is_omitted));
 }
 
 #[test]

@@ -700,6 +700,11 @@ pub struct OntologyEdgeReview {
     pub evidence: Option<String>,
     pub reason: String,
     pub created_at: i64,
+    /// How many times verification has been attempted for this edge (0 for
+    /// non-verification reviews). Bumped by `upsert_verification_failure`; once
+    /// it reaches `MAX_VERIFY_ATTEMPTS` the review is auto-ejected. See
+    /// `ontology/extract/verify.rs`.
+    pub attempts: i64,
     /// Denormalized from the edge's source/target nodes at read time (see
     /// `list_ontology_edge_reviews`) so the UI viewer doesn't need a second
     /// round-trip to render the reviewed triplet.

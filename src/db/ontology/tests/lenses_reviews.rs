@@ -123,6 +123,74 @@ fn bulk_delete_ontology_edges_cascades_their_reviews() {
     assert_eq!(db.bulk_delete_ontology_edges(&[]).unwrap(), 0);
 }
 
+#[test]
+fn insert_ontology_edge_review_defaults_attempts_to_zero() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13e");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+    db.insert_ontology_edge_review(ctx, e.id, Some(chunk_id), "REL", None, "lint: self_loop: a").unwrap();
+    let rows = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(rows[0].attempts, 0, "non-verification reviews carry attempts=0");
+}
+
+#[test]
+fn upsert_verification_failure_dedups_and_increments_attempts() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13f");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+
+    // First failure inserts a fresh row at attempts=1.
+    let n1 = db.upsert_verification_failure(ctx, e.id, Some(chunk_id), "REL", Some("q"), "decode error").unwrap();
+    assert_eq!(n1, 1);
+    // Subsequent failures bump the SAME row instead of piling up duplicates.
+    let n2 = db.upsert_verification_failure(ctx, e.id, Some(chunk_id), "REL", Some("q"), "decode error again").unwrap();
+    let n3 = db.upsert_verification_failure(ctx, e.id, Some(chunk_id), "REL", Some("q"), "still failing").unwrap();
+    assert_eq!((n2, n3), (2, 3));
+
+    let rows = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(rows.len(), 1, "one edge -> one verification-failure row, not three");
+    assert_eq!(rows[0].attempts, 3);
+    assert_eq!(rows[0].reason, "verification call failed: still failing", "reason refreshed to the latest error");
+}
+
+#[test]
+fn upsert_verification_failure_does_not_touch_llm_verdict_row() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13g");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+    // A genuine human-judgment "unclear" row must survive a later call-failure
+    // on the same edge — they are different classes and coexist.
+    db.insert_ontology_edge_review(ctx, e.id, Some(chunk_id), "REL", Some("q"), "LLM verdict: unclear").unwrap();
+    db.upsert_verification_failure(ctx, e.id, Some(chunk_id), "REL", Some("q"), "decode error").unwrap();
+    let rows = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(rows.len(), 2, "unclear + call-failed coexist on one edge");
+}
+
+#[test]
+fn update_edge_review_rewrites_reason_and_attempts() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx13h");
+    let a = node(&db, ctx, "A", "ORGANIZATION");
+    let b = node(&db, ctx, "B", "ORGANIZATION");
+    let e = edge(&db, ctx, chunk_id, a.id, b.id, "REL");
+    db.upsert_verification_failure(ctx, e.id, Some(chunk_id), "REL", None, "boom").unwrap();
+    let id = db.list_ontology_edge_reviews(ctx).unwrap()[0].id;
+
+    // A re-verify that finally returns "unclear" converts the failure row into a
+    // genuine human-judgment item and carries the attempts count over.
+    db.update_edge_review(id, "LLM verdict: unclear", 2).unwrap();
+    let rows = db.list_ontology_edge_reviews(ctx).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].reason, "LLM verdict: unclear");
+    assert_eq!(rows[0].attempts, 2);
+}
+
 // --- lenses (non-destructive schema materialization) -----------------------
 
 #[test]
