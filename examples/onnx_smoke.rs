@@ -26,6 +26,9 @@ fn main() {
         default_dim: 0,
         normalize: true,
         created_at: 0,
+        tpm_limit: None,
+        rpm_limit: None,
+        max_concurrency: 1,
     };
 
     let embedder = OrtEmbedder::load(&model).expect("load ONNX session");

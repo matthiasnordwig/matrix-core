@@ -9,6 +9,11 @@
 use std::sync::Mutex;
 
 use ndarray::Array2;
+// CoreML EP is apple-only (the `coreml` ort feature is enabled only on apple
+// targets — see core/Cargo.toml AP7 split). On Linux the symbol does not exist,
+// so the import + the `use_coreml` branch below are gated to apple; non-apple
+// always takes the CPU path.
+#[cfg(target_vendor = "apple")]
 use ort::execution_providers::CoreMLExecutionProvider;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
@@ -16,7 +21,10 @@ use tokenizers::Tokenizer;
 
 use super::QueryEmbedder;
 use crate::db::embeddings::l2_normalize;
-use crate::db::models::{EmbeddingModel, ExecutionProvider};
+use crate::db::models::EmbeddingModel;
+// Only referenced inside the apple-only CoreML EP branch below.
+#[cfg(target_vendor = "apple")]
+use crate::db::models::ExecutionProvider;
 use crate::{CoreError, Result};
 
 impl From<ort::Error> for CoreError {
@@ -46,17 +54,23 @@ impl OrtEmbedder {
 
         let model_bytes = std::fs::read(model_path)
             .map_err(|e| CoreError::Embedding(format!("read model {model_path}: {e}")))?;
+        #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
         let mut builder = Session::builder()?;
-        // iOS always runs on the ANE via CoreML (proper app bundle → stable).
-        // On macOS, CoreML model compilation inside the `cargo run` GUI process is
-        // flaky, so use it only if explicitly requested; otherwise CPU.
-        let use_coreml = cfg!(target_os = "ios")
-            || matches!(
-                model.execution_provider,
-                Some(ExecutionProvider::Coreml) | Some(ExecutionProvider::Ane)
-            );
-        if use_coreml {
-            builder = builder.with_execution_providers([CoreMLExecutionProvider::default().build()])?;
+        // Apple only: iOS always runs on the ANE via CoreML (proper app bundle →
+        // stable). On macOS, CoreML model compilation inside the `cargo run` GUI
+        // process is flaky, so use it only if explicitly requested; otherwise CPU.
+        // Non-apple (Linux) has no CoreML EP → always the CPU path (no explicit EP).
+        #[cfg(target_vendor = "apple")]
+        {
+            let use_coreml = cfg!(target_os = "ios")
+                || matches!(
+                    model.execution_provider,
+                    Some(ExecutionProvider::Coreml) | Some(ExecutionProvider::Ane)
+                );
+            if use_coreml {
+                builder =
+                    builder.with_execution_providers([CoreMLExecutionProvider::default().build()])?;
+            }
         }
         let session = builder
             .with_optimization_level(GraphOptimizationLevel::Level3)?

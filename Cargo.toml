@@ -28,10 +28,23 @@ serde_json = "1"
 thiserror = "1"
 regex = "1"
 pdf_oxide = "0.3.60"
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["coreml", "ndarray"] }
+# Base `ort` (all targets): CPU EP only, no CoreML. On Linux x86_64 the CoreML
+# EP is apple-only and won't build, so it is added back below *only* on apple
+# targets. Cargo unifies the two entries: apple → coreml+ndarray (unchanged from
+# before the AP7 split), non-apple → ndarray only (CPU EP). See DUAL_TARGET_PLAN.md
+# AP7 (embedding-parity: local ONNX on Linux via CPU-EP).
+ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["ndarray"] }
 tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
 ndarray = { version = "0.16", optional = true }
 llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
+
+# Apple-only: re-add the CoreML execution provider. iOS runs on the ANE via
+# CoreML; macOS may honor a per-model CoreML/ANE setting (see embedding/onnx.rs).
+# This target-specific entry is unified with the base `ort` above → apple gets
+# coreml+ndarray, non-apple stays CPU-only. Keeps the apple build byte-identical
+# to before the split while letting Linux type-check without the coreml feature.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["coreml", "ndarray"] }
 
 # Patched ort-sys: links clang_rt.ios (not clang_rt.osx) on iOS targets so the ONNX
 # Runtime static lib links into the device build. Vendored in-repo (not ../vendor)
