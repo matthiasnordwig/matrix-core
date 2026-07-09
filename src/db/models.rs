@@ -135,9 +135,17 @@ pub struct LlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
     pub created_at: i64,
+}
+
+/// Default for `NewLlmEndpoint::stream_fallback` so JSON payloads (web adapter /
+/// stored context bundles) predating the column still deserialize to the
+/// enabled-by-default behaviour.
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +165,8 @@ pub struct NewLlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    #[serde(default = "default_true")]
+    pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
 }

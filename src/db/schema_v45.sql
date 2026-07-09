@@ -1,0 +1,1 @@
+ALTER TABLE llm_endpoints ADD COLUMN stream_fallback BOOLEAN NOT NULL DEFAULT 1;

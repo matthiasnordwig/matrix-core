@@ -78,7 +78,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 44);
+    assert_eq!(db.schema_version().unwrap(), 45);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -545,11 +545,51 @@ fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
         max_concurrency: 2,
         is_reasoning: false,
         supports_structured_output: false,
+        stream_fallback: true,
         kv_quantization: None,
         cpu_threads: None,
     })
     .unwrap()
     .id
+}
+
+#[test]
+fn llm_endpoint_stream_fallback_roundtrip() {
+    let db = db();
+    // create → default (seeded as true here) is persisted and read back
+    let id = seed_endpoint(&db, "ep", "openai");
+    let created = db.llm_endpoint(id).unwrap().unwrap();
+    assert!(created.stream_fallback);
+
+    // update → toggle off round-trips
+    let mut upd: NewLlmEndpoint = NewLlmEndpoint {
+        name: created.name.clone(),
+        base_url: created.base_url.clone(),
+        model_id: created.model_id.clone(),
+        api_key_ref: created.api_key_ref.clone(),
+        timeout_ms: created.timeout_ms,
+        max_retries: created.max_retries,
+        provider: created.provider.clone(),
+        window_tokens: created.window_tokens,
+        context_window: created.context_window,
+        output_reserve_tokens: created.output_reserve_tokens,
+        tpm_limit: created.tpm_limit,
+        rpm_limit: created.rpm_limit,
+        max_concurrency: created.max_concurrency,
+        is_reasoning: created.is_reasoning,
+        supports_structured_output: created.supports_structured_output,
+        stream_fallback: false,
+        kv_quantization: created.kv_quantization.clone(),
+        cpu_threads: created.cpu_threads,
+    };
+    let updated = db.update_llm_endpoint(id, &upd).unwrap();
+    assert!(!updated.stream_fallback);
+    assert!(!db.llm_endpoint(id).unwrap().unwrap().stream_fallback);
+
+    // toggle back on
+    upd.stream_fallback = true;
+    let re = db.update_llm_endpoint(id, &upd).unwrap();
+    assert!(re.stream_fallback);
 }
 
 #[test]

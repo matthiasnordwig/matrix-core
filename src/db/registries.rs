@@ -43,6 +43,7 @@ pub(super) fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint
         max_concurrency: row.get("max_concurrency")?,
         is_reasoning: row.get("is_reasoning")?,
         supports_structured_output: row.get("supports_structured_output")?,
+        stream_fallback: row.get("stream_fallback")?,
         kv_quantization: row.get("kv_quantization")?,
         cpu_threads: row.get("cpu_threads")?,
         created_at: row.get("created_at")?,
@@ -157,8 +158,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO llm_endpoints
                 (name, base_url, model_id, api_key_ref, timeout_ms, max_retries, provider,
-                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency, is_reasoning, supports_structured_output, kv_quantization, cpu_threads)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency, is_reasoning, supports_structured_output, stream_fallback, kv_quantization, cpu_threads)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 e.name,
                 e.base_url,
@@ -175,6 +176,7 @@ impl Database {
                 e.max_concurrency,
                 e.is_reasoning,
                 e.supports_structured_output,
+                e.stream_fallback,
                 e.kv_quantization,
                 e.cpu_threads,
             ],
@@ -211,7 +213,7 @@ impl Database {
                 timeout_ms = ?6, max_retries = ?7, provider = ?8, window_tokens = ?9,
                 context_window = ?10, output_reserve_tokens = ?11, tpm_limit = ?12,
                 rpm_limit = ?13, max_concurrency = ?14, is_reasoning = ?15, supports_structured_output = ?16,
-                kv_quantization = ?17, cpu_threads = ?18
+                stream_fallback = ?17, kv_quantization = ?18, cpu_threads = ?19
              WHERE id = ?1",
             params![
                 id,
@@ -230,6 +232,7 @@ impl Database {
                 e.max_concurrency,
                 e.is_reasoning,
                 e.supports_structured_output,
+                e.stream_fallback,
                 e.kv_quantization,
                 e.cpu_threads,
             ],
