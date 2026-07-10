@@ -53,6 +53,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
             ontology_pool_id: None,
             ontology_extract_llm_id: None,
             ontology_extract_pool_id: None,
+            ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
@@ -78,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 45);
+    assert_eq!(db.schema_version().unwrap(), 46);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -548,6 +549,7 @@ fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
         stream_fallback: true,
         kv_quantization: None,
         cpu_threads: None,
+        reasoning_list_id: None,
     })
     .unwrap()
     .id
@@ -581,6 +583,7 @@ fn llm_endpoint_stream_fallback_roundtrip() {
         stream_fallback: false,
         kv_quantization: created.kv_quantization.clone(),
         cpu_threads: created.cpu_threads,
+        reasoning_list_id: created.reasoning_list_id,
     };
     let updated = db.update_llm_endpoint(id, &upd).unwrap();
     assert!(!updated.stream_fallback);
@@ -687,4 +690,81 @@ fn delete_llm_endpoint_cascades_out_of_pools() {
     db.delete_llm_endpoint(a).unwrap();
     let members = db.list_pool_members(pool.id).unwrap();
     assert_eq!(members.iter().map(|e| e.id).collect::<Vec<_>>(), vec![b]);
+}
+
+// --- reasoning_effort_lists -------------------------------------------------
+
+#[test]
+fn reasoning_effort_list_crud_roundtrip() {
+    let db = db();
+    let created = db
+        .create_reasoning_effort_list(&NewReasoningEffortList {
+            title: "OpenAI GPT-5".into(),
+            description: Some("gpt-5 family".into()),
+            allowed_efforts: vec!["minimal".into(), "low".into(), "medium".into(), "high".into()],
+        })
+        .unwrap();
+    assert_eq!(created.allowed_efforts.len(), 4);
+    // JSON round-trips through TEXT storage
+    let fetched = db.reasoning_effort_list(created.id).unwrap().unwrap();
+    assert_eq!(fetched.allowed_efforts, created.allowed_efforts);
+    assert_eq!(db.list_reasoning_effort_lists().unwrap().len(), 1);
+
+    let updated = db
+        .update_reasoning_effort_list(
+            created.id,
+            &NewReasoningEffortList {
+                title: "OpenAI o-series".into(),
+                description: None,
+                allowed_efforts: vec!["low".into(), "medium".into(), "high".into()],
+            },
+        )
+        .unwrap();
+    assert_eq!(updated.title, "OpenAI o-series");
+    assert_eq!(updated.allowed_efforts, vec!["low", "medium", "high"]);
+    assert!(!updated.allowed_efforts.contains(&"minimal".to_string()));
+
+    assert!(db.delete_reasoning_effort_list(created.id).unwrap());
+    assert!(db.reasoning_effort_list(created.id).unwrap().is_none());
+}
+
+#[test]
+fn deleting_a_reasoning_list_nulls_endpoint_fk() {
+    let db = db();
+    let list = db
+        .create_reasoning_effort_list(&NewReasoningEffortList {
+            title: "L".into(),
+            description: None,
+            allowed_efforts: vec!["low".into()],
+        })
+        .unwrap();
+    let ep = db
+        .create_llm_endpoint(&NewLlmEndpoint {
+            name: "ep".into(),
+            base_url: "http://localhost:11434".into(),
+            model_id: "m".into(),
+            api_key_ref: None,
+            timeout_ms: 30_000,
+            max_retries: 1,
+            provider: "openai".into(),
+            window_tokens: 1500,
+            context_window: 8192,
+            output_reserve_tokens: 512,
+            tpm_limit: None,
+            rpm_limit: None,
+            max_concurrency: 2,
+            is_reasoning: true,
+            supports_structured_output: false,
+            stream_fallback: true,
+            kv_quantization: None,
+            cpu_threads: None,
+            reasoning_list_id: Some(list.id),
+        })
+        .unwrap();
+    assert_eq!(ep.reasoning_list_id, Some(list.id));
+
+    // ON DELETE SET NULL: deleting the list unassigns it, endpoint survives.
+    assert!(db.delete_reasoning_effort_list(list.id).unwrap());
+    let after = db.llm_endpoint(ep.id).unwrap().unwrap();
+    assert_eq!(after.reasoning_list_id, None);
 }

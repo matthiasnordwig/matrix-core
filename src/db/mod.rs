@@ -18,6 +18,7 @@ pub mod embeddings;
 mod grid;
 mod structural_profiles;
 mod grid_profiles;
+mod reasoning_lists;
 mod profiles;
 mod registries;
 mod pools;
@@ -152,6 +153,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v43.sql"),
     include_str!("schema_v44.sql"),
     include_str!("schema_v45.sql"),
+    include_str!("schema_v46.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

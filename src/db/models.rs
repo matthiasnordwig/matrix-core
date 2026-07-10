@@ -138,6 +138,11 @@ pub struct LlmEndpoint {
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
+    /// Optional FK to a `ReasoningEffortList` — the levels this endpoint's model
+    /// accepts. Only meaningful when `is_reasoning`; consumed by the ontology
+    /// extraction phase to constrain/validate its per-context effort setting.
+    #[serde(default)]
+    pub reasoning_list_id: Option<i64>,
     pub created_at: i64,
 }
 
@@ -169,6 +174,31 @@ pub struct NewLlmEndpoint {
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
+    #[serde(default)]
+    pub reasoning_list_id: Option<i64>,
+}
+
+/// A reasoning-effort allow-list (`reasoning_effort_lists`): the set of
+/// `reasoning_effort` levels a model family accepts, maintained in the Profile
+/// tab and assigned to an `LlmEndpoint` via `reasoning_list_id`. `allowed_efforts`
+/// is stored as a JSON array of level strings in the DB and (de)serialized in the
+/// CRUD layer. Consumed by the ontology extraction phase — see the services-crate
+/// `reasoning::clamp_effort`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningEffortList {
+    pub id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub allowed_efforts: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewReasoningEffortList {
+    pub title: String,
+    pub description: Option<String>,
+    pub allowed_efforts: Vec<String>,
 }
 
 /// A named pool of `llm_endpoints`; members are resolved via
@@ -309,6 +339,12 @@ pub struct Context {
     /// both `None` = today's behavior (one source for everything).
     pub ontology_extract_llm_id: Option<i64>,
     pub ontology_extract_pool_id: Option<i64>,
+    /// Reasoning-effort level requested for the ontology EXTRACTION phase only
+    /// (not verify/dedup/community/chunking). `None` = unset = provider default.
+    /// Validated at send-time against the runtime extraction endpoint's
+    /// `reasoning_list_id` (see services `reasoning::clamp_effort`).
+    #[serde(default)]
+    pub ontology_extract_reasoning_effort: Option<String>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
     /// The lens (see `OntologyLens`) currently used to filter/relabel this
@@ -336,6 +372,8 @@ pub struct NewContext {
     pub ontology_pool_id: Option<i64>,
     pub ontology_extract_llm_id: Option<i64>,
     pub ontology_extract_pool_id: Option<i64>,
+    #[serde(default)]
+    pub ontology_extract_reasoning_effort: Option<String>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
 }
