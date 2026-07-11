@@ -24,7 +24,7 @@ mod reasoning_lists;
 mod profiles;
 mod registries;
 mod pools;
-mod settings;
+pub mod settings;
 mod eval;
 pub mod ontology;
 

@@ -7,6 +7,15 @@ use serde::Serialize;
 
 use super::{Database, Result};
 
+/// Setting key: filesystem path to the local ONNX reranker model dir (must
+/// contain `model.onnx` + `tokenizer.json`). Empty/unset = reranker OFF.
+/// Resolved against `dirs.model_dirs` the same way local embedder/gguf dirs are
+/// (absolute as-is, `~/`-relative against `$HOME`, else the last model dir).
+pub const KEY_RERANKER_MODEL_DIR: &str = "reranker_model_dir";
+
+/// Setting key: default state of the Chat/Grid "Rerank" toggle (bool).
+pub const KEY_RERANKER_ENABLED_DEFAULT: &str = "reranker_enabled_default";
+
 impl Database {
     /// Read and deserialize a setting; `None` if the key is absent.
     pub fn get_setting<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {

@@ -15,6 +15,10 @@ use crate::Result;
 
 pub mod retrieval;
 
+/// Cross-encoder reranker (AP3). `rank_merge` (pure) is always compiled;
+/// `OrtReranker` is behind the `onnx` feature.
+pub mod rerank;
+
 #[cfg(feature = "onnx")]
 pub mod onnx;
 
