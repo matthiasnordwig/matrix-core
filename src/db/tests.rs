@@ -79,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 48);
+    assert_eq!(db.schema_version().unwrap(), 49);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);

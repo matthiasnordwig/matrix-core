@@ -487,6 +487,18 @@ pub struct ScoredChunk {
     pub score: f32,
 }
 
+// --- Norm references (schema_v49, RETRIEVAL_QUALITY_PLAN.md AP2) -------------
+
+/// One outgoing legal-norm reference of a chunk (a `(chunk_id, ref_key)` edge),
+/// derived deterministically from `chunks.text` by `crate::refs::parse_refs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRef {
+    pub id: i64,
+    pub chunk_id: i64,
+    pub context_id: i64,
+    pub ref_key: String,
+}
+
 // --- Retrieval eval (schema_v47, RETRIEVAL_QUALITY_PLAN.md AP0) -------------
 
 /// A named golden question-set for the LLM-free retrieval eval.

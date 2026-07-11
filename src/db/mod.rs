@@ -13,6 +13,7 @@ use rusqlite::Connection;
 pub mod models;
 
 mod chunks;
+pub mod chunk_refs;
 mod contexts;
 pub mod embeddings;
 mod fts;
@@ -158,6 +159,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v46.sql"),
     include_str!("schema_v47.sql"),
     include_str!("schema_v48.sql"),
+    include_str!("schema_v49.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

@@ -23,7 +23,7 @@ fn row_to_prechunk(row: &Row<'_>) -> rusqlite::Result<Prechunk> {
     })
 }
 
-fn row_to_chunk(row: &Row<'_>) -> rusqlite::Result<Chunk> {
+pub(super) fn row_to_chunk(row: &Row<'_>) -> rusqlite::Result<Chunk> {
     Ok(Chunk {
         id: row.get("id")?,
         context_id: row.get("context_id")?,

@@ -4,6 +4,7 @@ pub mod chunking;
 pub mod db;
 pub mod embedding;
 pub mod inference;
+pub mod refs;
 
 pub use db::{models, CoreError, Database, Result};
 

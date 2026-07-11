@@ -16,6 +16,17 @@ Zeilen gewachsen) — jede Datei dort hat ein eigenes `impl Database { ... }`.
 liefert BM25-Ränge, `escape_fts_query` quotet Terme defensiv (§/Punkte/Spaces).
 Wird von `embedding/retrieval.rs`' Hybrid-Pfad (RRF) konsumiert.
 
+`chunk_refs.rs` (`schema_v49`, AP2): Normverweis-Kanten `chunk_refs(chunk_id,
+context_id, ref_key)` (Index `(context_id, ref_key)`, FK-Cascade auf chunks+contexts).
+Ableitung aus `chunks.text` über `crate::refs::parse_refs`: `set_chunk_refs`
+(pro Chunk, delete-then-insert = idempotent), `rebuild_chunk_refs(context_id)`
+(kontextweit, idempotent). Auflösung `resolve_ref_target` bevorzugt die
+Definitions-Stelle (Signatur trägt den Ref bzw. Text beginnt damit), sonst
+ref-dichtester/frühester Erwähnungs-Chunk (`pick_definition_site`, reine Fn).
+Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
+≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
+konsumiert.
+
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 
 **Tests:** `tests.rs` deckt CRUD-Round-Trips, FK-Constraints, Vector-Blob-Round-Trip,
@@ -35,5 +46,8 @@ inkl. FK-Cascade abgedeckt. `ontology/schema_suggestions.rs`
 hat eigene `#[cfg(test)] mod tests` am Dateiende (Häufigkeits-Threshold). FTS5
 (`fts.rs`/`schema_v48`) ist über `db/fts_tests.rs` abgedeckt: Verfügbarkeits-Smoke-Test,
 INSERT/UPDATE/DELETE-Trigger-Sync, Kontext-Scoping + Escaping; `fts.rs` selbst hat
-`escape_fts_query`-Unit-Tests am Dateiende. Bei Änderungen:
+`escape_fts_query`-Unit-Tests am Dateiende. `chunk_refs.rs`/`schema_v49` ist über
+`db/chunk_refs_tests.rs` abgedeckt (Round-Trip, Idempotenz von `set_chunk_refs`/
+`rebuild_chunk_refs`, Cascade, Definitions-Stellen-Auflösung + reine
+`pick_definition_site`/`expand_with_refs`-Kapp-Logik). Bei Änderungen:
 `cargo test --lib db` laufen lassen, bei neuer CRUD-Logik ergänzen.
