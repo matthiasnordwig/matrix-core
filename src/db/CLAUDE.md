@@ -27,6 +27,14 @@ Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
 ≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
 konsumiert.
 
+`schema_v51` (MODEL_INFRA_PLAN AP4b): weitet `embedding_models.kind`s CHECK auf
+`local_gguf` (GGUF/llama.cpp-Embedder). Table-Rebuild im Rust-Hook
+`migrate_v50_to_v51_embedding_kind` (die `.sql` ist No-op), **FK-Enforcement aus**
+um den Rebuild (sonst löschen die ON-DELETE-Aktionen der Kinder
+`contexts`/`embeddings`/`ontology_type_vector_cache` deren Zeilen), `id`/Spalten
+verbatim erhalten, `foreign_key_check`-Guard, idempotent. Tests:
+`embedding_kind_tests.rs`.
+
 `registries.rs` (`schema_v50`, MODEL_INFRA_PLAN AP2): zusätzlich zu `embedding_models`/
 `llm_endpoints` jetzt CRUD für `reranker_models` (`RerankerModel`, kind local_onnx|remote_api,
 `model_dir`/`api_config`/`execution_provider`) + `active_reranker_model()` (via Settings-Key

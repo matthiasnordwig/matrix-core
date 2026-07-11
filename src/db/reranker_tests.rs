@@ -84,8 +84,10 @@ fn active_reranker_helper_and_delete_clears_setting() {
 fn migrate_to_49_then_seed(dir: Option<&str>) -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    // Run every migration except the last (v50) manually, matching mod.rs's loop.
-    for (i, sql) in super::MIGRATIONS[..super::MIGRATIONS.len() - 1].iter().enumerate() {
+    // Run every migration through v49 manually (stop before v50 so the legacy
+    // `reranker_model_dir` setting can be seeded pre-promotion). `Database::init`
+    // below then applies v50 (the promotion) and v51.
+    for (i, sql) in super::MIGRATIONS[..49].iter().enumerate() {
         let target = (i + 1) as i64;
         let tx = conn.transaction().unwrap();
         tx.execute_batch(sql).unwrap();
@@ -111,7 +113,7 @@ fn migrate_to_49_then_seed(dir: Option<&str>) -> Connection {
 fn migration_promotes_existing_reranker_dir_to_active_local_row() {
     let conn = migrate_to_49_then_seed(Some("/models/jina-reranker-v2"));
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 50);
+    assert_eq!(db.schema_version().unwrap(), 51);
 
     // An active local_onnx row now exists with the migrated dir.
     let rows = db.list_reranker_models().unwrap();
@@ -134,7 +136,7 @@ fn migration_promotes_existing_reranker_dir_to_active_local_row() {
 fn migration_noop_without_legacy_setting() {
     let conn = migrate_to_49_then_seed(None);
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 50);
+    assert_eq!(db.schema_version().unwrap(), 51);
     assert!(db.list_reranker_models().unwrap().is_empty());
     assert!(db.active_reranker_model().unwrap().is_none());
 }

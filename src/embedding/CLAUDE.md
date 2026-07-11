@@ -2,7 +2,13 @@
 
 Volle Doku: [HANDBUCH.md](../../../HANDBUCH.md), Abschnitt 1.2 „embedding/".
 
-`trait QueryEmbedder` (mod.rs) wird von `onnx.rs::OrtEmbedder` implementiert.
+`trait QueryEmbedder` (mod.rs) wird von `onnx.rs::OrtEmbedder` **und**
+`gguf_embed.rs::GgufEmbedder` (MODEL_INFRA_PLAN AP4b, hinter `gguf`-Feature —
+Metal via `gguf-metal`) implementiert. GGUF-jina ist ein **eigener
+Embedding-Raum** (nie der ONNX-jina-Raum, auch beim identischen Modell — eigene
+Modell-ID, `kind local_gguf`, s. HANDBUCH §2). Pooling (`mean_pool`, rein/getestet)
++ L2-Norm; llama.cpp poolt bei `pooling_type=mean` selbst, `mean_pool` bleibt als
+testbare Referenz/Fallback. Bridge: `services/localgguf.rs`.
 Retrieval in `retrieval.rs` gruppiert nach Embedding-Raum — **kein** globaler
 Cross-Model-Vektor, siehe Designentscheidungen in HANDBUCH.md Abschnitt 2.
 Hybrid (AP1): `retrieve_hybrid_with`/`retrieve_hybrid_batch` fusionieren Vektor- und

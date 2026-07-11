@@ -22,6 +22,11 @@ pub mod rerank;
 #[cfg(feature = "onnx")]
 pub mod onnx;
 
+/// Local GGUF/llama.cpp embedder (MODEL_INFRA_PLAN.md AP4b). The pure
+/// pooling/normalize helpers compile unconditionally (and are tested); the
+/// `GgufEmbedder` itself is behind the `gguf` feature.
+pub mod gguf_embed;
+
 /// Produces a query vector in a specific model's embedding space. Implemented
 /// by concrete embedders (local ONNX, remote API, or a test fake).
 pub trait QueryEmbedder {

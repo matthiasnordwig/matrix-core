@@ -9,7 +9,28 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ModelKind {
     LocalOnnx,
+    /// Local on-device embedder running the GGUF/llama.cpp backend
+    /// (MODEL_INFRA_PLAN.md AP4b). **Embedding-space isolation:** even the
+    /// *identical* jina model in GGUF form (quantized, llama.cpp backend) is a
+    /// distinct embedding space from its ONNX counterpart — it always gets its
+    /// own `EmbeddingModel` row/id and is never mapped onto the ONNX model's id.
+    /// Only meaningful for embedders (reranker stays ONNX/remote); reuses the
+    /// `model_path` column for the `.gguf` file and needs no `tokenizer_path`
+    /// (llama.cpp reads the tokenizer from GGUF metadata).
+    LocalGguf,
     RemoteApi,
+}
+
+impl ModelKind {
+    /// True for on-device models (`LocalOnnx`, `LocalGguf`) — i.e. those that
+    /// run inference locally and therefore share the thermal-throttle /
+    /// `ACTIVE_LOCAL_SEARCHES` gating and the session-cache-freeing path.
+    /// `RemoteApi` is not local. Use this instead of `matches!(kind,
+    /// LocalOnnx)` at every "is this on-device?" branch so a new local backend
+    /// is handled uniformly.
+    pub fn is_local(self) -> bool {
+        matches!(self, ModelKind::LocalOnnx | ModelKind::LocalGguf)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1,0 +1,22 @@
+-- MODEL_INFRA_PLAN.md AP4b "GGUF-Embedding-Pfad (llama.cpp / Metal-GPU)".
+--
+-- Widens `embedding_models.kind`'s CHECK constraint to accept 'local_gguf' (the
+-- GGUF/llama.cpp on-device embedder) in addition to 'local_onnx' / 'remote_api'.
+--
+-- SQLite cannot ALTER an existing CHECK constraint, so this requires a full
+-- table rebuild. Because `embedding_models` is FK-referenced by
+-- `contexts.embedding_model_id` (ON DELETE SET NULL),
+-- `embeddings.embedding_model_id` (ON DELETE CASCADE) and
+-- `ontology_type_vector_cache.embedding_model_id` (ON DELETE CASCADE), the
+-- rebuild MUST run with foreign-key enforcement OFF — otherwise `DROP TABLE`
+-- fires the children's ON DELETE actions and silently deletes/NULLs their rows.
+-- `PRAGMA foreign_keys` is a no-op inside a transaction, so the rebuild cannot
+-- live in this .sql file (which `migrate()` runs inside a transaction). It is
+-- performed instead by the `target == 51` Rust hook
+-- (`mod.rs::migrate_v50_to_v51_embedding_kind`), which toggles FK off around its
+-- own transaction, preserves every column + row id verbatim, runs
+-- `foreign_key_check` as a guard, and is idempotent.
+--
+-- This file is therefore intentionally a no-op (the loop skips its
+-- `execute_batch` for target 51). It exists only to keep the MIGRATIONS index
+-- aligned with `PRAGMA user_version`.

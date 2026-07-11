@@ -76,7 +76,7 @@ macro_rules! sql_enum {
 
 use models::*;
 
-sql_enum!(ModelKind { ModelKind::LocalOnnx => "local_onnx", ModelKind::RemoteApi => "remote_api" });
+sql_enum!(ModelKind { ModelKind::LocalOnnx => "local_onnx", ModelKind::LocalGguf => "local_gguf", ModelKind::RemoteApi => "remote_api" });
 sql_enum!(ExecutionProvider {
     ExecutionProvider::Ane => "ane",
     ExecutionProvider::Coreml => "coreml",
@@ -161,6 +161,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v48.sql"),
     include_str!("schema_v49.sql"),
     include_str!("schema_v50.sql"),
+    include_str!("schema_v51.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -194,9 +195,22 @@ impl Database {
         for (i, sql) in MIGRATIONS.iter().enumerate() {
             let target = (i + 1) as i64;
             if version < target {
+                // v51 rebuilds `embedding_models` to widen its `kind` CHECK for
+                // `local_gguf`. A table rebuild with FK-referencing children
+                // (`contexts`/`embeddings`/`ontology_type_vector_cache`) MUST run
+                // with foreign-key enforcement OFF — otherwise `DROP TABLE` fires
+                // the children's ON DELETE actions (SET NULL / CASCADE) and
+                // silently loses data. `PRAGMA foreign_keys` is a no-op inside a
+                // transaction, so this migration manages FK toggling + its own tx
+                // outside the generic path below.
+                if target == 51 {
+                    migrate_v50_to_v51_embedding_kind(conn)?;
+                    continue;
+                }
+
                 let tx = conn.transaction()?;
                 tx.execute_batch(sql)?;
-                
+
                 if target == 9 {
                     migrate_v8_to_v9_profiles(&tx)?;
                 }
@@ -339,9 +353,101 @@ fn migrate_v49_to_v50_reranker(tx: &rusqlite::Transaction) -> rusqlite::Result<(
     Ok(())
 }
 
+/// MODEL_INFRA_PLAN.md AP4b: widen `embedding_models.kind`'s CHECK to accept
+/// `local_gguf` (the GGUF/llama.cpp on-device embedder). SQLite cannot ALTER a
+/// CHECK constraint, so this is a full table rebuild (create new → copy → drop
+/// old → rename), preserving every column (v1 base + v6 rate-limit columns) and
+/// every row `id` verbatim so the FK links from `contexts.embedding_model_id`
+/// (SET NULL), `embeddings.embedding_model_id` (CASCADE) and
+/// `ontology_type_vector_cache.embedding_model_id` (CASCADE) stay valid.
+///
+/// FK enforcement MUST be off during the rebuild: with it on, `DROP TABLE`
+/// fires the children's ON DELETE actions and destroys their rows (verified).
+/// `PRAGMA foreign_keys` is a no-op inside a transaction, so we toggle it
+/// outside and wrap only the DDL/DML in the transaction, running
+/// `foreign_key_check` before commit as a guard. No indexes/triggers exist on
+/// this table (verified across all schema_v*.sql), so none need recreating.
+/// Idempotent: bails out early if the widened CHECK is already in place.
+fn migrate_v50_to_v51_embedding_kind(conn: &mut Connection) -> Result<()> {
+    // Idempotency guard: if a prior (partial) run already rebuilt the table,
+    // the `local_gguf` token is present in the stored table SQL — skip.
+    let already: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='embedding_models'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|sql| sql.contains("local_gguf"))
+        .unwrap_or(false);
+
+    // Toggle FK off OUTSIDE a transaction (it is a no-op inside one). Restore to
+    // ON afterwards to match the connection's normal invariant (set in `init`).
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| -> Result<()> {
+        if !already {
+            let tx = conn.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE embedding_models_new (
+                    id                 INTEGER PRIMARY KEY,
+                    identifier         TEXT    NOT NULL UNIQUE,
+                    kind               TEXT    NOT NULL CHECK (kind IN ('local_onnx', 'local_gguf', 'remote_api')),
+                    model_path         TEXT,
+                    tokenizer_path     TEXT,
+                    api_config         TEXT,
+                    execution_provider TEXT    CHECK (execution_provider IN ('ane', 'coreml', 'cpu')),
+                    is_matryoshka      INTEGER NOT NULL DEFAULT 0,
+                    native_dim         INTEGER NOT NULL,
+                    default_dim        INTEGER NOT NULL,
+                    normalize          INTEGER NOT NULL DEFAULT 1,
+                    created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+                    tpm_limit          INTEGER,
+                    rpm_limit          INTEGER,
+                    max_concurrency    INTEGER NOT NULL DEFAULT 1
+                 );
+                 INSERT INTO embedding_models_new (
+                    id, identifier, kind, model_path, tokenizer_path, api_config,
+                    execution_provider, is_matryoshka, native_dim, default_dim,
+                    normalize, created_at, tpm_limit, rpm_limit, max_concurrency
+                 )
+                 SELECT
+                    id, identifier, kind, model_path, tokenizer_path, api_config,
+                    execution_provider, is_matryoshka, native_dim, default_dim,
+                    normalize, created_at, tpm_limit, rpm_limit, max_concurrency
+                 FROM embedding_models;
+                 DROP TABLE embedding_models;
+                 ALTER TABLE embedding_models_new RENAME TO embedding_models;",
+            )?;
+            // Guard: no dangling FKs introduced by the rebuild.
+            let violations: i64 =
+                tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
+            if violations != 0 {
+                // Defensive guard (should never fire): surface as a DB error so
+                // the whole migration aborts and FK enforcement is restored.
+                return Err(CoreError::Sqlite(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                    Some(format!(
+                        "schema_v51 rebuild left {violations} foreign-key violations"
+                    )),
+                )));
+            }
+            tx.pragma_update(None, "user_version", 51i64)?;
+            tx.commit()?;
+        } else {
+            // Table already widened by a partial run; just bump the version.
+            conn.pragma_update(None, "user_version", 51i64)?;
+        }
+        Ok(())
+    })();
+    // Always restore FK enforcement, even on error.
+    conn.pragma_update(None, "foreign_keys", true)?;
+    result
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod fts_tests;
 #[cfg(test)]
 mod reranker_tests;
+#[cfg(test)]
+mod embedding_kind_tests;
