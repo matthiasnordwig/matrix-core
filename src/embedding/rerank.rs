@@ -27,8 +27,21 @@ pub fn rank_merge(scores: &[f32], top_k: usize) -> Vec<usize> {
 
 #[cfg(feature = "onnx")]
 mod imp {
-    //! EP selection mirrors `onnx.rs::OrtEmbedder::load` exactly: apple → CoreML
-    //! (iOS/ANE), non-apple → plain CPU session. No new `ort` features/EPs.
+    //! EP selection mirrors `onnx.rs::OrtEmbedder::load` (MODEL_INFRA_PLAN.md
+    //! AP3): a per-model `ExecutionProvider` choice (default CPU), apple-only.
+    //!
+    //! Measured (AP3 3a probe, jina-reranker-v2, XLM-R backbone): the CoreML
+    //! default compute-units (`All`) reliably **crashes** at inference time on
+    //! this model — CoreML rejects `roberta.embeddings.word_embeddings.weight`
+    //! (250002x768, exceeds CoreML's 16384 static-dim limit), splits the graph
+    //! into 86 partitions, and one of the resulting CoreML-assigned kernels
+    //! fails at run time ("Unable to compute the prediction"). Restricting
+    //! compute units to `CPUAndNeuralEngine` (the `Ane` option) avoids the crash
+    //! (unsupported ops fall back to CPU) but is ~1.9x slower than plain CPU
+    //! (measured ~46ms/pair vs. ~25ms/pair for a 16-pair batch) — so CPU stays
+    //! the default and `Coreml`/`All` is not recommended for this reranker, but
+    //! is left selectable since a future/different reranker model may fit
+    //! CoreML's limits better.
 
     use std::path::Path;
     use std::sync::Mutex;
@@ -37,11 +50,14 @@ mod imp {
     // CoreML EP is apple-only (see core/Cargo.toml AP7 split); non-apple always
     // takes the CPU path, so the import + branch are apple-gated like in onnx.rs.
     #[cfg(target_vendor = "apple")]
+    use ort::execution_providers::coreml::CoreMLComputeUnits;
+    #[cfg(target_vendor = "apple")]
     use ort::execution_providers::CoreMLExecutionProvider;
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::Tensor;
     use tokenizers::Tokenizer;
 
+    use crate::db::models::ExecutionProvider;
     use crate::{CoreError, Result};
 
     /// XLM-R offsets positions by 2 (`max_position_embeddings=1026` → effective
@@ -59,8 +75,11 @@ mod imp {
     }
 
     impl OrtReranker {
-        /// Load `model.onnx` + `tokenizer.json` from `model_dir`.
-        pub fn load(model_dir: &Path) -> Result<Self> {
+        /// Load `model.onnx` + `tokenizer.json` from `model_dir`, honoring
+        /// `execution_provider` (the reranker model's configured EP; `None`/
+        /// non-apple → CPU) on every apple target, including iOS — no runtime
+        /// force-override; iOS's own default is set at model-creation time.
+        pub fn load(model_dir: &Path, execution_provider: Option<ExecutionProvider>) -> Result<Self> {
             let model_path = model_dir.join("model.onnx");
             let tokenizer_path = model_dir.join("tokenizer.json");
 
@@ -69,15 +88,22 @@ mod imp {
             })?;
             #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
             let mut builder = Session::builder()?;
-            // iOS always runs on the ANE via CoreML (proper app bundle → stable).
-            // On macOS, CoreML compilation inside a GUI process is flaky, so use
-            // it only on iOS here; other apple + non-apple take the CPU path (no
-            // explicit EP), exactly like the embedder's default branch.
+            // No iOS force-override here either (MODEL_INFRA_PLAN.md AP3): the
+            // model's own `execution_provider` is respected on every apple
+            // target, including iOS — a user can pick CPU on iOS too. Whatever
+            // seeds an iOS reranker default can set `Ane` there, same as the
+            // embedder's iOS seed.
             #[cfg(target_vendor = "apple")]
             {
-                if cfg!(target_os = "ios") {
-                    builder = builder
-                        .with_execution_providers([CoreMLExecutionProvider::default().build()])?;
+                let compute_units = match execution_provider {
+                    Some(ExecutionProvider::Ane) => Some(CoreMLComputeUnits::CPUAndNeuralEngine),
+                    Some(ExecutionProvider::Coreml) => Some(CoreMLComputeUnits::All),
+                    _ => None,
+                };
+                if let Some(units) = compute_units {
+                    builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
+                        .with_compute_units(units)
+                        .build()])?;
                 }
             }
             let session = builder

@@ -15,7 +15,7 @@ fn main() {
     });
     eprintln!("loading reranker from {}", dir.display());
 
-    let reranker = OrtReranker::load(&dir).expect("load reranker ONNX session");
+    let reranker = OrtReranker::load(&dir, None).expect("load reranker ONNX session");
 
     let query = "Welche Anforderungen gelten für das Auslagerungsmanagement?";
     let docs = [

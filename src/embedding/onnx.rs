@@ -14,6 +14,8 @@ use ndarray::Array2;
 // so the import + the `use_coreml` branch below are gated to apple; non-apple
 // always takes the CPU path.
 #[cfg(target_vendor = "apple")]
+use ort::execution_providers::coreml::CoreMLComputeUnits;
+#[cfg(target_vendor = "apple")]
 use ort::execution_providers::CoreMLExecutionProvider;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
@@ -56,20 +58,32 @@ impl OrtEmbedder {
             .map_err(|e| CoreError::Embedding(format!("read model {model_path}: {e}")))?;
         #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
         let mut builder = Session::builder()?;
-        // Apple only: iOS always runs on the ANE via CoreML (proper app bundle →
-        // stable). On macOS, CoreML model compilation inside the `cargo run` GUI
-        // process is flaky, so use it only if explicitly requested; otherwise CPU.
+        // Apple only: which EP a model uses is now a real per-model choice
+        // (MODEL_INFRA_PLAN.md AP3), defaulting to CPU — including on iOS: the
+        // bundled iOS model is *seeded* with `Ane` (see
+        // `src-tauri/src/lib.rs::seed_ios_local_model`), but the runtime here no
+        // longer force-overrides to CoreML, so a user can pick CPU on iOS too.
+        // CoreML does NOT crash per se (superseded claim) — the earlier "flaky
+        // in `cargo run`" note was about session *compilation*, not execution.
+        // The actual tradeoff, measured on this jina-de embedder: CoreML graph-
+        // partitions the model (97 partitions here, `word_embeddings` exceeds
+        // CoreML's 16384 static-dim limit so large-vocab ops fall back to CPU
+        // mid-graph), which made it ~3.6x slower than plain CPU for this small
+        // model. `Ane` maps to `CPUAndNeuralEngine` (ANE + CPU fallback for
+        // unsupported ops), `Coreml` maps to `All` (CoreML picks CPU/GPU/ANE per
+        // op) — both are real, distinct compute-unit configs, not aliases.
         // Non-apple (Linux) has no CoreML EP → always the CPU path (no explicit EP).
         #[cfg(target_vendor = "apple")]
         {
-            let use_coreml = cfg!(target_os = "ios")
-                || matches!(
-                    model.execution_provider,
-                    Some(ExecutionProvider::Coreml) | Some(ExecutionProvider::Ane)
-                );
-            if use_coreml {
-                builder =
-                    builder.with_execution_providers([CoreMLExecutionProvider::default().build()])?;
+            let compute_units = match model.execution_provider {
+                Some(ExecutionProvider::Ane) => Some(CoreMLComputeUnits::CPUAndNeuralEngine),
+                Some(ExecutionProvider::Coreml) => Some(CoreMLComputeUnits::All),
+                _ => None,
+            };
+            if let Some(units) = compute_units {
+                builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
+                    .with_compute_units(units)
+                    .build()])?;
             }
         }
         let session = builder
