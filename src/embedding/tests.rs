@@ -152,3 +152,106 @@ fn single_context_retrieval() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].chunk_id, ids[0]);
 }
+
+// --- hybrid / RRF -----------------------------------------------------------
+
+use super::retrieval::{hybrid_fanout, rrf_fuse, RRF_K};
+
+#[test]
+fn hybrid_fanout_is_max_50_5x() {
+    assert_eq!(hybrid_fanout(1), 50);
+    assert_eq!(hybrid_fanout(10), 50);
+    assert_eq!(hybrid_fanout(20), 100);
+}
+
+#[test]
+fn rrf_fuse_pure_math() {
+    // chunk 1: rank1 in listA + rank2 in listB.
+    // chunk 2: rank2 in listA only. chunk 3: rank1 in listB only.
+    let list_a = vec![1, 2];
+    let list_b = vec![3, 1];
+    let fused = rrf_fuse(&[list_a, list_b], RRF_K, 10);
+
+    let score = |id: i64| fused.iter().find(|s| s.chunk_id == id).unwrap().score;
+    let expect_1 = 1.0 / (RRF_K + 1) as f32 + 1.0 / (RRF_K + 2) as f32;
+    let expect_2 = 1.0 / (RRF_K + 2) as f32;
+    let expect_3 = 1.0 / (RRF_K + 1) as f32;
+    assert!((score(1) - expect_1).abs() < 1e-6);
+    assert!((score(2) - expect_2).abs() < 1e-6);
+    assert!((score(3) - expect_3).abs() < 1e-6);
+    // chunk 1 appears in both lists -> highest.
+    assert_eq!(fused[0].chunk_id, 1);
+}
+
+#[test]
+fn rrf_fuse_truncates_and_breaks_ties_deterministically() {
+    // Two chunks each at rank 1 of a separate single-item list -> equal score,
+    // tie broken by ascending id.
+    let fused = rrf_fuse(&[vec![7], vec![3]], RRF_K, 10);
+    assert_eq!(fused.iter().map(|s| s.chunk_id).collect::<Vec<_>>(), vec![3, 7]);
+    // top_k truncation.
+    let fused = rrf_fuse(&[vec![7], vec![3]], RRF_K, 1);
+    assert_eq!(fused.len(), 1);
+}
+
+#[test]
+fn hybrid_keeps_cross_space_isolation() {
+    let db = Database::open_in_memory().unwrap();
+    // Two distinct models/dims, must never be compared cross-space.
+    let m4 = model(&db, "hyb-4d", 4);
+    let m3 = model(&db, "hyb-3d", 3);
+    let a = context_with_vectors(
+        &db,
+        "Context_A",
+        m4.id,
+        4,
+        &[vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+    );
+    let b = context_with_vectors(
+        &db,
+        "Context_B",
+        m3.id,
+        3,
+        &[vec![1.0, 0.0, 0.0], vec![0.0, 0.0, 1.0]],
+    );
+
+    // Precompute per-model query vectors (axis-0 in each space).
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m4.id, vec![1.0, 0.0, 0.0, 0.0]);
+    qbm.insert(m3.id, vec![1.0, 0.0, 0.0]);
+
+    // Raw query "chunk" hits every chunk's text ("<name> chunk <i>") in FTS.
+    let hits = db.retrieve_hybrid_with(&[1, 2], &qbm, "chunk", 4).unwrap();
+    let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
+    // Best of each space still surfaces; no cross-space crash / dim mismatch.
+    assert!(ids.contains(&a[0]), "best A missing: {ids:?}");
+    assert!(ids.contains(&b[0]), "best B missing: {ids:?}");
+    assert!(hits.iter().all(|h| h.score > 0.0));
+}
+
+#[test]
+fn hybrid_batch_matches_looped_single() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "hyb-batch", 4);
+    let ids = context_with_vectors(
+        &db,
+        "Only",
+        m.id,
+        4,
+        &[vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+    );
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m.id, vec![1.0, 0.0, 0.0, 0.0]);
+
+    let single = db.retrieve_hybrid_with(&[1], &qbm, "chunk 0", 2).unwrap();
+    let batch = db
+        .retrieve_hybrid_batch(&[1], &[qbm.clone()], &["chunk 0".to_string()], 2)
+        .unwrap();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(
+        batch[0].iter().map(|h| h.chunk_id).collect::<Vec<_>>(),
+        single.iter().map(|h| h.chunk_id).collect::<Vec<_>>()
+    );
+    // "chunk 0" text present, so at least the first chunk is retrieved.
+    assert!(single.iter().any(|h| h.chunk_id == ids[0]));
+}

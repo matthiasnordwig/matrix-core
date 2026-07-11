@@ -17,6 +17,45 @@ use super::QueryEmbedder;
 use crate::db::models::ScoredChunk;
 use crate::{Database, Result};
 
+/// Reciprocal Rank Fusion constant (dampening). Standard value.
+pub(crate) const RRF_K: usize = 60;
+
+/// Retrieval fan-out N for each list before fusion: `max(50, 5·top_k)`.
+pub(crate) fn hybrid_fanout(top_k: usize) -> usize {
+    (5 * top_k).max(50)
+}
+
+/// Pure RRF fusion over an arbitrary set of rank lists. Each inner slice is one
+/// ranked list of chunk ids, best-first (index 0 = rank 1). A chunk's fused
+/// score is `Σ 1/(k + rank)` over the lists it appears in (rank 1-based). The
+/// result is sorted by score desc (ties broken by ascending chunk_id for
+/// determinism) and truncated to `top_k`.
+///
+/// Fusion works purely on **ranks within each list** — it never mixes scores
+/// across lists, which is what preserves the embedding-space isolation
+/// invariant when the caller only ever fuses lists from the *same* space.
+pub(crate) fn rrf_fuse(lists: &[Vec<i64>], k: usize, top_k: usize) -> Vec<ScoredChunk> {
+    let mut acc: HashMap<i64, f32> = HashMap::new();
+    for list in lists {
+        for (i, &chunk_id) in list.iter().enumerate() {
+            let rank = i + 1; // 1-based
+            *acc.entry(chunk_id).or_insert(0.0) += 1.0 / (k + rank) as f32;
+        }
+    }
+    let mut fused: Vec<ScoredChunk> = acc
+        .into_iter()
+        .map(|(chunk_id, score)| ScoredChunk { chunk_id, score })
+        .collect();
+    fused.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.chunk_id.cmp(&b.chunk_id))
+    });
+    fused.truncate(top_k);
+    fused
+}
+
 impl Database {
     /// Map each selected context to its embedding model id.
     pub(crate) fn contexts_by_model(&self, context_ids: &[i64]) -> Result<HashMap<i64, Vec<i64>>> {
@@ -95,6 +134,76 @@ impl Database {
             merged.truncate(top_k);
         }
         Ok(row_merged)
+    }
+
+    /// Hybrid retrieval: Reciprocal Rank Fusion of the per-context vector list
+    /// and the per-context FTS5/BM25 keyword list. Fusion happens **per context
+    /// (per embedding space)** and only on ranks — no cross-space score
+    /// comparison — then the RRF scores accumulate globally across all
+    /// (model, context) pairs before the final top-`k` cut. The RRF score is
+    /// placed in `ScoredChunk::score`.
+    pub fn retrieve_hybrid_with(
+        &self,
+        context_ids: &[i64],
+        query_by_model: &HashMap<i64, Vec<f32>>,
+        raw_query: &str,
+        top_k: usize,
+    ) -> Result<Vec<ScoredChunk>> {
+        let n = hybrid_fanout(top_k);
+        // Accumulate RRF scores globally across contexts/spaces.
+        let mut acc: HashMap<i64, f32> = HashMap::new();
+        for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
+            let Some(qvec) = query_by_model.get(&model_id) else {
+                continue;
+            };
+            for cid in ctxs {
+                // Vector list (best-first) restricted to this one context/space.
+                let vec_hits = self.search_context(cid, qvec, n)?;
+                let vec_ranked: Vec<i64> = vec_hits.iter().map(|h| h.chunk_id).collect();
+                // FTS list (best-first) for the same context.
+                let fts_ranked: Vec<i64> = self
+                    .keyword_search_context(cid, raw_query, n)?
+                    .into_iter()
+                    .map(|(id, _rank)| id)
+                    .collect();
+                // Fuse the two rank lists for this context, then fold the
+                // per-context RRF scores into the global accumulator.
+                for sc in rrf_fuse(&[vec_ranked, fts_ranked], RRF_K, n) {
+                    *acc.entry(sc.chunk_id).or_insert(0.0) += sc.score;
+                }
+            }
+        }
+        let mut merged: Vec<ScoredChunk> = acc
+            .into_iter()
+            .map(|(chunk_id, score)| ScoredChunk { chunk_id, score })
+            .collect();
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.chunk_id.cmp(&b.chunk_id))
+        });
+        merged.truncate(top_k);
+        Ok(merged)
+    }
+
+    /// Grid batch variant of [`Self::retrieve_hybrid_with`]: one hybrid retrieval
+    /// per row, each with its own precomputed query vectors and raw query text.
+    /// Mirrors [`Self::retrieve_batch`] but preserves the hybrid fusion (and thus
+    /// cross-space isolation) for every row.
+    pub fn retrieve_hybrid_batch(
+        &self,
+        context_ids: &[i64],
+        queries_by_row: &[HashMap<i64, Vec<f32>>],
+        raw_queries: &[String],
+        top_k: usize,
+    ) -> Result<Vec<Vec<ScoredChunk>>> {
+        let mut out = Vec::with_capacity(queries_by_row.len());
+        for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
+            let raw = raw_queries.get(row_idx).map(String::as_str).unwrap_or("");
+            out.push(self.retrieve_hybrid_with(context_ids, query_by_model, raw, top_k)?);
+        }
+        Ok(out)
     }
 
     /// Retrieve top-`k` chunks across `context_ids`, embedding the query per

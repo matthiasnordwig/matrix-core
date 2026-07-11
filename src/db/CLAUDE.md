@@ -11,6 +11,11 @@ Modell in den `*.rs`-Dateien der einzelnen CRUD-Module).
 `ontology/` ist ein eigenes Ordner-Modul (statt einzelner Datei, war auf 1054
 Zeilen gewachsen) — jede Datei dort hat ein eigenes `impl Database { ... }`.
 
+`fts.rs` (`schema_v48`): FTS5-Keyword-Index `chunks_fts` (externe Content-Tabelle
+über `chunks(text)`, Sync-Trigger + Backfill in der Migration). `keyword_search_context`
+liefert BM25-Ränge, `escape_fts_query` quotet Terme defensiv (§/Punkte/Spaces).
+Wird von `embedding/retrieval.rs`' Hybrid-Pfad (RRF) konsumiert.
+
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 
 **Tests:** `tests.rs` deckt CRUD-Round-Trips, FK-Constraints, Vector-Blob-Round-Trip,
@@ -27,5 +32,8 @@ Lifecycle-Löschung, `retrieve_graph_with`/`_batch`
 sowie `raw_*_type`-Mirroring bei Insert/manueller Kuration ab. Das Retrieval-Eval
 (`eval.rs`, `schema_v47`) ist über Golden-Set/Entry- und Run/Result-Round-Trips
 inkl. FK-Cascade abgedeckt. `ontology/schema_suggestions.rs`
-hat eigene `#[cfg(test)] mod tests` am Dateiende (Häufigkeits-Threshold). Bei Änderungen:
+hat eigene `#[cfg(test)] mod tests` am Dateiende (Häufigkeits-Threshold). FTS5
+(`fts.rs`/`schema_v48`) ist über `db/fts_tests.rs` abgedeckt: Verfügbarkeits-Smoke-Test,
+INSERT/UPDATE/DELETE-Trigger-Sync, Kontext-Scoping + Escaping; `fts.rs` selbst hat
+`escape_fts_query`-Unit-Tests am Dateiende. Bei Änderungen:
 `cargo test --lib db` laufen lassen, bei neuer CRUD-Logik ergänzen.

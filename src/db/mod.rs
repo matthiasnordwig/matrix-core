@@ -15,6 +15,7 @@ pub mod models;
 mod chunks;
 mod contexts;
 pub mod embeddings;
+mod fts;
 mod grid;
 mod structural_profiles;
 mod grid_profiles;
@@ -156,6 +157,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v45.sql"),
     include_str!("schema_v46.sql"),
     include_str!("schema_v47.sql"),
+    include_str!("schema_v48.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -276,3 +278,5 @@ fn migrate_v8_to_v9_profiles(tx: &rusqlite::Transaction) -> rusqlite::Result<()>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod fts_tests;

@@ -221,6 +221,14 @@ impl Database {
         Ok(self.conn.execute("DELETE FROM chunks WHERE id = ?1", [id])? > 0)
     }
 
+    /// Replace a chunk's text (the FTS5 sync trigger reindexes it).
+    pub fn update_chunk_text(&self, id: i64, text: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("UPDATE chunks SET text = ?2 WHERE id = ?1", rusqlite::params![id, text])?
+            > 0)
+    }
+
     /// Remove all chunks of a document (used before re-staging on a re-run).
     pub fn delete_chunks_for_document(&self, document_id: i64) -> Result<usize> {
         Ok(self
