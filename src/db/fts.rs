@@ -43,8 +43,13 @@ pub(crate) fn escape_fts_query(raw: &str) -> Option<String> {
 }
 
 impl Database {
-    /// BM25 keyword search over a context's chunks. Returns up to `n`
-    /// `(chunk_id, rank)` pairs, best match first, `rank` 1-based.
+    /// BM25 keyword search over a context's **non-omitted** chunks. Returns up
+    /// to `n` `(chunk_id, rank)` pairs, best match first, `rank` 1-based.
+    ///
+    /// `is_omitted = 0` mirrors the vector path (omitted chunks are never
+    /// embedded, so vector search can't return them) and every other
+    /// retrieval-facing query — without it, omitted rows (the FTS triggers index
+    /// *all* chunks) could leak into hybrid results and be handed to the LLM.
     pub fn keyword_search_context(
         &self,
         context_id: i64,
@@ -60,7 +65,7 @@ impl Database {
             "SELECT c.id \
                FROM chunks_fts \
                JOIN chunks c ON c.id = chunks_fts.rowid \
-              WHERE chunks_fts MATCH ?1 AND c.context_id = ?2 \
+              WHERE chunks_fts MATCH ?1 AND c.context_id = ?2 AND c.is_omitted = 0 \
               ORDER BY bm25(chunks_fts) \
               LIMIT ?3",
         )?;

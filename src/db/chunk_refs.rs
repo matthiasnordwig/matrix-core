@@ -53,7 +53,9 @@ impl Database {
     pub fn rebuild_chunk_refs(&self, context_id: i64) -> Result<usize> {
         self.conn
             .execute("DELETE FROM chunk_refs WHERE context_id = ?1", [context_id])?;
-        let chunks = self.list_chunks(context_id, true)?;
+        // Non-omitted only: omitted chunks are never retrievable (not embedded,
+        // excluded from the FTS leg), so their outgoing refs would be dead rows.
+        let chunks = self.list_chunks(context_id, false)?;
         let mut total = 0usize;
         for c in chunks {
             // set_chunk_refs deletes-then-inserts per chunk; the context-wide

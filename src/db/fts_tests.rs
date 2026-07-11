@@ -148,3 +148,34 @@ fn keyword_search_context_scoping_and_escaping() {
     assert!(db.keyword_search_context(ctx_a, "   ", 10).unwrap().is_empty());
     assert!(db.keyword_search_context(ctx_a, "", 10).unwrap().is_empty());
 }
+
+/// Omitted chunks are indexed by the FTS triggers but must NOT surface in
+/// keyword search — they are never embedded (vector search can't return them),
+/// so the FTS leg of hybrid retrieval must exclude them too, or omitted chunks
+/// leak into chat/grid sources. Regression guard for the AP5-review finding.
+#[test]
+fn keyword_search_excludes_omitted_chunks() {
+    let db = Database::open_in_memory().unwrap();
+    let (ctx, doc) = seed_ctx(&db);
+
+    let kept = add_chunk(&db, ctx, doc, 0, "Anforderungen an die Auslagerung nach AT 9");
+    let omitted = db
+        .create_chunk(&NewChunk {
+            context_id: ctx,
+            document_id: doc,
+            chunk_index: 1,
+            char_start: 0,
+            char_end: 0,
+            text: "Auslagerung Auslagerung (omitted footer)".into(),
+            signature: None,
+            is_omitted: true,
+            metadata: "{}".into(),
+        })
+        .unwrap()
+        .id;
+
+    let hits = db.keyword_search_context(ctx, "Auslagerung", 10).unwrap();
+    let ids: Vec<i64> = hits.iter().map(|(id, _)| *id).collect();
+    assert!(ids.contains(&kept), "non-omitted chunk must be found");
+    assert!(!ids.contains(&omitted), "omitted chunk must NOT surface in FTS results");
+}
