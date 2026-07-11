@@ -79,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 46);
+    assert_eq!(db.schema_version().unwrap(), 47);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -767,4 +767,101 @@ fn deleting_a_reasoning_list_nulls_endpoint_fk() {
     assert!(db.delete_reasoning_effort_list(list.id).unwrap());
     let after = db.llm_endpoint(ep.id).unwrap().unwrap();
     assert_eq!(after.reasoning_list_id, None);
+}
+
+// --- Retrieval eval (schema_v47) -------------------------------------------
+
+#[test]
+fn eval_golden_set_and_entry_roundtrip_and_cascade() {
+    let db = db();
+    let set = db
+        .create_eval_golden_set(&NewEvalGoldenSet {
+            title: "Default".into(),
+            description: "seed".into(),
+        })
+        .unwrap();
+    assert_eq!(db.list_eval_golden_sets().unwrap().len(), 1);
+
+    let updated = db.update_eval_golden_set(set.id, "Renamed", "d2").unwrap();
+    assert_eq!(updated.title, "Renamed");
+    assert!(updated.updated_at >= updated.created_at);
+
+    let e = db
+        .create_eval_golden_entry(&NewEvalGoldenEntry {
+            set_id: set.id,
+            entry_key: "k1".into(),
+            question: "Q?".into(),
+            anchors_any: r#"["AT 4.1","Foo"]"#.into(),
+            note: "n".into(),
+        })
+        .unwrap();
+    assert_eq!(e.anchors(), vec!["AT 4.1".to_string(), "Foo".to_string()]);
+    assert_eq!(db.list_eval_golden_entries(set.id).unwrap().len(), 1);
+
+    let e2 = db
+        .update_eval_golden_entry(e.id, "k1b", "Q2?", r#"["X"]"#, "n2")
+        .unwrap();
+    assert_eq!(e2.entry_key, "k1b");
+    assert_eq!(e2.anchors(), vec!["X".to_string()]);
+
+    // Cascade: deleting the set removes its entries.
+    assert!(db.delete_eval_golden_set(set.id).unwrap());
+    assert!(db.list_eval_golden_entries(set.id).unwrap().is_empty());
+    assert!(db.eval_golden_entry(e.id).unwrap().is_none());
+}
+
+#[test]
+fn eval_run_and_results_roundtrip_and_cascade() {
+    let db = db();
+    let set = db
+        .create_eval_golden_set(&NewEvalGoldenSet { title: "S".into(), description: "".into() })
+        .unwrap();
+    let entry = db
+        .create_eval_golden_entry(&NewEvalGoldenEntry {
+            set_id: set.id,
+            entry_key: "k".into(),
+            question: "Q".into(),
+            anchors_any: "[]".into(),
+            note: "".into(),
+        })
+        .unwrap();
+
+    let run = db
+        .create_eval_run(&NewEvalRun {
+            set_id: set.id,
+            context_ids: "[1,2]".into(),
+            config: r#"{"top_k":10}"#.into(),
+        })
+        .unwrap();
+    assert_eq!(run.status, "running");
+    assert!(run.finished_at.is_none());
+
+    db.insert_eval_run_result(&NewEvalRunResult {
+        run_id: run.id,
+        entry_id: entry.id,
+        entry_key: "k".into(),
+        question: "Q".into(),
+        resolved_chunks: 3,
+        first_rank: Some(2),
+        hit5: true,
+        hit10: true,
+        skipped: false,
+    })
+    .unwrap();
+
+    let results = db.get_eval_run_results(run.id).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].first_rank, Some(2));
+    assert!(results[0].hit5);
+
+    let done = db.finish_eval_run(run.id, "done", r#"{"mrr":0.5}"#).unwrap();
+    assert_eq!(done.status, "done");
+    assert!(done.finished_at.is_some());
+
+    assert_eq!(db.list_eval_runs(Some(set.id)).unwrap().len(), 1);
+    assert_eq!(db.list_eval_runs(None).unwrap().len(), 1);
+
+    // Cascade: deleting the run removes its result rows.
+    assert!(db.delete_eval_run(run.id).unwrap());
+    assert!(db.get_eval_run_results(run.id).unwrap().is_empty());
 }

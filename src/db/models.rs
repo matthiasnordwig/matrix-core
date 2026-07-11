@@ -487,6 +487,105 @@ pub struct ScoredChunk {
     pub score: f32,
 }
 
+// --- Retrieval eval (schema_v47, RETRIEVAL_QUALITY_PLAN.md AP0) -------------
+
+/// A named golden question-set for the LLM-free retrieval eval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalGoldenSet {
+    pub id: i64,
+    pub title: String,
+    pub description: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEvalGoldenSet {
+    pub title: String,
+    pub description: String,
+}
+
+/// One golden entry: a question + the anchor substrings that mark a chunk as
+/// relevant (at least one must appear, case-insensitive/whitespace-collapsed).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalGoldenEntry {
+    pub id: i64,
+    pub set_id: i64,
+    pub entry_key: String,
+    pub question: String,
+    /// JSON array text as stored; parse with `anchors()`.
+    pub anchors_any: String,
+    pub note: String,
+}
+
+impl EvalGoldenEntry {
+    /// The `anchors_any` JSON array, parsed (empty on malformed JSON).
+    pub fn anchors(&self) -> Vec<String> {
+        serde_json::from_str(&self.anchors_any).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEvalGoldenEntry {
+    pub set_id: i64,
+    pub entry_key: String,
+    pub question: String,
+    /// JSON array text (e.g. `["AT 4.1","Risikodeckungspotenzial"]`).
+    pub anchors_any: String,
+    pub note: String,
+}
+
+/// A single eval run over a golden set against a set of scoped contexts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalRun {
+    pub id: i64,
+    pub set_id: i64,
+    /// JSON array of context ids.
+    pub context_ids: String,
+    /// JSON config: `{k, hybrid, follow_refs, rerank, top_k}`.
+    pub config: String,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    /// JSON aggregate metrics (Hit@5/Hit@10/MRR + counts).
+    pub metrics: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEvalRun {
+    pub set_id: i64,
+    pub context_ids: String,
+    pub config: String,
+}
+
+/// Per-entry result of one eval run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalRunResult {
+    pub id: i64,
+    pub run_id: i64,
+    pub entry_id: i64,
+    pub entry_key: String,
+    pub question: String,
+    pub resolved_chunks: i64,
+    pub first_rank: Option<i64>,
+    pub hit5: bool,
+    pub hit10: bool,
+    pub skipped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEvalRunResult {
+    pub run_id: i64,
+    pub entry_id: i64,
+    pub entry_key: String,
+    pub question: String,
+    pub resolved_chunks: i64,
+    pub first_rank: Option<i64>,
+    pub hit5: bool,
+    pub hit10: bool,
+    pub skipped: bool,
+}
+
 // --- Grid & async matrix-chat ----------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -23,6 +23,7 @@ mod profiles;
 mod registries;
 mod pools;
 mod settings;
+mod eval;
 pub mod ontology;
 
 /// Errors surfaced by the persistence layer.
@@ -154,6 +155,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v44.sql"),
     include_str!("schema_v45.sql"),
     include_str!("schema_v46.sql"),
+    include_str!("schema_v47.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

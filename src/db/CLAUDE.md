@@ -24,6 +24,8 @@ Lifecycle-Löschung, `retrieve_graph_with`/`_batch`
 (Hop-Expansion, inkl. Lens-Join: aktive-Lens-Typauflösung, `reversed`-Anzeige-Swap,
 `deleted`-Traversal-Ausschluss, Per-Lens-Community-Filter), Metrics/Dedup-Cache/Quarantine, das Lens-System
 (`get_or_create_lens`-Upsert-in-place, `delete_lens`-Fallback auf `active_lens_id=NULL`)
-sowie `raw_*_type`-Mirroring bei Insert/manueller Kuration ab. `ontology/schema_suggestions.rs`
+sowie `raw_*_type`-Mirroring bei Insert/manueller Kuration ab. Das Retrieval-Eval
+(`eval.rs`, `schema_v47`) ist über Golden-Set/Entry- und Run/Result-Round-Trips
+inkl. FK-Cascade abgedeckt. `ontology/schema_suggestions.rs`
 hat eigene `#[cfg(test)] mod tests` am Dateiende (Häufigkeits-Threshold). Bei Änderungen:
 `cargo test --lib db` laufen lassen, bei neuer CRUD-Logik ergänzen.
