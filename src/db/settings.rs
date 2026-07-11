@@ -7,11 +7,11 @@ use serde::Serialize;
 
 use super::{Database, Result};
 
-/// Setting key: filesystem path to the local ONNX reranker model dir (must
-/// contain `model.onnx` + `tokenizer.json`). Empty/unset = reranker OFF.
-/// Resolved against `dirs.model_dirs` the same way local embedder/gguf dirs are
-/// (absolute as-is, `~/`-relative against `$HOME`, else the last model dir).
-pub const KEY_RERANKER_MODEL_DIR: &str = "reranker_model_dir";
+/// Setting key: id of the active reranker (`reranker_models.id`) — the single,
+/// context-independent selection point (MODEL_INFRA_PLAN.md AP2). Unset/absent
+/// row = reranker OFF. Replaces the pre-AP2 `reranker_model_dir` path setting,
+/// which is migrated into an active `local_onnx` row by `schema_v50`.
+pub const KEY_ACTIVE_RERANKER_ID: &str = "active_reranker_id";
 
 /// Setting key: default state of the Chat/Grid "Rerank" toggle (bool).
 pub const KEY_RERANKER_ENABLED_DEFAULT: &str = "reranker_enabled_default";
@@ -29,6 +29,13 @@ impl Database {
             Some(json) => Ok(Some(serde_json::from_str(&json)?)),
             None => Ok(None),
         }
+    }
+
+    /// Remove a setting key (no-op if absent).
+    pub fn clear_setting(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
+        Ok(())
     }
 
     /// Serialize and upsert a setting.

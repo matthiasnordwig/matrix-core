@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 pub mod models;
 
@@ -160,6 +160,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v47.sql"),
     include_str!("schema_v48.sql"),
     include_str!("schema_v49.sql"),
+    include_str!("schema_v50.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -198,6 +199,9 @@ impl Database {
                 
                 if target == 9 {
                     migrate_v8_to_v9_profiles(&tx)?;
+                }
+                if target == 50 {
+                    migrate_v49_to_v50_reranker(&tx)?;
                 }
 
                 tx.pragma_update(None, "user_version", target)?;
@@ -278,7 +282,66 @@ fn migrate_v8_to_v9_profiles(tx: &rusqlite::Transaction) -> rusqlite::Result<()>
     Ok(())
 }
 
+/// MODEL_INFRA_PLAN.md AP2: promote a pre-existing `reranker_model_dir` setting
+/// into a first-class, active `local_onnx` reranker row so rerank behavior does
+/// not silently change across the migration. Idempotent (safe on re-run and on
+/// DBs that never had the setting): does nothing if the setting is
+/// absent/empty, if a `reranker_models` row already exists, or if
+/// `active_reranker_id` is already set. Removes the now-obsolete
+/// `reranker_model_dir` key afterwards.
+fn migrate_v49_to_v50_reranker(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    // Settings are stored JSON-encoded (see settings.rs); a String value is a
+    // quoted JSON string, so decode it.
+    let raw: Option<String> = tx
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'reranker_model_dir'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let dir = raw
+        .and_then(|json| serde_json::from_str::<String>(&json).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Don't clobber an already-migrated registry (idempotency + defensive
+    // against a partially-applied run).
+    let existing_rows: i64 =
+        tx.query_row("SELECT COUNT(*) FROM reranker_models", [], |r| r.get(0))?;
+    let active_set: bool = tx
+        .query_row(
+            "SELECT 1 FROM app_settings WHERE key = 'active_reranker_id'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+
+    if let Some(dir) = dir {
+        if existing_rows == 0 && !active_set {
+            tx.execute(
+                "INSERT INTO reranker_models (name, kind, model_dir, execution_provider)
+                 VALUES ('Local reranker (migrated)', 'local_onnx', ?1, NULL)",
+                rusqlite::params![dir],
+            )?;
+            let id = tx.last_insert_rowid();
+            // Store JSON-encoded to match settings.rs's set_setting encoding.
+            tx.execute(
+                "INSERT INTO app_settings (key, value) VALUES ('active_reranker_id', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![id.to_string()],
+            )?;
+        }
+    }
+
+    // Old key is obsolete regardless of whether a row was created (idempotent).
+    tx.execute("DELETE FROM app_settings WHERE key = 'reranker_model_dir'", [])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod fts_tests;
+#[cfg(test)]
+mod reranker_tests;

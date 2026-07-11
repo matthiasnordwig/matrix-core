@@ -27,6 +27,13 @@ Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
 ≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
 konsumiert.
 
+`registries.rs` (`schema_v50`, MODEL_INFRA_PLAN AP2): zusätzlich zu `embedding_models`/
+`llm_endpoints` jetzt CRUD für `reranker_models` (`RerankerModel`, kind local_onnx|remote_api,
+`model_dir`/`api_config`/`execution_provider`) + `active_reranker_model()` (via Settings-Key
+`active_reranker_id`). Auswahl **global** (kein Pro-Kontext-Bezug). `schema_v50` + der
+`target==50`-Hook in `mod.rs::migrate` migrieren ein altes `reranker_model_dir`-Setting in
+eine aktive `local_onnx`-Zeile (idempotent). `settings.rs` hat dafür `clear_setting`.
+
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 
 **Tests:** `tests.rs` deckt CRUD-Round-Trips, FK-Constraints, Vector-Blob-Round-Trip,
@@ -49,5 +56,9 @@ INSERT/UPDATE/DELETE-Trigger-Sync, Kontext-Scoping + Escaping; `fts.rs` selbst h
 `escape_fts_query`-Unit-Tests am Dateiende. `chunk_refs.rs`/`schema_v49` ist über
 `db/chunk_refs_tests.rs` abgedeckt (Round-Trip, Idempotenz von `set_chunk_refs`/
 `rebuild_chunk_refs`, Cascade, Definitions-Stellen-Auflösung + reine
-`pick_definition_site`/`expand_with_refs`-Kapp-Logik). Bei Änderungen:
+`pick_definition_site`/`expand_with_refs`-Kapp-Logik). `reranker_models`/`schema_v50`
+(MODEL_INFRA_PLAN AP2) ist über `db/reranker_tests.rs` abgedeckt: CRUD-Round-Trip
+(lokal+remote), `active_reranker_model()`-Helper + `delete`-räumt-`active_reranker_id`,
+und die `schema_v50`-Migration (altes `reranker_model_dir` → aktive `local_onnx`-Zeile,
+idempotent, No-op ohne/mit leerem Alt-Setting). Bei Änderungen:
 `cargo test --lib db` laufen lassen, bei neuer CRUD-Logik ergänzen.

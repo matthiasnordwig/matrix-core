@@ -13,8 +13,12 @@ Rerank (AP3): `rerank.rs`. Reine `rank_merge(scores, top_k)` (immer kompiliert,
 getestet). `OrtReranker` (hinter `onnx`-Feature, wie `onnx.rs`): `load(model_dir)` +
 `score_pairs(query, docs)` — (query,doc)-**Paar** → einzelner Logit (XLMRoberta,
 num_labels=1). EP-Wahl spiegelt `onnx.rs` exakt (iOS→CoreML, sonst CPU); **keine**
-neuen ort-Features/EPs. Smoke: `core/examples/rerank_smoke.rs`. Settings-Keys
-(`reranker_model_dir`/`reranker_enabled_default`) in `db/settings.rs`.
+neuen ort-Features/EPs. Smoke: `core/examples/rerank_smoke.rs`. Seit
+MODEL_INFRA_PLAN AP2 ist der Reranker ein vollwertiges Modell (`reranker_models`,
+`schema_v50`, CRUD in `db/registries.rs`) — Auswahl global über den Settings-Key
+`active_reranker_id` (`db/settings.rs`; **ersetzt** `reranker_model_dir`), plus
+`reranker_enabled_default` (Default-Toggle). Der lokale ONNX-Weg hier ist unverändert;
+der Provider-Dispatch (lokal/remote) lebt in `app/crates/services/src/commands/rerank_provider.rs`.
 
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn \|^pub struct \|^pub trait " *.rs`.
 

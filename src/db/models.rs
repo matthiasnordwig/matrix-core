@@ -117,6 +117,35 @@ pub struct NewEmbeddingModel {
     pub max_concurrency: i64,
 }
 
+/// Reranker as a first-class model (MODEL_INFRA_PLAN.md AP2). Deliberately a
+/// separate registry from `EmbeddingModel`: rerank API semantics differ
+/// (query + documents -> relevance scores, not a single vector). Selection is a
+/// single global setting `active_reranker_id` — the reranker works on raw chunk
+/// text, not in any embedding space, so there is NO per-context binding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankerModel {
+    pub id: i64,
+    pub name: String,
+    pub kind: ModelKind,
+    /// `local_onnx`: dir containing `model.onnx` + `tokenizer.json`. `None` for remote.
+    pub model_dir: Option<String>,
+    /// `remote_api`: JSON `{base_url, model, key_ref, api_format}` (see `RemoteRerankConfig`).
+    pub api_config: Option<String>,
+    /// `local_onnx` only (ANE/CoreML/CPU); remote ignores it.
+    pub execution_provider: Option<ExecutionProvider>,
+    pub created_at: i64,
+}
+
+/// Fields required to create a [`RerankerModel`]; `id`/`created_at` are assigned by the DB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewRerankerModel {
+    pub name: String,
+    pub kind: ModelKind,
+    pub model_dir: Option<String>,
+    pub api_config: Option<String>,
+    pub execution_provider: Option<ExecutionProvider>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmEndpoint {
     pub id: i64,

@@ -25,6 +25,18 @@ fn row_to_embedding_model(row: &Row<'_>) -> rusqlite::Result<EmbeddingModel> {
     })
 }
 
+fn row_to_reranker_model(row: &Row<'_>) -> rusqlite::Result<RerankerModel> {
+    Ok(RerankerModel {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        kind: row.get("kind")?,
+        model_dir: row.get("model_dir")?,
+        api_config: row.get("api_config")?,
+        execution_provider: row.get("execution_provider")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
 pub(super) fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint> {
     Ok(LlmEndpoint {
         id: row.get("id")?,
@@ -151,6 +163,79 @@ impl Database {
             .conn
             .execute("DELETE FROM embedding_models WHERE id = ?1", [id])?
             > 0)
+    }
+
+    // --- reranker_models (MODEL_INFRA_PLAN.md AP2) --------------------------
+
+    pub fn create_reranker_model(&self, m: &NewRerankerModel) -> Result<RerankerModel> {
+        self.conn.execute(
+            "INSERT INTO reranker_models (name, kind, model_dir, api_config, execution_provider)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.name, m.kind, m.model_dir, m.api_config, m.execution_provider],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(self.reranker_model(id)?.expect("row just inserted must exist"))
+    }
+
+    pub fn reranker_model(&self, id: i64) -> Result<Option<RerankerModel>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT * FROM reranker_models WHERE id = ?1",
+                [id],
+                row_to_reranker_model,
+            )
+            .optional()?)
+    }
+
+    pub fn list_reranker_models(&self) -> Result<Vec<RerankerModel>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM reranker_models ORDER BY name")?;
+        let rows = stmt.query_map([], row_to_reranker_model)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn update_reranker_model(&self, id: i64, m: &NewRerankerModel) -> Result<RerankerModel> {
+        self.conn.execute(
+            "UPDATE reranker_models SET
+                name = ?2, kind = ?3, model_dir = ?4, api_config = ?5, execution_provider = ?6
+             WHERE id = ?1",
+            params![id, m.name, m.kind, m.model_dir, m.api_config, m.execution_provider],
+        )?;
+        self.reranker_model(id)?
+            .ok_or_else(|| super::CoreError::NotFound(format!("reranker_model {id}")))
+    }
+
+    /// Delete a reranker. If it was the active one, clears `active_reranker_id`
+    /// so the setting never dangles at a deleted id (reranker falls back to OFF).
+    pub fn delete_reranker_model(&self, id: i64) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM reranker_models WHERE id = ?1", [id])?
+            > 0;
+        if deleted {
+            if let Ok(Some(active)) =
+                self.get_setting::<i64>(super::settings::KEY_ACTIVE_RERANKER_ID)
+            {
+                if active == id {
+                    self.conn.execute(
+                        "DELETE FROM app_settings WHERE key = ?1",
+                        [super::settings::KEY_ACTIVE_RERANKER_ID],
+                    )?;
+                }
+            }
+        }
+        Ok(deleted)
+    }
+
+    /// The active reranker row (via `active_reranker_id`), or `None` when unset
+    /// or pointing at a deleted row (reranker OFF).
+    pub fn active_reranker_model(&self) -> Result<Option<RerankerModel>> {
+        match self.get_setting::<i64>(super::settings::KEY_ACTIVE_RERANKER_ID)? {
+            Some(id) => self.reranker_model(id),
+            None => Ok(None),
+        }
     }
 
     // --- llm_endpoints -----------------------------------------------------
