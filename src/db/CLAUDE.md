@@ -16,6 +16,12 @@ Zeilen gewachsen) — jede Datei dort hat ein eigenes `impl Database { ... }`.
 liefert BM25-Ränge, `escape_fts_query` quotet Terme defensiv (§/Punkte/Spaces).
 Wird von `embedding/retrieval.rs`' Hybrid-Pfad (RRF) konsumiert.
 
+`chunks.rs` trägt neben Prechunk-/Chunk-CRUD auch `complete_section_chunks(chunk_id,
+max_extra)` → `SectionContinuation{chunks, continues_at}` (TOOL_CALLS_V2 AP2):
+Folge-Chunks desselben Dokuments mit fortlaufendem `chunk_index` und exakt
+gleicher non-empty `metadata.section`, gegen Fragmentierung mehrteiliger
+§§/Artikel; `max_extra=0` = reiner Existenz-Check. Tests: `db/chunks_tests.rs`.
+
 `chunk_refs.rs` (`schema_v49`, AP2): Normverweis-Kanten `chunk_refs(chunk_id,
 context_id, ref_key)` (Index `(context_id, ref_key)`, FK-Cascade auf chunks+contexts).
 Ableitung aus `chunks.text` über `crate::refs::parse_refs`: `set_chunk_refs`
