@@ -1,0 +1,23 @@
+-- RERANKER_PERF_PLAN.md Phase 2 "GGUF/Metal-Reranker-Backend".
+--
+-- Widens `reranker_models.kind`'s CHECK constraint to accept 'local_gguf' (the
+-- GGUF/llama.cpp on-device reranker, bge-reranker-v2-m3 on Metal) in addition to
+-- 'local_onnx' / 'remote_api'.
+--
+-- SQLite cannot ALTER an existing CHECK constraint, so this requires a full
+-- table rebuild. Unlike schema_v51 (`embedding_models`), `reranker_models` has
+-- NO incoming foreign keys — the active reranker is a plain settings value
+-- (`active_reranker_id`), not an FK. So the rebuild is simpler: no children fire
+-- ON DELETE actions on DROP, hence no FK-enforcement toggling is needed. It is
+-- still done as an idempotent Rust hook (columns + row ids verbatim) for parity
+-- with schema_v51 and a round-trip test.
+--
+-- `PRAGMA foreign_keys` is irrelevant here (no FKs reference this table), but to
+-- keep the rebuild uniform with schema_v51 it lives in the `target == 52` Rust
+-- hook (`mod.rs::migrate_v51_to_v52_reranker_kind`), which preserves every
+-- column + row id verbatim, runs `foreign_key_check` as a guard, and is
+-- idempotent.
+--
+-- This file is therefore intentionally a no-op (the loop skips its
+-- `execute_batch` for target 52). It exists only to keep the MIGRATIONS index
+-- aligned with `PRAGMA user_version`.

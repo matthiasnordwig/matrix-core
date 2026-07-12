@@ -17,8 +17,10 @@ use rusqlite::Connection;
 fn migrate_to_50_then_seed() -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    // Run every migration except the last (v51) manually, matching mod.rs's loop.
-    for (i, sql) in super::MIGRATIONS[..super::MIGRATIONS.len() - 1].iter().enumerate() {
+    // Run every migration up to and including v50 manually (stop before the v51
+    // rebuild we are about to test), matching mod.rs's loop. `schema_v50.sql` is
+    // index 49 (target 50), so take the first 50 entries.
+    for (i, sql) in super::MIGRATIONS[..50].iter().enumerate() {
         let target = (i + 1) as i64;
         let tx = conn.transaction().unwrap();
         tx.execute_batch(sql).unwrap();
@@ -65,7 +67,7 @@ fn migrate_to_50_then_seed() -> Connection {
 fn v51_rebuild_preserves_rows_and_fk_links() {
     let conn = migrate_to_50_then_seed();
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 51);
+    assert_eq!(db.schema_version().unwrap(), 52);
 
     // Both embedding_models rows survive verbatim (ids + kinds intact).
     let models = db.list_embedding_models().unwrap();
@@ -119,7 +121,7 @@ fn v51_rebuild_preserves_rows_and_fk_links() {
 #[test]
 fn v51_accepts_local_gguf_and_still_rejects_garbage() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 51);
+    assert_eq!(db.schema_version().unwrap(), 52);
 
     // local_gguf is now a valid kind (CRUD round-trip through the typed API).
     let m = db

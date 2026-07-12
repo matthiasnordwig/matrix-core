@@ -27,6 +27,11 @@ pub mod onnx;
 /// `GgufEmbedder` itself is behind the `gguf` feature.
 pub mod gguf_embed;
 
+/// Local GGUF/llama.cpp cross-encoder reranker (RERANKER_PERF_PLAN.md Phase 2).
+/// The pure pair-token layout (`build_pair_tokens`) compiles unconditionally
+/// (and is tested); the `GgufReranker` itself is behind the `gguf` feature.
+pub mod gguf_rerank;
+
 /// Produces a query vector in a specific model's embedding space. Implemented
 /// by concrete embedders (local ONNX, remote API, or a test fake).
 pub trait QueryEmbedder {

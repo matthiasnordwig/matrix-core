@@ -162,6 +162,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v49.sql"),
     include_str!("schema_v50.sql"),
     include_str!("schema_v51.sql"),
+    include_str!("schema_v52.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -205,6 +206,15 @@ impl Database {
                 // outside the generic path below.
                 if target == 51 {
                     migrate_v50_to_v51_embedding_kind(conn)?;
+                    continue;
+                }
+                // v52 rebuilds `reranker_models` to widen its `kind` CHECK for
+                // `local_gguf`. Unlike v51 this table has no FK-referencing
+                // children, so no FK toggling is needed — but the rebuild is kept
+                // structurally identical (own tx, verbatim columns/ids,
+                // `foreign_key_check` guard, idempotent) for parity.
+                if target == 52 {
+                    migrate_v51_to_v52_reranker_kind(conn)?;
                     continue;
                 }
 
@@ -441,6 +451,73 @@ fn migrate_v50_to_v51_embedding_kind(conn: &mut Connection) -> Result<()> {
     // Always restore FK enforcement, even on error.
     conn.pragma_update(None, "foreign_keys", true)?;
     result
+}
+
+/// RERANKER_PERF_PLAN.md Phase 2: widen `reranker_models.kind`'s CHECK to accept
+/// `local_gguf` (the GGUF/llama.cpp on-device reranker). SQLite cannot ALTER a
+/// CHECK constraint, so this is a full table rebuild (create new → copy → drop
+/// old → rename), preserving every column + every row `id` verbatim.
+///
+/// Unlike the v51 `embedding_models` rebuild, `reranker_models` has NO incoming
+/// foreign keys (the active reranker is the plain settings value
+/// `active_reranker_id`, not an FK), so `DROP TABLE` cannot cascade into any
+/// child — FK enforcement need not be toggled here. The structure is kept
+/// identical to v51 otherwise (own transaction, `foreign_key_check` guard,
+/// idempotent) for parity. No indexes/triggers exist on this table (verified
+/// across all schema_v*.sql), so none need recreating. Idempotent: bails out
+/// early if the widened CHECK is already in place.
+fn migrate_v51_to_v52_reranker_kind(conn: &mut Connection) -> Result<()> {
+    // Idempotency guard: if a prior (partial) run already rebuilt the table, the
+    // `local_gguf` token is present in the stored table SQL — skip the rebuild.
+    let already: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='reranker_models'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|sql| sql.contains("local_gguf"))
+        .unwrap_or(false);
+
+    if already {
+        conn.pragma_update(None, "user_version", 52i64)?;
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE reranker_models_new (
+            id                 INTEGER PRIMARY KEY,
+            name               TEXT NOT NULL,
+            kind               TEXT NOT NULL CHECK (kind IN ('local_onnx', 'local_gguf', 'remote_api')),
+            model_dir          TEXT,
+            api_config         TEXT,
+            execution_provider TEXT CHECK (execution_provider IN ('ane', 'coreml', 'cpu')),
+            created_at         INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+         );
+         INSERT INTO reranker_models_new (
+            id, name, kind, model_dir, api_config, execution_provider, created_at
+         )
+         SELECT
+            id, name, kind, model_dir, api_config, execution_provider, created_at
+         FROM reranker_models;
+         DROP TABLE reranker_models;
+         ALTER TABLE reranker_models_new RENAME TO reranker_models;",
+    )?;
+    // Guard: no dangling FKs introduced by the rebuild (there are none by
+    // construction, but keep the check for parity with schema_v51).
+    let violations: i64 =
+        tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
+    if violations != 0 {
+        return Err(CoreError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            Some(format!(
+                "schema_v52 rebuild left {violations} foreign-key violations"
+            )),
+        )));
+    }
+    tx.pragma_update(None, "user_version", 52i64)?;
+    tx.commit()?;
+    Ok(())
 }
 
 #[cfg(test)]
