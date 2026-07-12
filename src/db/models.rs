@@ -191,6 +191,13 @@ pub struct LlmEndpoint {
     /// classic single-shot RAG. Analogous to `is_reasoning`.
     #[serde(default)]
     pub supports_tools: bool,
+    /// Endpoint capability flag (schema_v55, TOOL_TIER_PLAN AP1): the model
+    /// behind this endpoint handles a larger/richer tool surface reliably
+    /// ("advanced tool use"). Only meaningful when `supports_tools`. Gates the
+    /// richer tool-loop mechanics (extra tools, larger text cap, no forced
+    /// first search) — default false preserves today's ("basic") behaviour.
+    #[serde(default)]
+    pub tools_advanced: bool,
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
@@ -231,6 +238,11 @@ pub struct NewLlmEndpoint {
     /// tool loop, classic single-shot RAG).
     #[serde(default)]
     pub supports_tools: bool,
+    /// schema_v55 (TOOL_TIER_PLAN AP1). `#[serde(default)]` so JSON bodies
+    /// predating the column still deserialize (= false = "basic" tool-loop
+    /// behaviour, unchanged from before this flag existed).
+    #[serde(default)]
+    pub tools_advanced: bool,
     #[serde(default = "default_true")]
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,

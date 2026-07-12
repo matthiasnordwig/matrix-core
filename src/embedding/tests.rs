@@ -366,3 +366,107 @@ fn doc_scope_restricts_vector_and_hybrid_lists() {
         .unwrap()
         .is_empty());
 }
+
+// --- score_chunks_by_ids (TOOL_CALLS_V2_PLAN AP4) ----------------------------
+
+#[test]
+fn score_chunks_by_ids_ranks_within_one_space() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "model-4d", 4);
+    // Three chunks at increasing angular distance from the query axis.
+    let ids = context_with_vectors(
+        &db,
+        "ctx",
+        m.id,
+        4,
+        &[
+            vec![1.0, 0.0, 0.0, 0.0], // identical to query -> cosine 1.0
+            vec![0.0, 1.0, 0.0, 0.0], // orthogonal -> cosine 0.0
+            vec![0.7, 0.7, 0.0, 0.0], // 45 degrees -> cosine ~0.707
+        ],
+    );
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m.id, vec![1.0, 0.0, 0.0, 0.0]);
+
+    let scores = db.score_chunks_by_ids(&ids, &qbm).unwrap();
+    assert!((scores[&ids[0]] - 1.0).abs() < 1e-6);
+    assert!(scores[&ids[1]].abs() < 1e-6);
+    assert!(scores[&ids[2]] > scores[&ids[1]] && scores[&ids[2]] < scores[&ids[0]]);
+}
+
+#[test]
+fn score_chunks_by_ids_never_compares_across_spaces() {
+    let db = Database::open_in_memory().unwrap();
+    let m4 = model(&db, "model-4d", 4);
+    let m2 = model(&db, "model-2d", 2);
+    let ids4 = context_with_vectors(&db, "ctx4", m4.id, 4, &[vec![1.0, 0.0, 0.0, 0.0]]);
+    let ids2 = context_with_vectors(&db, "ctx2", m2.id, 2, &[vec![1.0, 0.0]]);
+
+    // Query vector only provided for the 4-dim model — the 2-dim chunk's
+    // context has no entry in query_by_model, so it must score 0.0, not error
+    // or panic on a dimension mismatch.
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m4.id, vec![1.0, 0.0, 0.0, 0.0]);
+
+    let mut all_ids = ids4.clone();
+    all_ids.extend(&ids2);
+    let scores = db.score_chunks_by_ids(&all_ids, &qbm).unwrap();
+    assert!((scores[&ids4[0]] - 1.0).abs() < 1e-6);
+    assert_eq!(scores[&ids2[0]], 0.0);
+}
+
+#[test]
+fn score_chunks_by_ids_missing_vector_scores_zero() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "model-4d", 4);
+    let ctx = db
+        .create_context(&NewContext {
+            name: "ctx".into(),
+            description: None,
+            chunking_profile_id: None,
+            embedding_model_id: Some(m.id),
+            embedding_dim: Some(4),
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
+            ontology_extract_reasoning_effort: None,
+            extract_title_llm: false,
+            auto_merge_ontology: false,
+            chunking_strategy: "Semantic".into(),
+            structural_profile_id: None,
+        })
+        .unwrap();
+    let doc = db
+        .create_document(&NewDocument {
+            context_id: ctx.id,
+            name: "d.pdf".into(),
+            zip_entry: None,
+            byte_size: None,
+            page_count: None,
+            content_hash: None,
+            extracted_text: None,
+        })
+        .unwrap();
+    // A chunk with no embedding row at all (e.g. embedding still pending).
+    let chunk = db
+        .create_chunk(&NewChunk {
+            context_id: ctx.id,
+            document_id: doc.id,
+            chunk_index: 0,
+            char_start: 0,
+            char_end: 1,
+            text: "unembedded".into(),
+            signature: None,
+            is_omitted: false,
+            metadata: "{}".into(),
+        })
+        .unwrap();
+
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m.id, vec![1.0, 0.0, 0.0, 0.0]);
+    let scores = db.score_chunks_by_ids(&[chunk.id], &qbm).unwrap();
+    assert_eq!(scores[&chunk.id], 0.0);
+}

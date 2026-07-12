@@ -79,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 54);
+    assert_eq!(db.schema_version().unwrap(), 55);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -612,6 +612,7 @@ fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
         is_reasoning: false,
         supports_structured_output: false,
         supports_tools: false,
+        tools_advanced: false,
         stream_fallback: true,
         kv_quantization: None,
         cpu_threads: None,
@@ -647,6 +648,7 @@ fn llm_endpoint_stream_fallback_roundtrip() {
         is_reasoning: created.is_reasoning,
         supports_structured_output: created.supports_structured_output,
         supports_tools: created.supports_tools,
+        tools_advanced: created.tools_advanced,
         stream_fallback: false,
         kv_quantization: created.kv_quantization.clone(),
         cpu_threads: created.cpu_threads,
@@ -660,6 +662,90 @@ fn llm_endpoint_stream_fallback_roundtrip() {
     upd.stream_fallback = true;
     let re = db.update_llm_endpoint(id, &upd).unwrap();
     assert!(re.stream_fallback);
+}
+
+#[test]
+fn llm_endpoint_tools_advanced_roundtrip_and_default() {
+    let db = db();
+
+    // create with tools_advanced=true persists and reads back true.
+    let created = db
+        .create_llm_endpoint(&NewLlmEndpoint {
+            name: "advanced-ep".into(),
+            base_url: "http://localhost:11434".into(),
+            model_id: "test-model".into(),
+            api_key_ref: None,
+            timeout_ms: 30_000,
+            max_retries: 1,
+            provider: "openai".into(),
+            window_tokens: 1500,
+            context_window: 8192,
+            output_reserve_tokens: 512,
+            tpm_limit: None,
+            rpm_limit: None,
+            max_concurrency: 2,
+            is_reasoning: false,
+            supports_structured_output: false,
+            supports_tools: true,
+            tools_advanced: true,
+            stream_fallback: true,
+            kv_quantization: None,
+            cpu_threads: None,
+            reasoning_list_id: None,
+        })
+        .unwrap();
+    assert!(created.tools_advanced);
+    assert!(db.llm_endpoint(created.id).unwrap().unwrap().tools_advanced);
+
+    // update → toggle off round-trips.
+    let mut upd = NewLlmEndpoint {
+        name: created.name.clone(),
+        base_url: created.base_url.clone(),
+        model_id: created.model_id.clone(),
+        api_key_ref: created.api_key_ref.clone(),
+        timeout_ms: created.timeout_ms,
+        max_retries: created.max_retries,
+        provider: created.provider.clone(),
+        window_tokens: created.window_tokens,
+        context_window: created.context_window,
+        output_reserve_tokens: created.output_reserve_tokens,
+        tpm_limit: created.tpm_limit,
+        rpm_limit: created.rpm_limit,
+        max_concurrency: created.max_concurrency,
+        is_reasoning: created.is_reasoning,
+        supports_structured_output: created.supports_structured_output,
+        supports_tools: created.supports_tools,
+        tools_advanced: false,
+        stream_fallback: created.stream_fallback,
+        kv_quantization: created.kv_quantization.clone(),
+        cpu_threads: created.cpu_threads,
+        reasoning_list_id: created.reasoning_list_id,
+    };
+    let updated = db.update_llm_endpoint(created.id, &upd).unwrap();
+    assert!(!updated.tools_advanced);
+
+    upd.tools_advanced = true;
+    let re = db.update_llm_endpoint(created.id, &upd).unwrap();
+    assert!(re.tools_advanced);
+
+    // Default false for a row that predates the column: simulate the ALTER
+    // TABLE ... DEFAULT 0 migration by inserting a row directly via SQL
+    // without specifying `tools_advanced`, mirroring what happens to an
+    // existing `llm_endpoints` row when schema_v55 runs.
+    db.conn
+        .execute(
+            "INSERT INTO llm_endpoints
+                (name, base_url, model_id, timeout_ms, max_retries, provider,
+                 window_tokens, context_window, output_reserve_tokens, max_concurrency,
+                 is_reasoning, supports_structured_output, supports_tools, stream_fallback)
+             VALUES ('legacy-ep', 'http://localhost:11434', 'legacy-model', 30000, 1, 'openai',
+                     1500, 8192, 512, 2, 0, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+    let legacy_id = db.conn.last_insert_rowid();
+    let legacy = db.llm_endpoint(legacy_id).unwrap().unwrap();
+    assert!(!legacy.tools_advanced);
 }
 
 #[test]
@@ -823,6 +909,7 @@ fn deleting_a_reasoning_list_nulls_endpoint_fk() {
             is_reasoning: true,
             supports_structured_output: false,
             supports_tools: false,
+            tools_advanced: false,
             stream_fallback: true,
             kv_quantization: None,
             cpu_threads: None,

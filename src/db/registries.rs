@@ -56,6 +56,7 @@ pub(super) fn row_to_llm_endpoint(row: &Row<'_>) -> rusqlite::Result<LlmEndpoint
         is_reasoning: row.get("is_reasoning")?,
         supports_structured_output: row.get("supports_structured_output")?,
         supports_tools: row.get("supports_tools")?,
+        tools_advanced: row.get("tools_advanced")?,
         stream_fallback: row.get("stream_fallback")?,
         kv_quantization: row.get("kv_quantization")?,
         cpu_threads: row.get("cpu_threads")?,
@@ -245,8 +246,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO llm_endpoints
                 (name, base_url, model_id, api_key_ref, timeout_ms, max_retries, provider,
-                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency, is_reasoning, supports_structured_output, supports_tools, stream_fallback, kv_quantization, cpu_threads, reasoning_list_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                 window_tokens, context_window, output_reserve_tokens, tpm_limit, rpm_limit, max_concurrency, is_reasoning, supports_structured_output, supports_tools, tools_advanced, stream_fallback, kv_quantization, cpu_threads, reasoning_list_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 e.name,
                 e.base_url,
@@ -264,6 +265,7 @@ impl Database {
                 e.is_reasoning,
                 e.supports_structured_output,
                 e.supports_tools,
+                e.tools_advanced,
                 e.stream_fallback,
                 e.kv_quantization,
                 e.cpu_threads,
@@ -302,7 +304,7 @@ impl Database {
                 timeout_ms = ?6, max_retries = ?7, provider = ?8, window_tokens = ?9,
                 context_window = ?10, output_reserve_tokens = ?11, tpm_limit = ?12,
                 rpm_limit = ?13, max_concurrency = ?14, is_reasoning = ?15, supports_structured_output = ?16,
-                supports_tools = ?17, stream_fallback = ?18, kv_quantization = ?19, cpu_threads = ?20, reasoning_list_id = ?21
+                supports_tools = ?17, tools_advanced = ?18, stream_fallback = ?19, kv_quantization = ?20, cpu_threads = ?21, reasoning_list_id = ?22
              WHERE id = ?1",
             params![
                 id,
@@ -322,6 +324,7 @@ impl Database {
                 e.is_reasoning,
                 e.supports_structured_output,
                 e.supports_tools,
+                e.tools_advanced,
                 e.stream_fallback,
                 e.kv_quantization,
                 e.cpu_threads,
