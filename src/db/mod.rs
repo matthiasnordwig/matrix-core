@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension};
 pub mod models;
 
 mod chat_sessions;
-mod chunks;
+pub mod chunks;
 pub mod chunk_refs;
 mod contexts;
 pub mod embeddings;

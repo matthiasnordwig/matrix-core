@@ -6,6 +6,32 @@ use rusqlite::{params, OptionalExtension, Row};
 use super::models::*;
 use super::{Database, Result};
 
+/// Result of [`Database::complete_section_chunks`]: the contiguous run of
+/// same-section continuation chunks found (in `chunk_index` order), plus
+/// where the section goes on beyond what was returned.
+#[derive(Debug, Clone)]
+pub struct SectionContinuation {
+    pub chunks: Vec<Chunk>,
+    /// Chunk id of the NEXT same-section chunk beyond the cap (None if the
+    /// section ends within the cap).
+    pub continues_at: Option<i64>,
+}
+
+/// The chunk's structural `section` (JSON field `section` in `metadata`,
+/// written by the structural chunker — see `chunking/structural.rs`), if
+/// present and non-empty. `metadata` is a TEXT column holding a JSON object;
+/// a malformed/non-object value is treated the same as "no section" (no
+/// guessing at continuation).
+fn chunk_section(c: &Chunk) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(&c.metadata).ok()?;
+    let section = value.get("section")?.as_str()?;
+    if section.is_empty() {
+        None
+    } else {
+        Some(section.to_string())
+    }
+}
+
 fn row_to_prechunk(row: &Row<'_>) -> rusqlite::Result<Prechunk> {
     Ok(Prechunk {
         id: row.get("id")?,
@@ -236,6 +262,72 @@ impl Database {
             .execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?)
     }
 
+    /// Follow a chunk's structural `section` (the chunker-written
+    /// `metadata.section` JSON field, e.g. `"Artikel 395 (1)"`) forward through
+    /// contiguous same-document, same-section chunks — the fix for
+    /// fragmented §§/Artikel that the structural chunker splits across
+    /// multiple staging chunks.
+    ///
+    /// Starting from `chunk_id`, walks `chunk_index + 1, + 2, …` of the same
+    /// document as long as each next chunk exists, is not omitted, and its
+    /// `metadata.section` is *exactly* (string-equal) the start chunk's
+    /// non-empty section — a gap (missing index, omitted, or a different/empty
+    /// section) ends the run. `max_extra` caps how many continuation chunks are
+    /// returned (`0` is legal: no chunks, but `continues_at` is still reported).
+    /// If the section still matches beyond the cap, that chunk's id is returned
+    /// as `continues_at` so a caller can cheaply learn "this section continues"
+    /// without paying for the extra chunks.
+    ///
+    /// A missing/empty starting section returns an empty result outright — no
+    /// guessing at continuation for unstructured content.
+    pub fn complete_section_chunks(
+        &self,
+        chunk_id: i64,
+        max_extra: usize,
+    ) -> Result<SectionContinuation> {
+        let empty = SectionContinuation { chunks: Vec::new(), continues_at: None };
+        let Some(start) = self.chunk(chunk_id)? else {
+            return Ok(empty);
+        };
+        let Some(section) = chunk_section(&start) else {
+            return Ok(empty);
+        };
+
+        let mut chunks = Vec::new();
+        let mut next_index = start.chunk_index + 1;
+        loop {
+            let Some(candidate) = self.chunk_by_document_index(start.document_id, next_index)? else {
+                break;
+            };
+            if candidate.is_omitted {
+                break;
+            }
+            match chunk_section(&candidate) {
+                Some(s) if s == section => {}
+                _ => break,
+            }
+            if chunks.len() >= max_extra {
+                return Ok(SectionContinuation { chunks, continues_at: Some(candidate.id) });
+            }
+            chunks.push(candidate);
+            next_index += 1;
+        }
+        Ok(SectionContinuation { chunks, continues_at: None })
+    }
+
+    /// Fetch a chunk by (document_id, chunk_index) — the index is unique per
+    /// document (`staging_chunk_index_is_unique`), so this is a point lookup.
+    fn chunk_by_document_index(&self, document_id: i64, chunk_index: i64) -> Result<Option<Chunk>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT * FROM chunks WHERE document_id = ?1 AND chunk_index = ?2",
+                params![document_id, chunk_index],
+                row_to_chunk,
+            )
+            .optional()?)
+    }
+
     pub fn list_chunks_by_page(&self, context_id: Option<i64>, page_number: i64) -> Result<Vec<Chunk>> {
         let sql = match context_id {
             Some(_) => "SELECT * FROM chunks WHERE context_id = ?1 AND is_omitted = 0 AND (CAST(json_extract(metadata, '$.page') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.Page') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.seite') AS INTEGER) = ?2 OR CAST(json_extract(metadata, '$.Seite') AS INTEGER) = ?2) ORDER BY document_id, chunk_index",
@@ -249,3 +341,7 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
+
+#[cfg(test)]
+#[path = "chunks_tests.rs"]
+mod chunks_tests;
