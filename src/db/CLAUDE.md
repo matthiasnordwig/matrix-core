@@ -24,6 +24,13 @@ gleicher non-empty `metadata.section`, gegen Fragmentierung mehrteiliger
 Option<String>` (parst `metadata` als JSON, non-empty `section` oder None) ist
 `pub(crate)` und wird auch von `chunk_refs.rs` genutzt. Tests: `db/chunks_tests.rs`.
 
+`ref_abbreviations.rs` (`schema_v56`, TOOL_TIER Teil B): CRUD der
+Kürzel-/Langform-Registry für den refs-Parser. `Database::ref_lexicon()`
+(in chunk_refs.rs) baut daraus das `RefLexicon` (enabled-Zeilen; leere
+Tabelle → builtin-Fallback). ACHTUNG: nicht-leere Registry ERSETZT das
+builtin-Lexikon — Seeds müssen alle builtin-Kürzel abdecken
+(`refs::builtin_seed_entries()`). Tests: `ref_abbreviations_tests.rs`.
+
 `chunk_refs.rs` (`schema_v49`, AP2): Normverweis-Kanten `chunk_refs(chunk_id,
 context_id, ref_key)` (Index `(context_id, ref_key)`, FK-Cascade auf chunks+contexts).
 Ableitung aus `chunks.text` über `crate::refs::parse_refs`: `set_chunk_refs`
