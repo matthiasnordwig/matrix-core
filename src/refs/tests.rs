@@ -266,3 +266,53 @@ fn eu_long_form_negative_cases() {
     let ks3 = keys("Artikel 30 Verordnung (EU) Nr. 575/2013");
     assert!(ks3.iter().all(|r| !r.contains(":Art.")), "{ks3:?}");
 }
+
+// --- EU long form with an Absatz/Satz/Buchstabe insert (ISSUES, 2026-07-12) --
+// "Artikel 92 Absatz 1 Buchstabe c der Verordnung (EU) Nr. 575/2013" — a
+// closed sub-part grammar between the article number and the EU long form
+// must not break the recognition window (real KWG-Korpus phrasing).
+
+#[test]
+fn eu_long_form_with_subpart_insert_positive() {
+    // The exact real-corpus KWG-chunk sentence from the ISSUES entry.
+    let ks = keyset(
+        "3. Artikel 92 Absatz 1 Buchstabe c der Verordnung (EU) Nr. 575/2013 und die \
+         zusätzliche Eigenmittelanforderung",
+    );
+    assert!(ks.contains(&"EU:2013/575:Art.92".to_string()), "{ks:?}");
+
+    // Plain Absatz insert.
+    let ks2 = keyset("Artikel 395 Absatz 1 der Verordnung (EU) Nr. 575/2013");
+    assert!(ks2.contains(&"EU:2013/575:Art.395".to_string()), "{ks2:?}");
+
+    // Enumeration inside the insert ("Absatz 1 und 2").
+    let ks3 = keyset("Artikel 5 Absatz 1 und 2 der Verordnung (EU) 2022/2554");
+    assert!(ks3.contains(&"EU:2022/2554:Art.5".to_string()), "{ks3:?}");
+
+    // Two chained inserts ("Absatz 1 Nummer 25").
+    let ks4 = keyset("Artikel 4 Absatz 1 Nummer 25 der Verordnung (EU) Nr. 575/2013");
+    assert!(ks4.contains(&"EU:2013/575:Art.4".to_string()), "{ks4:?}");
+}
+
+#[test]
+fn eu_long_form_with_subpart_insert_negative() {
+    // Free text between the article and the regulation (not a recognized
+    // sub-part keyword) must still break the window — only the bare
+    // EU-regulation ref (from the separate EU_REG_RE pass) may appear.
+    let ks = keys("Artikel 5 gilt entsprechend, wie in der Verordnung (EU) 2016/679 beschrieben");
+    assert!(
+        ks.iter().all(|r| !r.contains(":Art.")),
+        "free text before the regulation must not bind: {ks:?}"
+    );
+    assert!(ks.contains(&"EU:2016/679".to_string()), "plain regulation ref still emitted");
+
+    // A non-sub-part determiner-like phrase ("des Gesetzes über die …") must
+    // not bind either, even though a Verordnung (EU) follows later.
+    let ks2 = keys("Artikel 12 des Gesetzes über die Verordnung (EU) Nr. 575/2013");
+    assert!(ks2.iter().all(|r| !r.contains(":Art.")), "{ks2:?}");
+
+    // Existing anaphoric/date negatives stay green (regression guard for the
+    // sub-part grammar, which must remain closed).
+    assert!(keys("Art. 28 dieses Übereinkommens").is_empty());
+    assert!(keys("vom 28. Mai 2022").is_empty());
+}

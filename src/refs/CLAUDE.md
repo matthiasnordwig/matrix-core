@@ -7,8 +7,10 @@ Deterministischer (kein LLM, kein Netz) Parser für Normverweise:
 `parse_refs(text) -> Vec<NormRef>`. Normalisierte `ref_key`s: `KWG:§25a`,
 `GWG:§6`, `DORA:Art.28`, `EU:2022/2554`, `MARISK:AT4.3.2`, `MARISK:BTO1.1`,
 sowie EU-gebundene Artikel `EU:2013/575:Art.395` (Langform „Artikel 395 der
-Verordnung (EU) Nr. 575/2013", enges Fenster). Bereiche (`§§ 13 bis 13c`,
-`Artikel 387 bis 410`) expandieren kontrolliert (Cap 30, darüber nur
+Verordnung (EU) Nr. 575/2013", enges Fenster; seit 2026-07-12 überstehen
+geschlossene Einschübe — `Absatz 1 Buchstabe c` etc., von `ARTICLE_RE`
+konsumiert — die Bindung, Freitext bricht sie weiter). Bereiche (`§§ 13 bis
+13c`, `Artikel 387 bis 410`) expandieren kontrolliert (Cap 30, darüber nur
 Endpunkte) — s. HANDBUCH.md-Abschnitt „refs/".
 
 **Leitregel: Präzision vor Recall.** Ein Falsch-Positiv, der auf den falschen

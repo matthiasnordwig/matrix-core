@@ -461,6 +461,35 @@ fn pick_definition_site_section_wins_against_dense_mention() {
 }
 
 #[test]
+fn pick_definition_site_earliest_def_site_beats_ref_dense_later_absatz() {
+    // Since the metadata.section check, a multi-chunk article yields SEVERAL
+    // def-shaped candidates (one per Absatz chunk). The article's opening
+    // chunk must win even when a later Absatz is far more ref-dense (measured
+    // 2026-07-12: Art.395 resolved to the "(2)" chunk — it cites EBA
+    // regulations — instead of the "(1)" opening that the section-completion
+    // consumer needs as its entry point).
+    let candidates = vec![
+        chunk_with_section(
+            1,
+            None,
+            "(1) Ein Institut hält die Großkreditobergrenze ein.",
+            Some("Artikel 395 (1)"),
+        ),
+        chunk_with_section(
+            2,
+            None,
+            "(2) Die EBA arbeitet gemäß Artikel 16 der Verordnung (EU) Nr. 1093/2010 …",
+            Some("Artikel 395 (2)"),
+        ),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 0);
+    density.insert(2, 7);
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    assert_eq!(picked.id, 1, "earliest def site must beat a ref-dense later Absatz");
+}
+
+#[test]
 fn pick_definition_site_section_word_boundary() {
     // section "Artikel 39" must NOT qualify for Art.395 (prefix collision);
     // section "Artikel 395 (1)" must qualify (right boundary is a space).

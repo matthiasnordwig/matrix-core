@@ -95,13 +95,35 @@ static PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Kürzel) does not cause the whole ref to be dropped. `Artikels`/`Artikeln`
 /// cover the genitive/dative forms ("des Artikels 92", "in den Artikeln 387
 /// bis 410").
+///
+/// The sub-part group (Abs./Satz/Nr./Buchstabe/…) is deliberately consumed
+/// *inside* this regex, not left for `EU_AFTER_ARTICLE_RE`'s tail window
+/// (Befund 2026-07-12, ISSUES.md): "Artikel 92 **Absatz 1 Buchstabe c** der
+/// Verordnung (EU) Nr. 575/2013" (real KWG-Korpus text) has an Absatz/
+/// Buchstabe insert between the article number and the EU long form. Without
+/// consuming it here, the greedy `law` capture below grabs "Buchstabe" as a
+/// fake Kürzel, `is_known_law_abbrev` rejects it, and the tail handed to
+/// `eu_regulation_after` starts at " c der Verordnung …" instead of "der
+/// Verordnung …" — missing the binding entirely (only the bare `EU:2013/575`
+/// key survives, from the separate EU_REG_RE pass). The sub-part alternation
+/// now also covers Unterabsatz/UAbs./Halbsatz/Buchstabe/Buchst., and a single
+/// insert may itself be a short enumeration ("Absatz 1 und 2", "Satz 1 bis 3",
+/// "Buchstabe c)") — but the grammar stays closed (fixed keyword list, short
+/// token values only): any other free text still breaks the window, so
+/// "Artikel 5 gilt entsprechend, wie in der Verordnung (EU) 2016/679…" still
+/// does NOT bind (precision over recall, see refs/CLAUDE.md).
 static ARTICLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?x)
         \bArt(?:ikels|ikeln|ikel|\.|\b)\s*
         (?P<num>\d+)(?P<letter>[a-z])?
         (?:\s*(?:bis|-|–)\s*(?P<end_num>\d+)(?P<end_letter>[a-z])?)?  # … bis 410
-        (?:\s*(?:Abs(?:atz|\.)?|Satz|Nr\.?|Nummer)\s*\d+[a-z]?)*
+        (?:                                                            # sub-part inserts
+            \s*,?\s*
+            (?:Abs(?:atz|\.)?|Unterabs(?:atz|\.)?|UAbs\.?|Satz|Halbsatz|Nr\.?|Nummer|Buchstabe|Buchst\.?)
+            \s*\d*[a-z]?\)?                                            # value: 1, 2a, c, c)
+            (?:\s*(?:,|und|oder|bis)\s*\d*[a-z]?\)?)*                  # short enumeration
+        )*
         \s*
         (?P<law>[A-ZÄÖÜ][A-Za-zÄÖÜäöü.\-]{1,24})?
         ",

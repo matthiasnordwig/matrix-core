@@ -378,11 +378,12 @@ fn kuerzel_conflicts(text: &str, surf: &str, own: &str) -> bool {
 }
 
 /// Pure ranking: choose the best target chunk for a ref among `candidates`.
-/// Prefers a definition site (signature, text-start, or `metadata.section`
-/// carries the ref surface), then the most ref-dense, then the earliest
-/// (candidates arrive ordered by document/chunk_index, so the first is
-/// earliest). `density[chunk_id]` is the number of outgoing refs of that
-/// chunk. `candidates` is non-empty.
+/// The EARLIEST definition site wins (signature, text-start, or
+/// `metadata.section` carries the ref surface; candidates arrive ordered by
+/// document/chunk_index, so the first def site is the article's opening
+/// chunk, not a citation-heavy later Absatz). Without any def site: the most
+/// ref-dense mention, ties to the earliest. `density[chunk_id]` is the number
+/// of outgoing refs of that chunk. `candidates` is non-empty.
 pub(crate) fn pick_definition_site(
     candidates: Vec<Chunk>,
     ref_key: &str,
@@ -438,17 +439,25 @@ pub(crate) fn pick_definition_site(
         false
     };
 
-    // Score: (definition-site?, ref-density). Higher is better; ties fall to the
-    // earliest candidate (stable because we keep the first max we encounter).
+    // Among DEFINITION SITES the earliest wins outright — since the
+    // metadata.section check (2026-07-12) a multi-chunk article yields several
+    // def-shaped candidates (one per Absatz chunk, all sharing "Artikel N …"
+    // sections); ref-density must not pick a citation-heavy later Absatz over
+    // the article's opening chunk (measured: EU:2013/575:Art.395 resolved to
+    // the "(2)" chunk because it cites EBA regulations, instead of the "(1)"
+    // opening the section-completion consumer needs). Candidates arrive
+    // ordered by document/chunk_index, so the first def site IS the earliest.
+    // Without any def site, fall back to the most ref-dense mention, ties to
+    // the earliest (unchanged).
+    if let Some(pos) = candidates.iter().position(is_def_site) {
+        return candidates.into_iter().nth(pos).expect("pos in range");
+    }
     let mut best_idx = 0usize;
-    let mut best_key = (
-        is_def_site(&candidates[0]),
-        density.get(&candidates[0].id).copied().unwrap_or(0),
-    );
+    let mut best_density = density.get(&candidates[0].id).copied().unwrap_or(0);
     for (i, c) in candidates.iter().enumerate().skip(1) {
-        let key = (is_def_site(c), density.get(&c.id).copied().unwrap_or(0));
-        if key > best_key {
-            best_key = key;
+        let d = density.get(&c.id).copied().unwrap_or(0);
+        if d > best_density {
+            best_density = d;
             best_idx = i;
         }
     }
