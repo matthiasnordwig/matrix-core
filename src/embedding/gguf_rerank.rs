@@ -135,9 +135,17 @@ mod imp {
             let backend = backend()?;
             // Rank pooling context: embeddings ON, pooling = Rank so llama.cpp
             // runs the cls head and stores the single rank logit per sequence.
+            // n_ubatch (physical micro-batch) must cover a full pair: `encode()`
+            // hard-asserts `n_ubatch >= n_tokens`. Its default is 512, so a pair
+            // longer than 512 tokens (possible up to MAX_SEQ_LEN=1024 when the
+            // caller feeds long/uncapped doc text) would abort the process
+            // instead of scoring. Production caps doc text to 512 chars
+            // (RERANK_SNIPPET_CAP_CHARS) so pairs stay short, but sizing ubatch
+            // to n_ctx makes long pairs safe too. Mirrors `gguf_embed.rs`.
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(self.n_ctx))
                 .with_n_batch(self.n_ctx)
+                .with_n_ubatch(self.n_ctx)
                 .with_embeddings(true)
                 .with_pooling_type(LlamaPoolingType::Rank);
             let mut ctx = self

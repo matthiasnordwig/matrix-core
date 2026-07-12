@@ -134,9 +134,17 @@ mod imp {
             // Non-causal encoder with the model's declared pooling (mean for
             // jina-de, `pooling_type=1` in GGUF metadata). Batch large enough for
             // one long sequence.
+            // n_ubatch (the physical micro-batch) must also cover a full
+            // sequence: `encode()` hard-asserts `n_ubatch >= n_tokens`
+            // (llama-context.cpp: "encoder requires n_ubatch >= n_tokens").
+            // Its default is 512, so without this a chunk tokenizing to >512
+            // tokens aborts the process (SIGABRT) instead of embedding. We encode
+            // exactly one sequence per call, so sizing both batch and ubatch to
+            // n_ctx is correct and keeps long norm chunks working.
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(self.n_ctx))
                 .with_n_batch(self.n_ctx)
+                .with_n_ubatch(self.n_ctx)
                 .with_embeddings(true)
                 .with_pooling_type(LlamaPoolingType::Mean);
             let mut ctx = self
