@@ -21,8 +21,13 @@ context_id, ref_key)` (Index `(context_id, ref_key)`, FK-Cascade auf chunks+cont
 Ableitung aus `chunks.text` über `crate::refs::parse_refs`: `set_chunk_refs`
 (pro Chunk, delete-then-insert = idempotent), `rebuild_chunk_refs(context_id)`
 (kontextweit, idempotent). Auflösung `resolve_ref_target` bevorzugt die
-Definitions-Stelle (Signatur trägt den Ref bzw. Text beginnt damit), sonst
-ref-dichtester/frühester Erwähnungs-Chunk (`pick_definition_site`, reine Fn).
+Definitions-Stelle (Signatur trägt den Ref wortgrenzen-genau bzw. Text beginnt
+damit; Kürzel-Konflikt disqualifiziert), sonst ref-dichtester/frühester
+Erwähnungs-Chunk (`pick_definition_site`, reine Fn). EU-gebundene Artikel-Keys
+(`EU:2013/575:Art.395`) haben eine zweite Kandidatenquelle
+(`eu_article_def_candidates`): definitions-förmige Chunks aus dem Dokument der
+Verordnung selbst (identifiziert über frühe Chunks mit dem Basis-Key)
+verdrängen Zitier-Erwähnungen — Details HANDBUCH.md §1.2 `chunk_refs.rs`.
 Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
 ≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
 konsumiert.

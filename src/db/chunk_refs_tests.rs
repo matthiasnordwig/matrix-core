@@ -151,6 +151,94 @@ fn resolve_none_when_unknown_ref() {
     assert!(db.resolve_ref_target(&[ctx], "GWG:§6").unwrap().is_none());
 }
 
+// --- EU-bound article resolution (EU:YYYY/NNNN:Art.X) ---
+
+fn mk_doc(db: &Database, ctx: i64, name: &str) -> i64 {
+    db.create_document(&NewDocument {
+        context_id: ctx,
+        name: name.into(),
+        zip_entry: None,
+        byte_size: None,
+        page_count: None,
+        content_hash: None,
+        extracted_text: None,
+    })
+    .unwrap()
+    .id
+}
+
+/// Create a chunk AND derive its refs (mirrors ingest+rebuild).
+fn mk_chunk_reffed(db: &Database, ctx: i64, doc: i64, idx: i64, sig: Option<&str>, text: &str) -> i64 {
+    let id = mk_chunk(db, ctx, doc, idx, sig, text);
+    db.set_chunk_refs(id, ctx, text).unwrap();
+    id
+}
+
+#[test]
+fn resolve_eu_bound_article_to_regulation_def_chunk() {
+    let db = db();
+    let (ctx, law_doc) = seed(&db);
+    // The citing law: a chunk with the EU long form — it CARRIES the compound
+    // key EU:2013/575:Art.395 (mention candidate).
+    let citing = mk_chunk_reffed(
+        &db, ctx, law_doc, 0, None,
+        "Es gelten die Artikel 387 bis 410 der Verordnung (EU) Nr. 575/2013 entsprechend.",
+    );
+    // The regulation document itself: early chunk carries the base EU ref
+    // (title page), a later chunk IS the article definition (text starts with
+    // "Artikel 395" — inside the regulation there is no Kürzel).
+    let reg_doc = mk_doc(&db, ctx, "crr.pdf");
+    mk_chunk_reffed(
+        &db, ctx, reg_doc, 0, None,
+        "Verordnung (EU) Nr. 575/2013 des Europäischen Parlaments und des Rates",
+    );
+    let def = mk_chunk_reffed(
+        &db, ctx, reg_doc, 7, None,
+        "Artikel 395 Obergrenze für Großkredite (1) Ein Institut darf ... 25 % ...",
+    );
+    // Prefix-collision guard inside the regulation: Artikel 395a must not win.
+    mk_chunk_reffed(&db, ctx, reg_doc, 8, None, "Artikel 395a Sonderfall ...");
+
+    let target = db.resolve_ref_target(&[ctx], "EU:2013/575:Art.395").unwrap().unwrap();
+    assert_eq!(
+        target.id, def,
+        "EU-bound article must resolve to the regulation's own definition chunk"
+    );
+    assert_ne!(target.id, citing, "the citing chunk is a mention, not the definition");
+}
+
+#[test]
+fn resolve_eu_bound_article_mention_only_falls_back_to_carrier() {
+    let db = db();
+    let (ctx, law_doc) = seed(&db);
+    // Only a citing chunk exists (regulation not ingested): the compound-key
+    // carrier itself is the best available target.
+    let citing = mk_chunk_reffed(
+        &db, ctx, law_doc, 0, None,
+        "Nach Artikel 92 der Verordnung (EU) Nr. 575/2013 gilt ...",
+    );
+    let target = db.resolve_ref_target(&[ctx], "EU:2013/575:Art.92").unwrap().unwrap();
+    assert_eq!(target.id, citing);
+}
+
+#[test]
+fn resolve_eu_bound_article_ignores_mere_citing_documents() {
+    let db = db();
+    let (ctx, law_doc) = seed(&db);
+    // A law document that cites the regulation ONLY in its body (chunk_index
+    // > 2) is not "the regulation itself": its "Artikel 92 …"-starting chunk
+    // must NOT be offered as the definition site.
+    mk_chunk_reffed(&db, ctx, law_doc, 0, None, "Kreditwesengesetz — Inhaltsübersicht");
+    mk_chunk_reffed(
+        &db, ctx, law_doc, 5, None,
+        "Begriffe im Sinne der Verordnung (EU) Nr. 575/2013 sind ...",
+    );
+    mk_chunk_reffed(&db, ctx, law_doc, 6, None, "Artikel 92 findet keine Anwendung auf ...");
+    // No chunk carries the compound key, and no document qualifies as the
+    // regulation → the ref does not resolve at all (precision over recall).
+    assert!(db.resolve_ref_target(&[ctx], "EU:2013/575:Art.92").unwrap().is_none());
+}
+
 // --- pure pick_definition_site ---
 
 fn chunk(id: i64, sig: Option<&str>, text: &str) -> Chunk {
@@ -200,6 +288,78 @@ fn pick_definition_site_falls_back_to_density_then_earliest() {
     d2.insert(3, 2);
     d2.insert(4, 2);
     assert_eq!(pick_definition_site(candidates, "KWG:§25a", &d2).id, 3);
+}
+
+#[test]
+fn pick_definition_site_word_boundary_no_prefix_collision() {
+    // A `§ 25a` signature must NOT satisfy a `KWG:§25` ref (prefix collision).
+    // Candidate 1 is a §25a definition (should NOT count as §25's def-site);
+    // candidate 2 is the real §25 mention. §25's target must be candidate 2.
+    let candidates = vec![
+        chunk(1, Some("§ 25a KWG — Besondere Pflichten"), "§ 25a KWG regelt ..."),
+        chunk(2, Some("§ 25 KWG — Meldungen"), "§ 25 KWG regelt ..."),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 9); // denser, but not a def-site for §25 (prefix collision)
+    density.insert(2, 1);
+    let picked = pick_definition_site(candidates, "KWG:§25", &density);
+    assert_eq!(picked.id, 2, "§25 must not resolve to the §25a definition chunk");
+
+    // MaRisk analogue: `AT 4.3` must not match `AT 4.3.2`.
+    let cands = vec![
+        chunk(3, Some("AT 4.3.2 Datenmanagement"), "AT 4.3.2 ..."),
+        chunk(4, Some("AT 4.3 Besondere Anforderungen"), "AT 4.3 ..."),
+    ];
+    let mut d = HashMap::new();
+    d.insert(3, 9);
+    d.insert(4, 1);
+    assert_eq!(pick_definition_site(cands, "MARISK:AT4.3", &d).id, 4);
+}
+
+#[test]
+fn pick_definition_site_kuerzel_must_match() {
+    // A `§ 25a VAG` signature must NOT satisfy a `KWG:§25a` ref — different act.
+    // Candidate 1 is the VAG def (wrong law, denser); candidate 2 the real KWG
+    // definition site. The KWG ref must resolve to candidate 2 despite lower
+    // density, because the VAG chunk is disqualified by the Kürzel conflict.
+    let candidates = vec![
+        chunk(1, Some("§ 25a VAG — Geschäftsorganisation"), "§ 25a VAG regelt ..."),
+        chunk(2, Some("§ 25a KWG — Besondere organisatorische Pflichten"), "§ 25a KWG regelt ..."),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 9);
+    density.insert(2, 1);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    assert_eq!(picked.id, 2, "wrong-Kürzel (VAG) def must not win for a KWG ref");
+
+    // A chunk of the same law WITHOUT the Kürzel in its signature stays a valid
+    // def-site (the common in-document case): `§ 25a` alone satisfies `KWG:§25a`.
+    let cands = vec![
+        chunk(3, None, "irrelevant mention § 25a"),
+        chunk(4, Some("§ 25a Besondere organisatorische Pflichten"), "§ 25a regelt ..."),
+    ];
+    let mut d = HashMap::new();
+    d.insert(3, 5);
+    d.insert(4, 1);
+    assert_eq!(
+        pick_definition_site(cands, "KWG:§25a", &d).id,
+        4,
+        "same-law chunk without explicit Kürzel is still the def-site"
+    );
+}
+
+#[test]
+fn pick_definition_site_eu_legacy_surface() {
+    // Ref key `EU:2013/575` must find the legacy prose form "Nr. 575/2013".
+    let candidates = vec![
+        chunk(1, None, "eine allgemeine Erwähnung ohne Nummer"),
+        chunk(2, Some("Verordnung (EU) Nr. 575/2013 (CRR)"), "Verordnung (EU) Nr. 575/2013 ..."),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 5);
+    density.insert(2, 1);
+    let picked = pick_definition_site(candidates, "EU:2013/575", &density);
+    assert_eq!(picked.id, 2, "EU legacy order 575/2013 must be recognized as def-site");
 }
 
 // --- pure expand_with_refs caps ---

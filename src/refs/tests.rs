@@ -115,3 +115,154 @@ fn spans_point_at_the_match() {
     assert!(matched.contains("25a"), "span {matched:?}");
     assert!(matched.contains("KWG"), "span {matched:?}");
 }
+
+// --- Range expansion (§§ X bis Y, Artikel X bis Y) ---------------------------
+
+/// Collect keys as a sorted set for order-independent comparison.
+fn keyset(text: &str) -> Vec<String> {
+    let mut k = keys(text);
+    k.sort();
+    k.dedup();
+    k
+}
+
+#[test]
+fn range_expansion_positive() {
+    // (text, expected exact set of keys)
+    let cases: &[(&str, &[&str])] = &[
+        // Same stem, letter suffixes → §13, §13a, §13b, §13c.
+        ("§§ 13 bis 13c KWG", &["KWG:§13", "KWG:§13a", "KWG:§13b", "KWG:§13c"]),
+        // Hyphen / en-dash as range separators behave identically.
+        ("§§ 13-13c KWG", &["KWG:§13", "KWG:§13a", "KWG:§13b", "KWG:§13c"]),
+        ("§§ 13–13c KWG", &["KWG:§13", "KWG:§13a", "KWG:§13b", "KWG:§13c"]),
+        // Pure numeric paragraph range → §17 §18 … §22.
+        (
+            "§§ 17 bis 22 KWG",
+            &["KWG:§17", "KWG:§18", "KWG:§19", "KWG:§20", "KWG:§21", "KWG:§22"],
+        ),
+        // Article range with an explicit Kürzel → full expansion (3 articles).
+        ("Artikel 90 bis 92 CRR", &["CRR:Art.90", "CRR:Art.91", "CRR:Art.92"]),
+        // Start already carries a letter: §10c bis 10i → c..i on stem 10.
+        (
+            "§§ 10c bis 10i KWG",
+            &[
+                "KWG:§10c", "KWG:§10d", "KWG:§10e", "KWG:§10f", "KWG:§10g", "KWG:§10h",
+                "KWG:§10i",
+            ],
+        ),
+    ];
+    for (text, expected) in cases {
+        let got = keyset(text);
+        let mut exp: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        exp.sort();
+        assert_eq!(&got, &exp, "for {text:?}");
+    }
+}
+
+#[test]
+fn range_golden_387_to_410_contains_395() {
+    // The KfW→CRR golden case: Art. 387–410 (24 articles, ≤ cap) must fully
+    // expand and include Art. 395. Needs a recognized Kürzel to emit at all.
+    let ks = keyset("Artikel 387 bis 410 CRR entsprechend");
+    assert_eq!(ks.len(), 410 - 387 + 1, "24 articles expected, got {ks:?}");
+    assert!(ks.contains(&"CRR:Art.395".to_string()), "must contain Art.395: {ks:?}");
+    assert!(ks.contains(&"CRR:Art.387".to_string()));
+    assert!(ks.contains(&"CRR:Art.410".to_string()));
+}
+
+#[test]
+fn range_over_cap_yields_only_endpoints() {
+    // "Artikel 1 bis 521 CRR" — 521 articles, way over the 30 cap → only the two
+    // endpoints, never a regulation-wide ref cloud.
+    let ks = keyset("Artikel 1 bis 521 CRR");
+    assert_eq!(ks, vec!["CRR:Art.1".to_string(), "CRR:Art.521".to_string()]);
+
+    // A paragraph range over the cap likewise collapses to its endpoints.
+    let pk = keyset("§§ 1 bis 100 KWG");
+    assert_eq!(pk, vec!["KWG:§1".to_string(), "KWG:§100".to_string()]);
+}
+
+#[test]
+fn range_without_kuerzel_still_emits_nothing() {
+    // Precision guard: a range with no recognized law abbreviation after it must
+    // NOT leak refs (this is the "bis is not a Kürzel" drop case — the fix keeps
+    // the drop when there is truly no act, only stops it from breaking parsing).
+    assert!(keys("§§ 13 bis 13c des Vertrags").is_empty());
+    assert!(keys("Artikel 387 bis 410 der Anlage").is_empty());
+    // Anaphoric article range must not match either.
+    assert!(keys("Artikel 5 bis 9 dieses Übereinkommens").is_empty());
+}
+
+#[test]
+fn range_exact_count_no_over_expansion() {
+    // §§ 13 bis 13c → exactly 4 refs (not 5, not the whole KWG).
+    assert_eq!(keyset("§§ 13 bis 13c KWG").len(), 4);
+}
+
+// --- EU long form: "Artikel N [bis M] der Verordnung (EU) Nr. X/Y" ----------
+
+#[test]
+fn eu_long_form_range_golden_387_410() {
+    // The exact ISSUES golden string: 24 articles, fully expanded, bound to the
+    // regulation number → must contain Art.395. The plain EU-regulation ref is
+    // emitted alongside (the chunk references the regulation as a whole too).
+    let ks = keyset("Artikel 387 bis 410 der Verordnung (EU) Nr. 575/2013");
+    assert!(ks.contains(&"EU:2013/575:Art.395".to_string()), "must contain Art.395: {ks:?}");
+    assert!(ks.contains(&"EU:2013/575:Art.387".to_string()));
+    assert!(ks.contains(&"EU:2013/575:Art.410".to_string()));
+    let art_count = ks.iter().filter(|k| k.contains(":Art.")).count();
+    assert_eq!(art_count, 24, "24 bound articles expected: {ks:?}");
+    assert!(ks.contains(&"EU:2013/575".to_string()), "plain regulation ref stays");
+}
+
+#[test]
+fn eu_long_form_single_article() {
+    // Single article, legacy number order → EU:2013/575:Art.92 (+ the plain reg).
+    let ks = keyset("Artikel 92 der Verordnung (EU) Nr. 575/2013");
+    assert!(ks.contains(&"EU:2013/575:Art.92".to_string()), "{ks:?}");
+    // Modern order and genitive form.
+    let ks2 = keyset("gemäß des Artikels 28 der Verordnung (EU) 2022/2554");
+    assert!(ks2.contains(&"EU:2022/2554:Art.28".to_string()), "{ks2:?}");
+    // Dative plural + Delegierte Verordnung.
+    let ks3 = keyset("in den Artikeln 3 bis 5 der Delegierten Verordnung (EU) 2024/1774");
+    assert!(ks3.contains(&"EU:2024/1774:Art.4".to_string()), "{ks3:?}");
+}
+
+#[test]
+fn eu_long_form_range_over_cap_only_endpoints() {
+    // "Artikel 92 bis 386 …" — 295 articles, over the cap → only the endpoints
+    // (which is exactly what the KfWV Q2 golden case needs: Art.92 IS a bound
+    // endpoint), never a regulation-wide cloud.
+    let ks = keyset("die Artikel 92 bis 386 der Verordnung (EU) Nr. 575/2013");
+    let arts: Vec<&String> = ks.iter().filter(|k| k.contains(":Art.")).collect();
+    assert_eq!(
+        arts,
+        vec!["EU:2013/575:Art.386", "EU:2013/575:Art.92"],
+        "over-cap EU range must yield only its endpoints: {ks:?}"
+    );
+}
+
+#[test]
+fn eu_long_form_negative_cases() {
+    // No regulation form directly after the article → nothing (still dropped).
+    assert!(keys("Artikel 12 des Gesetzes über die Deutsche Bundesbank").is_empty());
+    // Regulation too far away / free text or sentence boundary in between →
+    // the narrow window must NOT bind the article to it. (The regulation itself
+    // still emits its plain EU ref — but no article-bound key may appear.)
+    let ks = keys(
+        "Artikel 12 findet Anwendung. Unberührt bleibt die Verordnung (EU) Nr. 575/2013.",
+    );
+    assert!(
+        ks.iter().all(|r| !r.contains(":Art.")),
+        "no article binding across a sentence boundary: {ks:?}"
+    );
+    let ks2 = keys("Artikel 12 im Einklang mit den Vorgaben der Verordnung (EU) Nr. 575/2013");
+    assert!(
+        ks2.iter().all(|r| !r.contains(":Art.")),
+        "no article binding across free text: {ks2:?}"
+    );
+    // An unknown uppercase token after the article never falls through to EU
+    // binding ("Artikel 30 Verordnung …" without determiner stays ambiguous).
+    let ks3 = keys("Artikel 30 Verordnung (EU) Nr. 575/2013");
+    assert!(ks3.iter().all(|r| !r.contains(":Art.")), "{ks3:?}");
+}
