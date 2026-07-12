@@ -434,6 +434,71 @@ fn grid_chat_result_same_row_uid_updates() {
     assert_eq!(db.count_grid_chat_results(run).unwrap(), 1);
 }
 
+/// `prune_grid_run` deletes only the rows NOT in `keep_uids`, leaving the kept
+/// ones (and other runs) untouched.
+#[test]
+fn prune_grid_run_removes_only_non_kept_rows() {
+    let db = db();
+    let run = "run-prune";
+    let mk = |uid: &str| GridChatUpsert {
+        run_id: run.into(),
+        row_uid: uid.into(),
+        prompt_snapshot: None,
+        row_ref_type: RowRefType::Chunk,
+        row_ref_id: 1,
+        prompt: "p".into(),
+        columns_context: None,
+        retrieved_refs: None,
+        response: Some("r".into()),
+        status: ChatStatus::Done,
+        error: None,
+        row_source_text: None,
+    };
+    db.upsert_grid_chat_result(&mk("keep-1")).unwrap();
+    db.upsert_grid_chat_result(&mk("keep-2")).unwrap();
+    db.upsert_grid_chat_result(&mk("orphan-1")).unwrap();
+    // A same-named row_uid under a different run must survive regardless.
+    let mut other_run = mk("orphan-1");
+    other_run.run_id = "run-other".into();
+    db.upsert_grid_chat_result(&other_run).unwrap();
+
+    let deleted = db.prune_grid_run(run, &["keep-1".to_string(), "keep-2".to_string()]).unwrap();
+
+    assert_eq!(deleted, 1);
+    let remaining: Vec<String> = db.list_grid_chat_results(run).unwrap().into_iter().map(|r| r.row_uid).collect();
+    assert_eq!(remaining.len(), 2);
+    assert!(remaining.contains(&"keep-1".to_string()));
+    assert!(remaining.contains(&"keep-2".to_string()));
+    assert_eq!(db.count_grid_chat_results("run-other").unwrap(), 1);
+}
+
+/// Empty `keep_uids` prunes the whole run's results.
+#[test]
+fn prune_grid_run_with_empty_keep_set_deletes_all() {
+    let db = db();
+    let run = "run-prune-all";
+    let upsert = GridChatUpsert {
+        run_id: run.into(),
+        row_uid: "u1".into(),
+        prompt_snapshot: None,
+        row_ref_type: RowRefType::Chunk,
+        row_ref_id: 1,
+        prompt: "p".into(),
+        columns_context: None,
+        retrieved_refs: None,
+        response: Some("r".into()),
+        status: ChatStatus::Done,
+        error: None,
+        row_source_text: None,
+    };
+    db.upsert_grid_chat_result(&upsert).unwrap();
+
+    let deleted = db.prune_grid_run(run, &[]).unwrap();
+
+    assert_eq!(deleted, 1);
+    assert_eq!(db.count_grid_chat_results(run).unwrap(), 0);
+}
+
 /// `grid_run_meta` holds the run's system prompt once; a second upsert for
 /// the same `run_id` replaces it in place rather than erroring or duplicating.
 #[test]

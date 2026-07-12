@@ -162,6 +162,37 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Deletes `run_id`'s `grid_chat_results` rows whose `row_uid` is NOT in
+    /// `keep_uids`. Used when overwriting a history-loaded run (`boundRunId` in
+    /// GridTab.tsx): a re-run only re-sends the rows still present in the grid,
+    /// so any row the user deleted locally before re-running would otherwise
+    /// survive in the DB under the same `run_id` and reappear as an orphan on
+    /// the next history load (see ISSUES.md "Grid-Run-Overwrite..."). Returns
+    /// the number of deleted rows. Empty `keep_uids` prunes the whole run's
+    /// results (but not `grid_run_meta` — mirrors `delete_grid_chat_run` only
+    /// dropping meta when the run itself is deleted, not on a partial prune).
+    pub fn prune_grid_run(&self, run_id: &str, keep_uids: &[String]) -> Result<usize> {
+        if keep_uids.is_empty() {
+            return Ok(self.conn.execute(
+                "DELETE FROM grid_chat_results WHERE run_id = ?1",
+                [run_id],
+            )?);
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(keep_uids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "DELETE FROM grid_chat_results WHERE run_id = ? AND row_uid NOT IN ({placeholders})"
+        );
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + keep_uids.len());
+        params_vec.push(&run_id);
+        for uid in keep_uids {
+            params_vec.push(uid);
+        }
+        Ok(self.conn.execute(&sql, params_vec.as_slice())?)
+    }
+
     pub fn delete_grid_chat_run(&self, run_id: &str) -> Result<bool> {
         // Also drop the run's metadata row (system prompt) so deleting a run
         // leaves no orphan in `grid_run_meta`.
