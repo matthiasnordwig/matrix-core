@@ -251,6 +251,32 @@ pub struct NewReasoningEffortList {
     pub allowed_efforts: Vec<String>,
 }
 
+/// A persistent chat session (`chat_sessions`), AP6 (history-awareness). Holds
+/// the ordered turns in `chat_messages`; `title` is auto-derived from the first
+/// question and renamable. `updated_at` bumps on every appended message so the
+/// session list can sort most-recent-first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSession {
+    pub id: i64,
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A single turn in a chat session (`chat_messages`). `role` is `"user"` or
+/// `"assistant"` (system prompt is rebuilt per request, never stored). The two
+/// `tool_*` columns are reserved for the later tool-loop AP and stay `None` here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: i64,
+    pub session_id: i64,
+    pub role: String,
+    pub content: String,
+    pub tool_calls_json: Option<String>,
+    pub tool_payload_json: Option<String>,
+    pub created_at: i64,
+}
+
 /// A named pool of `llm_endpoints`; members are resolved via
 /// `Database::pool_members`/`list_pools_with_members`. Enforced invariant (see
 /// `Database::set_pool_members`): at most one member may have `provider == "gguf"`
