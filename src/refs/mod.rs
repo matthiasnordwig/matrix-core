@@ -123,6 +123,27 @@ impl RefLexicon {
     }
 }
 
+/// The built-in `(kuerzel, long forms)` pairs — EVERY `KNOWN` Kürzel, with its
+/// long forms where `BUILTIN_LONG_FORMS` has them (empty otherwise). Single
+/// source of truth for seeding a DB-backed `ref_abbreviations` registry
+/// (`services::seed::seed_defaults`): a seeded, non-empty registry REPLACES
+/// [`RefLexicon::builtin`] entirely, so the seed must cover the full Kürzel
+/// list — seeding only the long-form subset would silently drop CRR/DORA/…
+/// from recognition (caught in TOOL_TIER AP5 review).
+pub fn builtin_seed_entries() -> Vec<(&'static str, Vec<&'static str>)> {
+    KNOWN
+        .iter()
+        .map(|&k| {
+            let longs = BUILTIN_LONG_FORMS
+                .iter()
+                .filter(|&&(ku, _)| ku == k)
+                .map(|&(_, l)| l)
+                .collect();
+            (k, longs)
+        })
+        .collect()
+}
+
 /// Closed table of act-Kürzel ↔ EU-regulation-number aliases for
 /// [`equivalent_ref_keys`]. Same precision-over-recall rule as
 /// `law_abbrevs.rs`: only add a pair here when the Kürzel and the regulation
