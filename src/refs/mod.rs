@@ -39,6 +39,38 @@ pub fn is_known_law_abbrev_public(abbrev: &str) -> bool {
     is_known_law_abbrev(abbrev)
 }
 
+/// Closed table of act-Kürzel ↔ EU-regulation-number aliases for
+/// [`equivalent_ref_keys`]. Same precision-over-recall rule as
+/// `law_abbrevs.rs`: only add a pair here when the Kürzel and the regulation
+/// number are unambiguously the same act — a too-broad entry would make
+/// `find_citing_chunks` merge unrelated norms.
+const ACT_ALIASES: &[(&str, &str)] = &[("CRR", "EU:2013/575"), ("DORA", "EU:2022/2554")];
+
+/// For an `Art.`-shaped `ref_key` (`CRR:Art.395` or `EU:2013/575:Art.395`),
+/// return the key itself plus its alias form under [`ACT_ALIASES`] (both
+/// directions). All other keys — including bare `§`-paragraph keys, since no
+/// EU act in the corpus is ever cited by Kürzel-only paragraph — come back
+/// unchanged as a single-element vec. Order: the input key first, then the
+/// alias (if any); never duplicates.
+pub fn equivalent_ref_keys(ref_key: &str) -> Vec<String> {
+    let Some((prefix, art)) = ref_key.split_once(":Art.") else {
+        return vec![ref_key.to_string()];
+    };
+    let alias_prefix = ACT_ALIASES.iter().find_map(|&(kuerzel, eu)| {
+        if prefix == kuerzel {
+            Some(eu.to_string())
+        } else if prefix == eu {
+            Some(kuerzel.to_string())
+        } else {
+            None
+        }
+    });
+    match alias_prefix {
+        Some(alias) => vec![ref_key.to_string(), format!("{alias}:Art.{art}")],
+        None => vec![ref_key.to_string()],
+    }
+}
+
 /// One parsed norm reference found in a piece of text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormRef {

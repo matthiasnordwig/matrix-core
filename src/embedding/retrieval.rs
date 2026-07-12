@@ -226,6 +226,36 @@ impl Database {
         Ok(out)
     }
 
+    /// Cosine-score an explicit set of chunk ids against `query_by_model`
+    /// (TOOL_CALLS_V2_PLAN AP4: soft re-ranking for `find_citing_chunks`, whose
+    /// candidates come from a reverse `chunk_refs` lookup rather than a
+    /// context-wide scan). Each chunk is scored in its OWN embedding space —
+    /// looked up via its context's model — so this never compares across
+    /// spaces; a chunk whose context has no entry in `query_by_model`, or whose
+    /// stored vector is missing, is scored `0.0` (excluded from nothing, just
+    /// sorts last). Not a top-k scan: callers with only a handful of candidate
+    /// ids (a reverse-ref result set, not a whole context) use this instead of
+    /// `retrieve_with`.
+    pub fn score_chunks_by_ids(
+        &self,
+        chunk_ids: &[i64],
+        query_by_model: &HashMap<i64, Vec<f32>>,
+    ) -> Result<HashMap<i64, f32>> {
+        let chunks = self.chunks_by_ids(chunk_ids)?;
+        let mut out = HashMap::with_capacity(chunks.len());
+        for c in chunks {
+            let score = self
+                .context(c.context_id)?
+                .and_then(|ctx| ctx.embedding_model_id)
+                .and_then(|model_id| query_by_model.get(&model_id))
+                .and_then(|qvec| self.embedding_vector(c.id).ok().flatten().map(|v| (qvec, v)))
+                .map(|(qvec, v)| crate::db::embeddings::cosine(qvec, &v))
+                .unwrap_or(0.0);
+            out.insert(c.id, score);
+        }
+        Ok(out)
+    }
+
     /// Retrieve top-`k` chunks across `context_ids`, embedding the query per
     /// distinct model via `embedder`.
     pub fn retrieve(
