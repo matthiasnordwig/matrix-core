@@ -274,6 +274,31 @@ pub struct NewReasoningEffortList {
     pub allowed_efforts: Vec<String>,
 }
 
+/// A law/act Kürzel + its known long form(s) (`ref_abbreviations`, schema_v56,
+/// TOOL_TIER_PLAN.md Teil B). Maintained in the ProfilesTab "Reference
+/// Abbreviations" sub-tab; consumed by `refs::RefLexicon` via
+/// `Database::ref_lexicon()`. `long_names` is stored as a JSON array of
+/// strings in the DB and (de)serialized in the CRUD layer, same pattern as
+/// `ReasoningEffortList::allowed_efforts`. `kuerzel` is trimmed + lowercased
+/// on write (the column is also `COLLATE NOCASE UNIQUE`, so case never causes
+/// a duplicate row).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefAbbreviation {
+    pub id: i64,
+    pub kuerzel: String,
+    pub long_names: Vec<String>,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewRefAbbreviation {
+    pub kuerzel: String,
+    pub long_names: Vec<String>,
+    pub enabled: bool,
+}
+
 /// A persistent chat session (`chat_sessions`), AP6 (history-awareness). Holds
 /// the ordered turns in `chat_messages`; `title` is auto-derived from the first
 /// question and renamable. `updated_at` bumps on every appended message so the

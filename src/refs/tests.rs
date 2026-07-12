@@ -368,3 +368,66 @@ mod equivalent_ref_keys_tests {
         // asserted here beyond exact-key round-trips above.
     }
 }
+
+// --- German § long-form act name (TOOL_TIER_PLAN.md Teil B, ISSUES fix) -----
+// "§ N des <Langform>[es|s]" with NO Kürzel in the text — e.g. "§ 6 des
+// Geldwäschegesetzes" → GWG:§6. Only `§` matches; `Art.` long forms are the
+// unrelated EU-regulation binding handled separately.
+
+#[test]
+fn long_form_positive_cases() {
+    let ks = keyset("die §§ 13 bis 13c, 15 und 17 bis 22 des Kreditwesengesetzes");
+    for expected in [
+        "KWG:§13", "KWG:§13a", "KWG:§13b", "KWG:§13c", "KWG:§15", "KWG:§17", "KWG:§18",
+        "KWG:§19", "KWG:§20", "KWG:§21", "KWG:§22",
+    ] {
+        assert!(ks.contains(&expected.to_string()), "expected {expected} in {ks:?}");
+    }
+
+    assert!(one("nach § 6 des Geldwäschegesetzes", "GWG:§6"));
+}
+
+#[test]
+fn long_form_negative_cases() {
+    // Not a recognized long form at all.
+    assert!(keys("nach § 3 des Vertrages").is_empty());
+    assert!(keys("gemäß § 5 des Gesetzes").is_empty());
+    // A Verordnung (no EU regulation number) is not a German-law long form.
+    assert!(keys("§ 7 der Verordnung").is_empty());
+}
+
+#[test]
+fn long_form_custom_lexicon() {
+    use super::{parse_refs_with, RefLexicon};
+
+    let custom = RefLexicon::new(
+        vec!["enwg".to_string()],
+        vec![("Energiewirtschaftsgesetz".to_string(), "ENWG".to_string())],
+    );
+
+    let ks_kuerzel: Vec<String> = parse_refs_with("§ 14 EnWG", &custom)
+        .into_iter()
+        .map(|r| r.ref_key)
+        .collect();
+    assert_eq!(ks_kuerzel, vec!["ENWG:§14".to_string()]);
+
+    let ks_long_form: Vec<String> = parse_refs_with("§ 14 des Energiewirtschaftsgesetzes", &custom)
+        .into_iter()
+        .map(|r| r.ref_key)
+        .collect();
+    assert_eq!(ks_long_form, vec!["ENWG:§14".to_string()]);
+
+    // Neither form is recognized by the built-in lexicon (no ENWG entry).
+    assert!(keys("§ 14 EnWG").is_empty());
+    assert!(keys("§ 14 des Energiewirtschaftsgesetzes").is_empty());
+}
+
+#[test]
+fn long_form_extra_enumeration_precision_guard() {
+    // "und" followed by non-numeric text must not be consumed by `extra` —
+    // the grammar requires a digit right after "und"/",".
+    assert!(one(
+        "§ 25a KWG und die dazugehörigen Verwaltungsvorschriften",
+        "KWG:§25a"
+    ));
+}

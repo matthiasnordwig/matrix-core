@@ -25,18 +25,102 @@
 //! norm. The full span/sub-parts are retained on the `NormRef` for callers that
 //! want them.
 
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use regex::Regex;
 
 mod law_abbrevs;
-use law_abbrevs::is_known_law_abbrev;
+use law_abbrevs::{BUILTIN_LONG_FORMS, KNOWN};
 
-/// Public wrapper over the closed law-abbreviation set, so other modules (e.g.
-/// `db::chunk_refs`' Kürzel-conflict check) can reuse the exact same recognition
-/// without duplicating the list. Input may be any case, no surrounding space.
+/// Public wrapper over the closed law-abbreviation set (the built-in lexicon),
+/// so other modules (e.g. `db::chunk_refs`' Kürzel-conflict check) can reuse
+/// the exact same recognition without duplicating the list. Input may be any
+/// case, no surrounding space. Kept for backward compatibility with callers
+/// that have no DB-loaded `RefLexicon` on hand (e.g. standalone core usage);
+/// DB-backed callers should prefer [`is_abbrev_in`] with the loaded lexicon.
 pub fn is_known_law_abbrev_public(abbrev: &str) -> bool {
-    is_known_law_abbrev(abbrev)
+    RefLexicon::builtin().is_abbrev(abbrev)
+}
+
+/// True if `abbrev` is a recognized Kürzel in `lexicon`. Same case/whitespace
+/// contract as [`is_known_law_abbrev_public`]. Used where a DB-loaded lexicon
+/// (rather than the built-in one) must be the source of truth, e.g.
+/// `db::chunk_refs`' Kürzel-conflict check once a custom registry is active.
+pub fn is_abbrev_in(abbrev: &str, lexicon: &RefLexicon) -> bool {
+    lexicon.is_abbrev(abbrev)
+}
+
+/// Normalize a long-form act name for matching: lowercase, whitespace-collapsed.
+/// Shared by [`RefLexicon`] construction and the long-form matcher so both
+/// sides always agree on what "the same name" means.
+fn normalize_long_form(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A set of recognized law/act abbreviations (Kürzel) plus their known long
+/// forms, used by [`parse_refs_with`] instead of the closed built-in list.
+/// `long_forms` pairs a normalized long-form name (lowercase, whitespace-
+/// collapsed, e.g. `"kreditwesengesetz"`) with its Kürzel in upper case
+/// (`"KWG"`), so a lookup never needs to re-normalize the Kürzel side.
+#[derive(Debug, Clone, Default)]
+pub struct RefLexicon {
+    abbrevs: HashSet<String>,
+    long_forms: Vec<(String, String)>,
+}
+
+impl RefLexicon {
+    /// The built-in lexicon: today's closed `KNOWN` Kürzel list plus the long
+    /// forms documented in TOOL_TIER_PLAN.md Teil B. Used whenever no
+    /// DB-loaded registry is available (standalone core, or an empty/unseeded
+    /// `ref_abbreviations` table — see `db::Database::ref_lexicon`).
+    pub fn builtin() -> &'static RefLexicon {
+        static BUILTIN: LazyLock<RefLexicon> = LazyLock::new(|| {
+            let abbrevs = KNOWN.iter().map(|s| s.to_string()).collect();
+            let long_forms = BUILTIN_LONG_FORMS
+                .iter()
+                .map(|&(kuerzel, long_form)| (normalize_long_form(long_form), kuerzel.to_uppercase()))
+                .collect();
+            RefLexicon { abbrevs, long_forms }
+        });
+        &BUILTIN
+    }
+
+    /// Build a lexicon from DB-loaded rows: `abbrevs` any case (lowercased
+    /// here), `long_forms` as `(long_form, kuerzel)` pairs (long form any
+    /// case/whitespace — normalized here; Kürzel upper-cased for the key).
+    pub fn new<A, L>(abbrevs: A, long_forms: L) -> Self
+    where
+        A: IntoIterator<Item = String>,
+        L: IntoIterator<Item = (String, String)>,
+    {
+        RefLexicon {
+            abbrevs: abbrevs.into_iter().map(|a| a.trim().to_lowercase()).collect(),
+            long_forms: long_forms
+                .into_iter()
+                .map(|(long_form, kuerzel)| (normalize_long_form(&long_form), kuerzel.trim().to_uppercase()))
+                .collect(),
+        }
+    }
+
+    /// True if `word` (any case, no surrounding whitespace) is a recognized
+    /// Kürzel. An empty string is never known.
+    pub fn is_abbrev(&self, word: &str) -> bool {
+        if word.is_empty() {
+            return false;
+        }
+        self.abbrevs.contains(&word.to_lowercase())
+    }
+
+    /// If the normalized (lowercase, whitespace-collapsed) `long_form` matches
+    /// a known long name, return its Kürzel (upper case). Exact match only —
+    /// callers handle the genitive `es`/`s` suffix toleration before calling.
+    fn kuerzel_for_long_form(&self, normalized_long_form: &str) -> Option<&str> {
+        self.long_forms
+            .iter()
+            .find(|(name, _)| name == normalized_long_form)
+            .map(|(_, kuerzel)| kuerzel.as_str())
+    }
 }
 
 /// Closed table of act-Kürzel ↔ EU-regulation-number aliases for
@@ -104,12 +188,27 @@ pub enum RefKind {
 /// Kürzel follows so the caller can decide whether it is a real law. Abs./Satz/
 /// Nr. sub-parts are consumed (so they don't get mis-parsed as the Kürzel) but
 /// dropped from the key.
+///
+/// `extra` (added for TOOL_TIER_PLAN.md Teil B) consumes a `§§`-style
+/// enumeration of FURTHER paragraph numbers/ranges after the first, joined by
+/// `,`/`und` (e.g. "§§ 13 bis 13c, 15 und 17 bis 22 …") — real KfWV-corpus
+/// phrasing (ISSUES.md "Langform-Gesetzesname"). Each item is `num[a][ bis
+/// end_num[a] ]`; the whole enumeration shares one trailing law reference
+/// (Kürzel or long form), parsed the same way as a single ref. The item list
+/// itself is re-parsed from the matched text in [`parse_paragraph_extras`]
+/// (repeated capture groups only keep their last match in the `regex` crate),
+/// so `extra`'s only job here is to make the enumeration part of one match
+/// span (and therefore consumed before the trailing law lookup runs).
 static PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?x)
         §\s*                                            # section sign
         (?P<num>\d+)(?P<letter>[a-z])?                   # 25 (a)
         (?:\s*(?:bis|-|–)\s*(?P<end_num>\d+)(?P<end_letter>[a-z])?)?  # … bis 13c
+        (?P<extra>
+            (?:\s*,\s*\d+[a-z]?(?:\s*(?:bis|-|–)\s*\d+[a-z]?)?
+             |\s+und\s+\d+[a-z]?(?:\s*(?:bis|-|–)\s*\d+[a-z]?)?)*
+        )
         (?P<sub>
             (?:\s*,?\s*(?:Abs(?:atz|\.)?|Satz|Nr\.?|Nummer|S\.)\s*\d+[a-z]?)*
         )
@@ -119,6 +218,41 @@ static PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+
+/// One item of a `PARAGRAPH_RE` `extra`-enumeration: `13`, `13c`, or `13 bis
+/// 13c`, always comma/`und`-separated from its neighbours (never a bare Satz/
+/// Abs./Nr. sub-part — those use different keywords and are excluded by
+/// requiring the item to start right after a `,`/`und`, not a sub-part
+/// keyword). Reused to re-parse `extra`'s matched text since the `regex`
+/// crate does not expose per-repetition captures.
+static PARAGRAPH_EXTRA_ITEM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        (?:,\s*|und\s+)
+        (?P<num>\d+)(?P<letter>[a-z])?
+        (?:\s*(?:bis|-|–)\s*(?P<end_num>\d+)(?P<end_letter>[a-z])?)?
+        ",
+    )
+    .unwrap()
+});
+
+/// Expand a `PARAGRAPH_RE` `extra` capture (the enumeration text right after
+/// the first paragraph/range) into its individual `(num, letter, end_num,
+/// end_letter)` items, each ready for [`expand_range`]-style handling. Empty
+/// input (no enumeration) yields an empty vec.
+fn parse_paragraph_extras(extra: &str) -> Vec<(String, String, Option<String>, String)> {
+    PARAGRAPH_EXTRA_ITEM_RE
+        .captures_iter(extra)
+        .map(|caps| {
+            (
+                caps.name("num").unwrap().as_str().to_string(),
+                caps.name("letter").map(|m| m.as_str().to_string()).unwrap_or_default(),
+                caps.name("end_num").map(|m| m.as_str().to_string()),
+                caps.name("end_letter").map(|m| m.as_str().to_string()).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
 
 /// `Art. 28`, `Artikel 28`, `Art 28 Abs. 1`, followed by a Kürzel/DORA — or a
 /// range `Artikel 387 bis 410 …`. Captures the range end so it can be expanded.
@@ -134,7 +268,7 @@ static PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Verordnung (EU) Nr. 575/2013" (real KWG-Korpus text) has an Absatz/
 /// Buchstabe insert between the article number and the EU long form. Without
 /// consuming it here, the greedy `law` capture below grabs "Buchstabe" as a
-/// fake Kürzel, `is_known_law_abbrev` rejects it, and the tail handed to
+/// fake Kürzel, `lexicon.is_abbrev` rejects it, and the tail handed to
 /// `eu_regulation_after` starts at " c der Verordnung …" instead of "der
 /// Verordnung …" — missing the binding entirely (only the bare `EU:2013/575`
 /// key survives, from the separate EU_REG_RE pass). The sub-part alternation
@@ -297,9 +431,63 @@ fn expand_range(
     (sn..=en).map(|n| (n.to_string(), String::new())).collect()
 }
 
-/// Parse all norm references in `text`, de-duplicated by `(ref_key)` keeping the
-/// first occurrence's span. Order follows first appearance in the text.
+/// The German long-form act name directly after a `§`/`§§` match with NO
+/// recognized Kürzel: `des/der <Langform>[es|s]`. Mirrors
+/// [`EU_AFTER_ARTICLE_RE`]'s anchoring exactly — anchored at `^` on the tail
+/// right after the paragraph match, only a determiner before the name, no
+/// sentence boundary / free text in between. The captured name may carry a
+/// trailing `es` or `s` (genitive: "Kreditwesengesetzes"); that suffix is
+/// stripped by the caller before the long-form lookup, which itself is
+/// case-insensitive and whitespace-collapsed. Deliberately does NOT reuse
+/// `EU_AFTER_ARTICLE_RE`'s `Delegierten` alternative (no EU/delegated-act
+/// framing applies to a German-law long form) and, per TOOL_TIER_PLAN.md
+/// Teil B, applies only to `§` matches — not `Art.` (the EU long form there
+/// is already handled separately by `eu_regulation_after`).
+static LONG_FORM_AFTER_PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)^
+        (?:der|des)\s+
+        (?P<name>[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]*(?:\s+[A-ZÄÖÜa-zäöüß\-]+)*)
+        ",
+    )
+    .unwrap()
+});
+
+/// If `tail` (the text right after a `§`-match with no Kürzel) begins with
+/// `des/der <Langform>[es|s]` and `<Langform>` (genitive-stripped, normalized)
+/// matches a known long form in `lexicon`, return its Kürzel. Genitive
+/// toleration is a suffix-only check on the WHOLE normalized name (`"…es"`/
+/// `"…s"` stripped once), never a mid-word trim — "Kreditwesengesetzes" →
+/// "kreditwesengesetz" matches, but a name that doesn't end in exactly that
+/// suffix is compared as-is.
+fn long_form_after_paragraph(tail: &str, lexicon: &RefLexicon) -> Option<String> {
+    let caps = LONG_FORM_AFTER_PARAGRAPH_RE.captures(tail)?;
+    let raw_name = caps.name("name").unwrap().as_str();
+    let normalized = normalize_long_form(raw_name);
+    if let Some(kuerzel) = lexicon.kuerzel_for_long_form(&normalized) {
+        return Some(kuerzel.to_string());
+    }
+    // Genitive toleration: strip a trailing "es" or "s" once and retry.
+    let stripped = normalized
+        .strip_suffix("es")
+        .or_else(|| normalized.strip_suffix('s'))?;
+    lexicon.kuerzel_for_long_form(stripped).map(|k| k.to_string())
+}
+
+/// Parse all norm references in `text` using the built-in lexicon (today's
+/// closed Kürzel list), de-duplicated by `(ref_key)` keeping the first
+/// occurrence's span. Order follows first appearance in the text.
 pub fn parse_refs(text: &str) -> Vec<NormRef> {
+    parse_refs_with(text, RefLexicon::builtin())
+}
+
+/// Parse all norm references in `text` using `lexicon` (a DB-loaded registry
+/// or [`RefLexicon::builtin()`]) instead of the closed built-in list. Same
+/// de-dup/ordering contract as [`parse_refs`]. `§`-matches with no recognized
+/// Kürzel also try `lexicon`'s long forms via `des/der <Langform>[es|s]`
+/// (TOOL_TIER_PLAN.md Teil B — the "Langform-Gesetzesname" fix); `Art.`
+/// matches do not (the EU long form there is unrelated and already handled).
+pub fn parse_refs_with(text: &str, lexicon: &RefLexicon) -> Vec<NormRef> {
     let mut out: Vec<NormRef> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -338,20 +526,30 @@ pub fn parse_refs(text: &str) -> Vec<NormRef> {
         );
     }
 
-    // Paragraphs (§ N[a] <Kürzel>).
+    // Paragraphs (§ N[a] <Kürzel>) — or a German long-form act name with no
+    // Kürzel ("§ 6 des Geldwäschegesetzes"), bound via `lexicon`'s long forms.
     for caps in PARAGRAPH_RE.captures_iter(text) {
         let law = caps.name("law").map(|m| m.as_str()).unwrap_or("");
-        // A § without a recognized law abbreviation is too ambiguous to resolve
-        // (could be an internal cross-ref or a different act) — drop it.
-        if !is_known_law_abbrev(law) {
+        let m = caps.get(0).unwrap();
+        // Determine the act prefix: a known Kürzel, or a recognized long form
+        // directly after the match (no Kürzel present). Neither → too
+        // ambiguous to resolve (could be an internal cross-ref or a different
+        // act) — drop it.
+        let prefix = if lexicon.is_abbrev(law) {
+            law.to_uppercase()
+        } else if law.is_empty() {
+            match long_form_after_paragraph(&text[m.end()..], lexicon) {
+                Some(kuerzel) => kuerzel,
+                None => continue,
+            }
+        } else {
             continue;
-        }
+        };
         let num = caps.name("num").unwrap().as_str();
         let letter = caps.name("letter").map(|m| m.as_str()).unwrap_or("");
-        let m = caps.get(0).unwrap();
         // Expand a `bis`/`-` range into individual refs; a plain ref yields just
         // one part. Every part shares the match span (they came from one range).
-        let parts = match caps.name("end_num") {
+        let mut parts = match caps.name("end_num") {
             Some(en) => expand_range(
                 num,
                 letter,
@@ -360,8 +558,18 @@ pub fn parse_refs(text: &str) -> Vec<NormRef> {
             ),
             None => vec![(num.to_string(), letter.to_string())],
         };
+        // Further `§§`-enumeration items ("… , 15 und 17 bis 22 …"), each
+        // expanded the same way and appended — they share the same trailing
+        // law reference and match span as the first item.
+        let extra = caps.name("extra").map(|m| m.as_str()).unwrap_or("");
+        for (en, el, end_num, end_letter) in parse_paragraph_extras(extra) {
+            match end_num {
+                Some(end_num) => parts.extend(expand_range(&en, &el, &end_num, &end_letter)),
+                None => parts.push((en, el)),
+            }
+        }
         for (n, l) in parts {
-            let ref_key = format!("{}:§{n}{l}", law.to_uppercase());
+            let ref_key = format!("{prefix}:§{n}{l}");
             push(
                 NormRef { ref_key, kind: RefKind::Paragraph, start: m.start(), end: m.end() },
                 &mut seen,
@@ -382,7 +590,7 @@ pub fn parse_refs(text: &str) -> Vec<NormRef> {
         // EU regulation named directly after the match ("EU:2013/575"). Bare
         // "Art. 28" with neither is anaphoric/ambiguous — drop it. This also
         // rejects "Art. 28 dieses …" ("dieses" is not a known law abbrev).
-        let prefix = if is_known_law_abbrev(law) {
+        let prefix = if lexicon.is_abbrev(law) {
             law.to_uppercase()
         } else if law.is_empty() {
             match eu_regulation_after(&text[m.end()..]) {

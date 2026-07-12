@@ -10,8 +10,10 @@
 
 /// Recognized law/act abbreviations, lowercased. `DORA` is included so
 /// `Art. 28 DORA` resolves; the EU-regulation *number* form is handled
-/// separately by `EU_REG_RE`.
-const KNOWN: &[&str] = &[
+/// separately by `EU_REG_RE`. `pub(super)` so `RefLexicon::builtin()` (in
+/// `refs/mod.rs`) can build its abbreviation set from the same source of
+/// truth instead of duplicating the list.
+pub(super) const KNOWN: &[&str] = &[
     // Banking / supervision
     "kwg",   // Kreditwesengesetz
     "cra",   // (CRR/CRA context)
@@ -39,13 +41,21 @@ const KNOWN: &[&str] = &[
     "emir",  // European Market Infrastructure Regulation
 ];
 
-/// True if `abbrev` (any case, no surrounding whitespace) is a recognized law
-/// abbreviation. An empty string is never known — that is how a bare `§ N` /
-/// `Art. N` with no trailing act gets rejected.
-pub(crate) fn is_known_law_abbrev(abbrev: &str) -> bool {
-    if abbrev.is_empty() {
-        return false;
-    }
-    let lower = abbrev.to_lowercase();
-    KNOWN.contains(&lower.as_str())
-}
+/// Long forms for a subset of [`KNOWN`] Kürzel, used to seed
+/// `RefLexicon::builtin()`'s long-form matching (TOOL_TIER_PLAN.md Teil B —
+/// "§ N des <Langform>[es|s]" with no Kürzel in the text, e.g. "§ 6 des
+/// Geldwäschegesetzes" → `GWG:§6`). Deliberately not exhaustive: only acts
+/// whose long form is unambiguous and commonly written out in the corpus are
+/// listed here — same precision-over-recall rule as `KNOWN` itself.
+pub(super) const BUILTIN_LONG_FORMS: &[(&str, &str)] = &[
+    ("kwg", "Kreditwesengesetz"),
+    ("vag", "Versicherungsaufsichtsgesetz"),
+    ("zag", "Zahlungsdiensteaufsichtsgesetz"),
+    ("kagb", "Kapitalanlagegesetzbuch"),
+    ("gwg", "Geldwäschegesetz"),
+    ("hgb", "Handelsgesetzbuch"),
+    ("bgb", "Bürgerliches Gesetzbuch"),
+    ("aktg", "Aktiengesetz"),
+    ("sag", "Sanierungs- und Abwicklungsgesetz"),
+    ("wphg", "Wertpapierhandelsgesetz"),
+];

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use super::{expand_with_refs, pick_definition_site, ReferencedChunk};
 use crate::db::models::*;
 use crate::db::Database;
+use crate::refs::RefLexicon;
 
 fn db() -> Database {
     Database::open_in_memory().expect("open in-memory db")
@@ -129,6 +130,78 @@ fn rebuild_chunk_refs_is_idempotent() {
     // Total rows in the context = 2.
     let at = db.chunks_with_ref(&[ctx], "MARISK:AT4.3.2").unwrap();
     assert_eq!(at.len(), 1);
+}
+
+// --- ref_abbreviations registry → set_chunk_refs/rebuild_chunk_refs --------
+// (TOOL_TIER_PLAN.md Teil B / AP4)
+
+#[test]
+fn registry_entry_makes_set_chunk_refs_recognize_the_new_kuerzel() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    db.create_ref_abbreviation(&NewRefAbbreviation {
+        kuerzel: "enwg".into(),
+        long_names: vec!["Energiewirtschaftsgesetz".into()],
+        enabled: true,
+    })
+    .unwrap();
+    let cid = mk_chunk(&db, ctx, doc, 0, None, "§ 14 EnWG");
+
+    let n = db.set_chunk_refs(cid, ctx, "§ 14 EnWG").unwrap();
+    assert_eq!(n, 1);
+    let keys: Vec<String> = db.chunk_refs_for_chunk(cid).unwrap().into_iter().map(|r| r.ref_key).collect();
+    assert_eq!(keys, vec!["ENWG:§14".to_string()]);
+}
+
+#[test]
+fn disabled_registry_entry_is_ignored() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    db.create_ref_abbreviation(&NewRefAbbreviation {
+        kuerzel: "enwg".into(),
+        long_names: vec!["Energiewirtschaftsgesetz".into()],
+        enabled: false,
+    })
+    .unwrap();
+    let cid = mk_chunk(&db, ctx, doc, 0, None, "§ 14 EnWG");
+
+    let n = db.set_chunk_refs(cid, ctx, "§ 14 EnWG").unwrap();
+    assert_eq!(n, 0, "disabled Kürzel must not be recognized");
+    assert!(db.chunk_refs_for_chunk(cid).unwrap().is_empty());
+}
+
+#[test]
+fn empty_ref_abbreviations_table_falls_back_to_builtin() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    // No rows created — schema_v56 table exists but is empty (fresh or
+    // never-seeded DB). The built-in KWG Kürzel must still resolve.
+    assert!(db.list_ref_abbreviations().unwrap().is_empty());
+    let cid = mk_chunk(&db, ctx, doc, 0, None, "§ 25a KWG");
+
+    let n = db.set_chunk_refs(cid, ctx, "§ 25a KWG").unwrap();
+    assert_eq!(n, 1);
+    let keys: Vec<String> = db.chunk_refs_for_chunk(cid).unwrap().into_iter().map(|r| r.ref_key).collect();
+    assert_eq!(keys, vec!["KWG:§25a".to_string()]);
+}
+
+#[test]
+fn rebuild_chunk_refs_uses_registry_lexicon() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    db.create_ref_abbreviation(&NewRefAbbreviation {
+        kuerzel: "enwg".into(),
+        long_names: vec!["Energiewirtschaftsgesetz".into()],
+        enabled: true,
+    })
+    .unwrap();
+    mk_chunk(&db, ctx, doc, 0, None, "§ 14 EnWG");
+    mk_chunk(&db, ctx, doc, 1, None, "§ 14 des Energiewirtschaftsgesetzes");
+
+    let total = db.rebuild_chunk_refs(ctx).unwrap();
+    assert_eq!(total, 2);
+    let hits = db.chunks_with_ref(&[ctx], "ENWG:§14").unwrap();
+    assert_eq!(hits.len(), 2);
 }
 
 #[test]
@@ -344,7 +417,7 @@ fn pick_definition_site_prefers_signature_then_density() {
     density.insert(2, 1);
     // Chunk 2 is the definition site (signature carries surface) → wins despite
     // lower density.
-    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2);
 }
 
@@ -355,7 +428,7 @@ fn pick_definition_site_falls_back_to_density_then_earliest() {
     let mut density = HashMap::new();
     density.insert(1, 1);
     density.insert(2, 5);
-    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2);
 
     // Equal density → earliest (first in the ordered candidate list) wins.
@@ -363,7 +436,7 @@ fn pick_definition_site_falls_back_to_density_then_earliest() {
     let mut d2 = HashMap::new();
     d2.insert(3, 2);
     d2.insert(4, 2);
-    assert_eq!(pick_definition_site(candidates, "KWG:§25a", &d2).id, 3);
+    assert_eq!(pick_definition_site(candidates, "KWG:§25a", &d2, RefLexicon::builtin()).id, 3);
 }
 
 #[test]
@@ -378,7 +451,7 @@ fn pick_definition_site_word_boundary_no_prefix_collision() {
     let mut density = HashMap::new();
     density.insert(1, 9); // denser, but not a def-site for §25 (prefix collision)
     density.insert(2, 1);
-    let picked = pick_definition_site(candidates, "KWG:§25", &density);
+    let picked = pick_definition_site(candidates, "KWG:§25", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "§25 must not resolve to the §25a definition chunk");
 
     // MaRisk analogue: `AT 4.3` must not match `AT 4.3.2`.
@@ -389,7 +462,7 @@ fn pick_definition_site_word_boundary_no_prefix_collision() {
     let mut d = HashMap::new();
     d.insert(3, 9);
     d.insert(4, 1);
-    assert_eq!(pick_definition_site(cands, "MARISK:AT4.3", &d).id, 4);
+    assert_eq!(pick_definition_site(cands, "MARISK:AT4.3", &d, RefLexicon::builtin()).id, 4);
 }
 
 #[test]
@@ -405,7 +478,7 @@ fn pick_definition_site_kuerzel_must_match() {
     let mut density = HashMap::new();
     density.insert(1, 9);
     density.insert(2, 1);
-    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "wrong-Kürzel (VAG) def must not win for a KWG ref");
 
     // A chunk of the same law WITHOUT the Kürzel in its signature stays a valid
@@ -418,7 +491,7 @@ fn pick_definition_site_kuerzel_must_match() {
     d.insert(3, 5);
     d.insert(4, 1);
     assert_eq!(
-        pick_definition_site(cands, "KWG:§25a", &d).id,
+        pick_definition_site(cands, "KWG:§25a", &d, RefLexicon::builtin()).id,
         4,
         "same-law chunk without explicit Kürzel is still the def-site"
     );
@@ -434,7 +507,7 @@ fn pick_definition_site_eu_legacy_surface() {
     let mut density = HashMap::new();
     density.insert(1, 5);
     density.insert(2, 1);
-    let picked = pick_definition_site(candidates, "EU:2013/575", &density);
+    let picked = pick_definition_site(candidates, "EU:2013/575", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "EU legacy order 575/2013 must be recognized as def-site");
 }
 
@@ -456,7 +529,7 @@ fn pick_definition_site_section_wins_against_dense_mention() {
     let mut density = HashMap::new();
     density.insert(1, 8);
     density.insert(2, 1);
-    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "section-carried def-site must win over a dense mid-body mention");
 }
 
@@ -485,7 +558,7 @@ fn pick_definition_site_earliest_def_site_beats_ref_dense_later_absatz() {
     let mut density = HashMap::new();
     density.insert(1, 0);
     density.insert(2, 7);
-    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 1, "earliest def site must beat a ref-dense later Absatz");
 }
 
@@ -498,7 +571,7 @@ fn pick_definition_site_section_word_boundary() {
         chunk_with_section(2, None, "kein Volltext", Some("Artikel 395 (1)")),
     ];
     let density = HashMap::new();
-    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "only the exact-boundary section should count as def-site");
 
     // With only the colliding section present, nothing is a def-site → falls
@@ -507,7 +580,7 @@ fn pick_definition_site_section_word_boundary() {
     let d2 = HashMap::new();
     // Only one candidate — picked is trivially candidate 3, but this exercises
     // is_def_site returning false for it without panicking.
-    assert_eq!(pick_definition_site(candidates2, "EU:2013/575:Art.395", &d2).id, 3);
+    assert_eq!(pick_definition_site(candidates2, "EU:2013/575:Art.395", &d2, RefLexicon::builtin()).id, 3);
 }
 
 #[test]
@@ -522,7 +595,7 @@ fn pick_definition_site_section_kuerzel_conflict() {
     let mut density = HashMap::new();
     density.insert(1, 9);
     density.insert(2, 1);
-    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density, RefLexicon::builtin());
     assert_eq!(picked.id, 2, "wrong-Kürzel section must not win for a KWG ref");
 }
 

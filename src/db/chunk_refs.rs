@@ -12,7 +12,7 @@ use rusqlite::{params, Row};
 
 use super::models::*;
 use super::{Database, Result};
-use crate::refs::parse_refs;
+use crate::refs::{is_abbrev_in, parse_refs_with, RefLexicon};
 
 fn row_to_chunk_ref(row: &Row<'_>) -> rusqlite::Result<ChunkRef> {
     Ok(ChunkRef {
@@ -24,17 +24,58 @@ fn row_to_chunk_ref(row: &Row<'_>) -> rusqlite::Result<ChunkRef> {
 }
 
 impl Database {
+    /// The active reference-abbreviation lexicon: enabled rows from
+    /// `ref_abbreviations` (schema_v56, TOOL_TIER_PLAN.md Teil B). An empty
+    /// table — including a freshly migrated DB that was never seeded, or an
+    /// old DB where every row happens to be disabled — falls back to
+    /// [`RefLexicon::builtin()`] so unseeded/legacy DBs parse refs exactly as
+    /// before this feature existed. Small table: loaded fresh on every call,
+    /// no caching in v1 (see TOOL_TIER_PLAN.md Teil B).
+    pub fn ref_lexicon(&self) -> Result<RefLexicon> {
+        let rows = self.list_ref_abbreviations()?;
+        let enabled: Vec<RefAbbreviation> = rows.into_iter().filter(|r| r.enabled).collect();
+        if enabled.is_empty() {
+            return Ok(RefLexicon::builtin().clone());
+        }
+        let abbrevs = enabled.iter().map(|r| r.kuerzel.clone());
+        let long_forms = enabled.iter().flat_map(|r| {
+            let kuerzel = r.kuerzel.clone();
+            r.long_names.iter().cloned().map(move |name| (name, kuerzel.clone())).collect::<Vec<_>>()
+        });
+        Ok(RefLexicon::new(abbrevs, long_forms))
+    }
+
     /// Replace a single chunk's outgoing refs with those freshly derived from
-    /// its `text`. Idempotent: deletes the chunk's existing rows first, so
-    /// re-running never duplicates. `context_id` is stored alongside so
-    /// (context, ref_key) lookups don't need a join.
+    /// its `text`, using the DB's active [`ref_lexicon`](Self::ref_lexicon).
+    /// Idempotent: deletes the chunk's existing rows first, so re-running
+    /// never duplicates. `context_id` is stored alongside so (context,
+    /// ref_key) lookups don't need a join. Convenience wrapper over
+    /// [`set_chunk_refs_with`](Self::set_chunk_refs_with) for single-chunk
+    /// callers (e.g. the chunking-run finalization hook) where loading the
+    /// lexicon once per chunk is cheap; batch callers over many chunks should
+    /// load it once and call `set_chunk_refs_with` directly (see
+    /// [`rebuild_chunk_refs`](Self::rebuild_chunk_refs)).
     pub fn set_chunk_refs(&self, chunk_id: i64, context_id: i64, text: &str) -> Result<usize> {
+        let lexicon = self.ref_lexicon()?;
+        self.set_chunk_refs_with(chunk_id, context_id, text, &lexicon)
+    }
+
+    /// Same as [`set_chunk_refs`](Self::set_chunk_refs) but with an
+    /// already-loaded lexicon, so a caller deriving refs for many chunks (a
+    /// full rebuild) loads `ref_abbreviations` once instead of per chunk.
+    pub fn set_chunk_refs_with(
+        &self,
+        chunk_id: i64,
+        context_id: i64,
+        text: &str,
+        lexicon: &RefLexicon,
+    ) -> Result<usize> {
         self.conn
             .execute("DELETE FROM chunk_refs WHERE chunk_id = ?1", [chunk_id])?;
-        // De-dup within a chunk (parse_refs already de-dups, but be defensive).
+        // De-dup within a chunk (parse_refs_with already de-dups, but be defensive).
         let mut seen: HashSet<String> = HashSet::new();
         let mut n = 0usize;
-        for r in parse_refs(text) {
+        for r in parse_refs_with(text, lexicon) {
             if !seen.insert(r.ref_key.clone()) {
                 continue;
             }
@@ -49,18 +90,22 @@ impl Database {
 
     /// Derive + persist refs for every non-omitted chunk of `context_id`,
     /// replacing any existing rows for the context. Idempotent — a second run
-    /// yields the same rows. Returns the number of ref rows inserted.
+    /// yields the same rows. Returns the number of ref rows inserted. Loads
+    /// the active [`ref_lexicon`](Self::ref_lexicon) exactly once for the
+    /// whole rebuild (not per chunk).
     pub fn rebuild_chunk_refs(&self, context_id: i64) -> Result<usize> {
         self.conn
             .execute("DELETE FROM chunk_refs WHERE context_id = ?1", [context_id])?;
+        let lexicon = self.ref_lexicon()?;
         // Non-omitted only: omitted chunks are never retrievable (not embedded,
         // excluded from the FTS leg), so their outgoing refs would be dead rows.
         let chunks = self.list_chunks(context_id, false)?;
         let mut total = 0usize;
         for c in chunks {
-            // set_chunk_refs deletes-then-inserts per chunk; the context-wide
-            // delete above already cleared everything, so this just inserts.
-            total += self.set_chunk_refs(c.id, context_id, &c.text)?;
+            // set_chunk_refs_with deletes-then-inserts per chunk; the
+            // context-wide delete above already cleared everything, so this
+            // just inserts.
+            total += self.set_chunk_refs_with(c.id, context_id, &c.text, &lexicon)?;
         }
         Ok(total)
     }
@@ -138,7 +183,12 @@ impl Database {
             let d = self.chunk_refs_for_chunk(c.id)?.len();
             density.insert(c.id, d);
         }
-        Ok(Some(pick_definition_site(candidates, ref_key, &density)))
+        // The Kürzel-conflict check inside pick_definition_site must use the
+        // same lexicon the ref was originally parsed with, or a custom
+        // registry's Kürzel would go unrecognized and silently fail to
+        // disqualify a conflicting-act candidate.
+        let lexicon = self.ref_lexicon()?;
+        Ok(Some(pick_definition_site(candidates, ref_key, &density, &lexicon)))
     }
 
     /// Definition-shaped chunks for an EU-bound article ref, taken from the
@@ -350,8 +400,12 @@ fn ref_kuerzel(ref_key: &str) -> Option<String> {
 /// must NOT satisfy `KWG:§25a`). Semantics: only an *explicitly present,
 /// different* known Kürzel disqualifies — chunks of the same law that just write
 /// "§ 25a" without repeating the Kürzel (the common case inside a law's own
-/// document) stay valid. `text` is `norm`-alized; `own` is the ref's own Kürzel.
-fn kuerzel_conflicts(text: &str, surf: &str, own: &str) -> bool {
+/// document) stay valid. `text` is `norm`-alized; `own` is the ref's own
+/// Kürzel; `lexicon` is the same registry the ref was parsed with (a custom
+/// DB-loaded lexicon, or `RefLexicon::builtin()`) — using a different one
+/// here could recognize/miss a Kürzel the parser didn't, silently mismatching
+/// the disqualification.
+fn kuerzel_conflicts(text: &str, surf: &str, own: &str, lexicon: &RefLexicon) -> bool {
     // Look at the first word following the surface occurrence; if it is a known
     // law abbrev different from `own`, this is a different act → conflict.
     let mut from = 0usize;
@@ -363,10 +417,7 @@ fn kuerzel_conflicts(text: &str, surf: &str, own: &str) -> bool {
             .chars()
             .take_while(|c| c.is_ascii_alphabetic())
             .collect();
-        if !word.is_empty()
-            && word != own
-            && crate::refs::is_known_law_abbrev_public(&word)
-        {
+        if !word.is_empty() && word != own && is_abbrev_in(&word, lexicon) {
             return true;
         }
         from = after; // past the matched surface (a char boundary)
@@ -383,11 +434,15 @@ fn kuerzel_conflicts(text: &str, surf: &str, own: &str) -> bool {
 /// document/chunk_index, so the first def site is the article's opening
 /// chunk, not a citation-heavy later Absatz). Without any def site: the most
 /// ref-dense mention, ties to the earliest. `density[chunk_id]` is the number
-/// of outgoing refs of that chunk. `candidates` is non-empty.
+/// of outgoing refs of that chunk. `candidates` is non-empty. `lexicon` is
+/// the Kürzel registry used for the conflict check inside `carries` — pass
+/// the same lexicon the ref was parsed with (`Database::ref_lexicon()`, or
+/// `RefLexicon::builtin()` for callers with no DB-loaded registry).
 pub(crate) fn pick_definition_site(
     candidates: Vec<Chunk>,
     ref_key: &str,
     density: &HashMap<i64, usize>,
+    lexicon: &RefLexicon,
 ) -> Chunk {
     let surfaces = ref_key_surfaces(ref_key);
     let own_kuerzel = ref_kuerzel(ref_key);
@@ -414,7 +469,7 @@ pub(crate) fn pick_definition_site(
                 return false;
             }
             match &own_kuerzel {
-                Some(k) => !kuerzel_conflicts(hay, surf, k),
+                Some(k) => !kuerzel_conflicts(hay, surf, k, lexicon),
                 None => true,
             }
         })
