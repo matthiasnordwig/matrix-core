@@ -22,7 +22,7 @@ pub struct SectionContinuation {
 /// present and non-empty. `metadata` is a TEXT column holding a JSON object;
 /// a malformed/non-object value is treated the same as "no section" (no
 /// guessing at continuation).
-fn chunk_section(c: &Chunk) -> Option<String> {
+pub(crate) fn chunk_section(c: &Chunk) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(&c.metadata).ok()?;
     let section = value.get("section")?.as_str()?;
     if section.is_empty() {

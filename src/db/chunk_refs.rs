@@ -106,8 +106,9 @@ impl Database {
 
     /// Resolve `ref_key` to a single best target chunk within `context_ids`,
     /// preferring the *definition site*: a chunk whose `signature` (structural
-    /// section name) or text start carries the ref key's norm identity, else the
-    /// earliest / most ref-dense mention. Returns `None` if nothing carries it.
+    /// section name), text start, or `metadata.section` (structural chunker's
+    /// heading field) carries the ref key's norm identity, else the earliest /
+    /// most ref-dense mention. Returns `None` if nothing carries it.
     ///
     /// EU-bound article keys (`EU:2013/575:Art.395`) get a second candidate
     /// source: the regulation's own text writes just "Artikel 395" (no Kürzel,
@@ -147,9 +148,12 @@ impl Database {
     ///      ref (`EU:2013/575`) count as "the regulation itself" — a law that
     ///      merely cites the regulation somewhere in its body does not qualify.
     ///   2. **Definition shape:** within those documents only chunks whose
-    ///      signature carries `Art./Artikel N` at a word boundary or whose text
-    ///      *begins* with it are returned — mere in-body mentions are not,
-    ///      so this can never flood the candidate set.
+    ///      signature carries `Art./Artikel N` at a word boundary, whose text
+    ///      *begins* with it, or whose `metadata.section` carries it (the
+    ///      structural chunker's article heading, e.g. `"Artikel 395 (1)"` —
+    ///      the CRR PDF puts it there and nowhere else, found 2026-07-12) are
+    ///      returned — mere in-body mentions are not, so this can never flood
+    ///      the candidate set.
     fn eu_article_def_candidates(
         &self,
         context_ids: &[i64],
@@ -165,7 +169,11 @@ impl Database {
             .join(",");
         // SQL pre-filter: regulation documents (gate 1) + a cheap `LIKE` on the
         // article number; the exact word-boundary/definition-shape check (gate
-        // 2) happens in Rust below (LIKE can't collapse whitespace).
+        // 2) happens in Rust below (LIKE can't collapse whitespace). `metadata`
+        // is included alongside `text`/`signature` because structural chunkers
+        // (e.g. the CRR PDF) put the article heading in `metadata.section`
+        // only — a chunk whose article number lives solely there would
+        // otherwise never survive this prefilter (found 2026-07-12).
         let sql = format!(
             "SELECT c.* FROM chunks c \
               WHERE c.context_id IN ({placeholders}) \
@@ -175,15 +183,17 @@ impl Database {
                         FROM chunk_refs r JOIN chunks c2 ON c2.id = r.chunk_id \
                        WHERE r.ref_key = ? AND c2.chunk_index <= 2) \
                 AND (c.text LIKE '%' || ? || '%' \
-                     OR c.signature LIKE '%' || ? || '%') \
+                     OR c.signature LIKE '%' || ? || '%' \
+                     OR c.metadata LIKE '%' || ? || '%') \
               ORDER BY c.document_id, c.chunk_index"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(context_ids.len() + 3);
+        let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(context_ids.len() + 4);
         for cid in context_ids {
             binds.push(cid);
         }
         binds.push(&base_key);
+        binds.push(&art);
         binds.push(&art);
         binds.push(&art);
         let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| {
@@ -204,7 +214,17 @@ impl Database {
                         .iter()
                         .any(|s| n.starts_with(s.as_str()) && contains_bounded(&n, s))
                 };
-                sig_hit || text_start_hit
+                // Structural chunkers (e.g. the CRR PDF) put the article
+                // heading in `metadata.section`, not in `signature` or at the
+                // text start (a section-final chunk starts mid-sentence, e.g.
+                // "(1) Ein Institut hält ..."). Without this, EU-bound
+                // articles from structurally chunked regulations never
+                // qualify as a definition site — found 2026-07-12.
+                let section_hit = super::chunks::chunk_section(c).is_some_and(|section| {
+                    let n = norm(&section);
+                    surfaces.iter().any(|s| contains_bounded(&n, s))
+                });
+                sig_hit || text_start_hit || section_hit
             })
             .collect();
         Ok(out)
@@ -358,10 +378,11 @@ fn kuerzel_conflicts(text: &str, surf: &str, own: &str) -> bool {
 }
 
 /// Pure ranking: choose the best target chunk for a ref among `candidates`.
-/// Prefers a definition site (signature or text-start carries the ref surface),
-/// then the most ref-dense, then the earliest (candidates arrive ordered by
-/// document/chunk_index, so the first is earliest). `density[chunk_id]` is the
-/// number of outgoing refs of that chunk. `candidates` is non-empty.
+/// Prefers a definition site (signature, text-start, or `metadata.section`
+/// carries the ref surface), then the most ref-dense, then the earliest
+/// (candidates arrive ordered by document/chunk_index, so the first is
+/// earliest). `density[chunk_id]` is the number of outgoing refs of that
+/// chunk. `candidates` is non-empty.
 pub(crate) fn pick_definition_site(
     candidates: Vec<Chunk>,
     ref_key: &str,
@@ -372,10 +393,13 @@ pub(crate) fn pick_definition_site(
 
     // A chunk is a "definition site" if its signature carries the ref surface at
     // a word boundary (so `§ 25` does not match `§ 25a`), or its text *begins*
-    // with it, AND no conflicting different law Kürzel sits next to it (a
-    // `§ 25a VAG` signature must not satisfy a `KWG:§25a` ref). A mere mid-body
-    // mention does not count — that would let a dense mention chunk masquerade
-    // as the definition.
+    // with it, or its `metadata.section` carries it — structural chunkers
+    // (e.g. the CRR PDF) put the article heading there instead of in
+    // signature/text-start, since a section-final chunk can start mid-sentence
+    // (found 2026-07-12) — AND no conflicting different law Kürzel sits next to
+    // it (a `§ 25a VAG` signature must not satisfy a `KWG:§25a` ref). A mere
+    // mid-body mention does not count — that would let a dense mention chunk
+    // masquerade as the definition.
     let carries = |hay: &str, at_start: bool| -> bool {
         surfaces.iter().any(|surf| {
             let matched = if at_start {
@@ -403,7 +427,15 @@ pub(crate) fn pick_definition_site(
                 return true;
             }
         }
-        carries(&norm(&c.text), true)
+        if carries(&norm(&c.text), true) {
+            return true;
+        }
+        if let Some(section) = super::chunks::chunk_section(c) {
+            if carries(&norm(&section), false) {
+                return true;
+            }
+        }
+        false
     };
 
     // Score: (definition-site?, ref-density). Higher is better; ties fall to the

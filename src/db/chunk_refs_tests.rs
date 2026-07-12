@@ -65,6 +65,22 @@ fn seed(db: &Database) -> (i64, i64) {
 }
 
 fn mk_chunk(db: &Database, ctx: i64, doc: i64, idx: i64, sig: Option<&str>, text: &str) -> i64 {
+    mk_chunk_with_section(db, ctx, doc, idx, sig, text, None)
+}
+
+fn mk_chunk_with_section(
+    db: &Database,
+    ctx: i64,
+    doc: i64,
+    idx: i64,
+    sig: Option<&str>,
+    text: &str,
+    section: Option<&str>,
+) -> i64 {
+    let metadata = match section {
+        Some(s) => format!(r#"{{"section":{}}}"#, serde_json::to_string(s).unwrap()),
+        None => "{}".into(),
+    };
     db.create_chunk(&NewChunk {
         context_id: ctx,
         document_id: doc,
@@ -74,7 +90,7 @@ fn mk_chunk(db: &Database, ctx: i64, doc: i64, idx: i64, sig: Option<&str>, text
         text: text.into(),
         signature: sig.map(|s| s.into()),
         is_omitted: false,
-        metadata: "{}".into(),
+        metadata,
     })
     .unwrap()
     .id
@@ -174,6 +190,22 @@ fn mk_chunk_reffed(db: &Database, ctx: i64, doc: i64, idx: i64, sig: Option<&str
     id
 }
 
+/// Like `mk_chunk_reffed`, but with a structural `metadata.section` (mirrors
+/// a structurally chunked PDF, e.g. the CRR).
+fn mk_chunk_reffed_with_section(
+    db: &Database,
+    ctx: i64,
+    doc: i64,
+    idx: i64,
+    sig: Option<&str>,
+    text: &str,
+    section: &str,
+) -> i64 {
+    let id = mk_chunk_with_section(db, ctx, doc, idx, sig, text, Some(section));
+    db.set_chunk_refs(id, ctx, text).unwrap();
+    id
+}
+
 #[test]
 fn resolve_eu_bound_article_to_regulation_def_chunk() {
     let db = db();
@@ -239,9 +271,53 @@ fn resolve_eu_bound_article_ignores_mere_citing_documents() {
     assert!(db.resolve_ref_target(&[ctx], "EU:2013/575:Art.92").unwrap().is_none());
 }
 
+#[test]
+fn resolve_eu_bound_article_via_metadata_section_only() {
+    // Mirrors the CRR structural-chunking finding (2026-07-12): the article
+    // heading lives ONLY in `metadata.section`, never in signature/text-start,
+    // and the def chunk's text doesn't even contain "395" — so only the new
+    // metadata LIKE-prefilter + section_hit check can surface it.
+    let db = db();
+    let (ctx, law_doc) = seed(&db);
+    // Citing law: mentions the compound key in prose (mention candidate) —
+    // NOT at the text start, so it can't win via text_start_hit either.
+    let citing = mk_chunk_reffed(
+        &db, ctx, law_doc, 0, None,
+        "Nach Maßgabe von Artikel 395 der Verordnung (EU) Nr. 575/2013 ist dies zu beachten.",
+    );
+    // The regulation document itself: early chunk carries the base EU ref.
+    let reg_doc = mk_doc(&db, ctx, "crr.pdf");
+    mk_chunk_reffed(
+        &db, ctx, reg_doc, 0, None,
+        "Verordnung (EU) Nr. 575/2013 des Europäischen Parlaments und des Rates",
+    );
+    // The article's own chunk: section carries "Artikel 395 (1)", but neither
+    // signature nor text start (nor anywhere in the text) contains "395".
+    let def = mk_chunk_reffed_with_section(
+        &db, ctx, reg_doc, 7, None,
+        "(1) Ein Institut hält die Großkreditobergrenze ein.",
+        "Artikel 395 (1)",
+    );
+
+    let target = db.resolve_ref_target(&[ctx], "EU:2013/575:Art.395").unwrap().unwrap();
+    assert_eq!(
+        target.id, def,
+        "section-only definition chunk must be found via the metadata prefilter + section_hit"
+    );
+    assert_ne!(target.id, citing, "the citing chunk is a mention, not the definition");
+}
+
 // --- pure pick_definition_site ---
 
 fn chunk(id: i64, sig: Option<&str>, text: &str) -> Chunk {
+    chunk_with_section(id, sig, text, None)
+}
+
+fn chunk_with_section(id: i64, sig: Option<&str>, text: &str, section: Option<&str>) -> Chunk {
+    let metadata = match section {
+        Some(s) => format!(r#"{{"section":{}}}"#, serde_json::to_string(s).unwrap()),
+        None => "{}".into(),
+    };
     Chunk {
         id,
         context_id: 1,
@@ -252,7 +328,7 @@ fn chunk(id: i64, sig: Option<&str>, text: &str) -> Chunk {
         text: text.into(),
         signature: sig.map(|s| s.into()),
         is_omitted: false,
-        metadata: "{}".into(),
+        metadata,
         created_at: 0,
     }
 }
@@ -362,6 +438,65 @@ fn pick_definition_site_eu_legacy_surface() {
     assert_eq!(picked.id, 2, "EU legacy order 575/2013 must be recognized as def-site");
 }
 
+#[test]
+fn pick_definition_site_section_wins_against_dense_mention() {
+    // Chunk A: dense mention of "Art. 395" in prose (many refs), but neither
+    // signature nor text-start carries it. Chunk B: signature/text-start also
+    // don't carry it, but `metadata.section` is "Artikel 395 (1)" — the CRR
+    // structural-chunking pattern (2026-07-12). B must win despite A's density.
+    let candidates = vec![
+        chunk(1, Some("General remarks"), "siehe Art. 395 und Art. 395 dazu ausführlich"),
+        chunk_with_section(
+            2,
+            Some("General remarks"),
+            "(1) Ein Institut hält die Großkreditobergrenze ein.",
+            Some("Artikel 395 (1)"),
+        ),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 8);
+    density.insert(2, 1);
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    assert_eq!(picked.id, 2, "section-carried def-site must win over a dense mid-body mention");
+}
+
+#[test]
+fn pick_definition_site_section_word_boundary() {
+    // section "Artikel 39" must NOT qualify for Art.395 (prefix collision);
+    // section "Artikel 395 (1)" must qualify (right boundary is a space).
+    let candidates = vec![
+        chunk_with_section(1, None, "kein Volltext", Some("Artikel 39")),
+        chunk_with_section(2, None, "kein Volltext", Some("Artikel 395 (1)")),
+    ];
+    let density = HashMap::new();
+    let picked = pick_definition_site(candidates, "EU:2013/575:Art.395", &density);
+    assert_eq!(picked.id, 2, "only the exact-boundary section should count as def-site");
+
+    // With only the colliding section present, nothing is a def-site → falls
+    // back to earliest/density, but must NOT crash or wrongly mark it.
+    let candidates2 = vec![chunk_with_section(3, None, "x", Some("Artikel 39"))];
+    let d2 = HashMap::new();
+    // Only one candidate — picked is trivially candidate 3, but this exercises
+    // is_def_site returning false for it without panicking.
+    assert_eq!(pick_definition_site(candidates2, "EU:2013/575:Art.395", &d2).id, 3);
+}
+
+#[test]
+fn pick_definition_site_section_kuerzel_conflict() {
+    // section "§ 25a VAG" must NOT satisfy KWG:§25a (different act's Kürzel
+    // sits right after the surface in the section text) — despite higher
+    // density, it must lose to the real (lower-density) KWG def-site.
+    let candidates = vec![
+        chunk_with_section(1, None, "irrelevant", Some("§ 25a VAG")),
+        chunk_with_section(2, Some("§ 25a KWG — Besondere organisatorische Pflichten"), "irrelevant mention § 25a", None),
+    ];
+    let mut density = HashMap::new();
+    density.insert(1, 9);
+    density.insert(2, 1);
+    let picked = pick_definition_site(candidates, "KWG:§25a", &density);
+    assert_eq!(picked.id, 2, "wrong-Kürzel section must not win for a KWG ref");
+}
+
 // --- pure expand_with_refs caps ---
 
 #[test]
@@ -401,3 +536,6 @@ fn expand_never_readds_primary_or_duplicate() {
     let out2 = expand_with_refs(&[1, 2], &resolved2, 4);
     assert_eq!(out2, vec![ReferencedChunk { chunk_id: 300, referenced_by: 1 }]);
 }
+
+
+

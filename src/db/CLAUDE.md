@@ -20,20 +20,26 @@ Wird von `embedding/retrieval.rs`' Hybrid-Pfad (RRF) konsumiert.
 max_extra)` → `SectionContinuation{chunks, continues_at}` (TOOL_CALLS_V2 AP2):
 Folge-Chunks desselben Dokuments mit fortlaufendem `chunk_index` und exakt
 gleicher non-empty `metadata.section`, gegen Fragmentierung mehrteiliger
-§§/Artikel; `max_extra=0` = reiner Existenz-Check. Tests: `db/chunks_tests.rs`.
+§§/Artikel; `max_extra=0` = reiner Existenz-Check. `chunk_section(&Chunk) ->
+Option<String>` (parst `metadata` als JSON, non-empty `section` oder None) ist
+`pub(crate)` und wird auch von `chunk_refs.rs` genutzt. Tests: `db/chunks_tests.rs`.
 
 `chunk_refs.rs` (`schema_v49`, AP2): Normverweis-Kanten `chunk_refs(chunk_id,
 context_id, ref_key)` (Index `(context_id, ref_key)`, FK-Cascade auf chunks+contexts).
 Ableitung aus `chunks.text` über `crate::refs::parse_refs`: `set_chunk_refs`
 (pro Chunk, delete-then-insert = idempotent), `rebuild_chunk_refs(context_id)`
 (kontextweit, idempotent). Auflösung `resolve_ref_target` bevorzugt die
-Definitions-Stelle (Signatur trägt den Ref wortgrenzen-genau bzw. Text beginnt
-damit; Kürzel-Konflikt disqualifiziert), sonst ref-dichtester/frühester
-Erwähnungs-Chunk (`pick_definition_site`, reine Fn). EU-gebundene Artikel-Keys
-(`EU:2013/575:Art.395`) haben eine zweite Kandidatenquelle
-(`eu_article_def_candidates`): definitions-förmige Chunks aus dem Dokument der
-Verordnung selbst (identifiziert über frühe Chunks mit dem Basis-Key)
-verdrängen Zitier-Erwähnungen — Details HANDBUCH.md §1.2 `chunk_refs.rs`.
+Definitions-Stelle (Signatur trägt den Ref wortgrenzen-genau, Text beginnt
+damit, oder `metadata.section` trägt ihn wortgrenzen-genau — strukturelle
+Chunker wie beim CRR-PDF legen die Artikel-Überschrift nur dort ab, Befund
+2026-07-12; Kürzel-Konflikt disqualifiziert in allen drei Fällen), sonst
+ref-dichtester/frühester Erwähnungs-Chunk (`pick_definition_site`, reine Fn).
+EU-gebundene Artikel-Keys (`EU:2013/575:Art.395`) haben eine zweite
+Kandidatenquelle (`eu_article_def_candidates`): definitions-förmige Chunks aus
+dem Dokument der Verordnung selbst (identifiziert über frühe Chunks mit dem
+Basis-Key, Definitionsform auch über `metadata.section`, SQL-Prefilter
+inkludiert `metadata`) verdrängen Zitier-Erwähnungen — Details HANDBUCH.md
+§1.2 `chunk_refs.rs`.
 Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
 ≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
 konsumiert.
