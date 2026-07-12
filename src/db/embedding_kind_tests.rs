@@ -67,7 +67,7 @@ fn migrate_to_50_then_seed() -> Connection {
 fn v51_rebuild_preserves_rows_and_fk_links() {
     let conn = migrate_to_50_then_seed();
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
 
     // Both embedding_models rows survive verbatim (ids + kinds intact).
     let models = db.list_embedding_models().unwrap();
@@ -121,7 +121,7 @@ fn v51_rebuild_preserves_rows_and_fk_links() {
 #[test]
 fn v51_accepts_local_gguf_and_still_rejects_garbage() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
 
     // local_gguf is now a valid kind (CRUD round-trip through the typed API).
     let m = db

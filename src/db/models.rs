@@ -185,6 +185,12 @@ pub struct LlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    /// Endpoint capability flag (schema_v54, AP8): the model behind this endpoint
+    /// speaks tool-calling reliably. Only endpoints with this set get a `tools`
+    /// manifest + the recursive agentic loop; without it, chat falls back to
+    /// classic single-shot RAG. Analogous to `is_reasoning`.
+    #[serde(default)]
+    pub supports_tools: bool,
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,
@@ -220,6 +226,11 @@ pub struct NewLlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
+    /// schema_v54 (AP8). `#[serde(default)]` so JSON bodies predating the column
+    /// (web adapter / stored context bundles) still deserialize (= false = no
+    /// tool loop, classic single-shot RAG).
+    #[serde(default)]
+    pub supports_tools: bool,
     #[serde(default = "default_true")]
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
@@ -459,6 +470,11 @@ pub struct Document {
     pub id: i64,
     pub context_id: i64,
     pub name: String,
+    /// Per-file description (schema_v54, AP8): surfaced in the tool manifest so a
+    /// tool-calling model knows what each selected file contains before searching.
+    /// The file-level counterpart of `contexts.description`.
+    #[serde(default)]
+    pub description: Option<String>,
     pub zip_entry: Option<String>,
     pub byte_size: Option<i64>,
     pub page_count: Option<i64>,

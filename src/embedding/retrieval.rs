@@ -73,11 +73,16 @@ impl Database {
     /// Retrieve top-`k` chunks using query vectors precomputed per embedding
     /// model (`query_by_model[model_id]`). Cosine is scale-invariant, so inputs
     /// need not be normalized and scores are comparable across spaces.
+    /// `doc_ids = Some(&[…])` restricts every per-context scan to those documents
+    /// (file-level retrieval scope, AP8); `None` = whole contexts. The same slice
+    /// is applied to the FTS list in the hybrid variant, so both lists are scoped
+    /// identically before RRF fusion (no provenance leak).
     pub fn retrieve_with(
         &self,
         context_ids: &[i64],
         query_by_model: &HashMap<i64, Vec<f32>>,
         top_k: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
         let mut merged: Vec<ScoredChunk> = Vec::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
@@ -85,7 +90,7 @@ impl Database {
                 continue;
             };
             for cid in ctxs {
-                merged.extend(self.search_context(cid, qvec, top_k)?);
+                merged.extend(self.search_context(cid, qvec, top_k, doc_ids)?);
             }
         }
         merged.sort_by(|a, b| {
@@ -102,7 +107,11 @@ impl Database {
         context_ids: &[i64],
         queries_by_row: &[HashMap<i64, Vec<f32>>],
         top_k: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<Vec<ScoredChunk>>> {
+        if matches!(doc_ids, Some(d) if d.is_empty()) {
+            return Ok(vec![Vec::new(); queries_by_row.len()]);
+        }
         let mut row_merged: Vec<Vec<ScoredChunk>> = vec![Vec::new(); queries_by_row.len()];
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             for cid in ctxs {
@@ -115,6 +124,11 @@ impl Database {
                         continue;
                     };
                     for sv in &stored {
+                        if let Some(allowed) = doc_ids {
+                            if !allowed.contains(&sv.document_id) {
+                                continue;
+                            }
+                        }
                         if sv.vector.len() == qvec.len() {
                             row_merged[row_idx].push(ScoredChunk {
                                 chunk_id: sv.chunk_id,
@@ -148,6 +162,7 @@ impl Database {
         query_by_model: &HashMap<i64, Vec<f32>>,
         raw_query: &str,
         top_k: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
         let n = hybrid_fanout(top_k);
         // Accumulate RRF scores globally across contexts/spaces.
@@ -158,11 +173,15 @@ impl Database {
             };
             for cid in ctxs {
                 // Vector list (best-first) restricted to this one context/space.
-                let vec_hits = self.search_context(cid, qvec, n)?;
+                // The SAME `doc_ids` filter is applied to BOTH the vector list
+                // and the FTS list below, so both are scoped identically before
+                // RRF fusion — a leak here would surface out-of-scope chunks with
+                // valid provenance (the `is_omitted` leak class).
+                let vec_hits = self.search_context(cid, qvec, n, doc_ids)?;
                 let vec_ranked: Vec<i64> = vec_hits.iter().map(|h| h.chunk_id).collect();
-                // FTS list (best-first) for the same context.
+                // FTS list (best-first) for the same context, same file scope.
                 let fts_ranked: Vec<i64> = self
-                    .keyword_search_context(cid, raw_query, n)?
+                    .keyword_search_context(cid, raw_query, n, doc_ids)?
                     .into_iter()
                     .map(|(id, _rank)| id)
                     .collect();
@@ -197,11 +216,12 @@ impl Database {
         queries_by_row: &[HashMap<i64, Vec<f32>>],
         raw_queries: &[String],
         top_k: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<Vec<ScoredChunk>>> {
         let mut out = Vec::with_capacity(queries_by_row.len());
         for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
             let raw = raw_queries.get(row_idx).map(String::as_str).unwrap_or("");
-            out.push(self.retrieve_hybrid_with(context_ids, query_by_model, raw, top_k)?);
+            out.push(self.retrieve_hybrid_with(context_ids, query_by_model, raw, top_k, doc_ids)?);
         }
         Ok(out)
     }
@@ -221,6 +241,6 @@ impl Database {
                 query_by_model.insert(model_id, embedder.embed_query(&model, query)?);
             }
         }
-        self.retrieve_with(context_ids, &query_by_model, top_k)
+        self.retrieve_with(context_ids, &query_by_model, top_k, None)
     }
 }

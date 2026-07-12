@@ -50,35 +50,113 @@ impl Database {
     /// embedded, so vector search can't return them) and every other
     /// retrieval-facing query — without it, omitted rows (the FTS triggers index
     /// *all* chunks) could leak into hybrid results and be handed to the LLM.
+    ///
+    /// `doc_ids = Some(&[…])` restricts to those documents (the file-level scope,
+    /// AP8) — the same filter that the vector path applies, so both lists are
+    /// scoped identically **before** the caller's RRF fusion. An empty slice
+    /// means "no documents in scope" → empty result.
     pub fn keyword_search_context(
         &self,
         context_id: i64,
         query: &str,
         n: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<(i64, usize)>> {
+        if matches!(doc_ids, Some(d) if d.is_empty()) {
+            return Ok(Vec::new());
+        }
         let Some(match_expr) = escape_fts_query(query) else {
             return Ok(Vec::new());
         };
-        // Join the FTS rowid to chunks.id and filter by context. bm25() is
-        // ascending (lower = better), so ORDER BY bm25 gives best-first.
-        let mut stmt = self.conn.prepare(
-            "SELECT c.id \
-               FROM chunks_fts \
-               JOIN chunks c ON c.id = chunks_fts.rowid \
-              WHERE chunks_fts MATCH ?1 AND c.context_id = ?2 AND c.is_omitted = 0 \
-              ORDER BY bm25(chunks_fts) \
-              LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![match_expr, context_id, n as i64],
-            |row| row.get::<_, i64>(0),
-        )?;
-        let mut out = Vec::new();
-        for (i, id) in rows.enumerate() {
-            out.push((id?, i + 1));
-        }
-        Ok(out)
+        fts_match_scoped(&self.conn, &match_expr, context_id, n, doc_ids)
     }
+
+    /// Exact-phrase FTS5 search over a context's **non-omitted** chunks (AP8,
+    /// the `lookup_exact` tool). Unlike `keyword_search_context` (which OR-fuses
+    /// the terms bag-of-words style), this quotes the WHOLE query as a single
+    /// FTS5 phrase so the terms must appear adjacent, in order — precisely what
+    /// the model needs when following a cited norm ("Art. 33", "2016/679") whose
+    /// exact string vector search blurs. Returns up to `n` `(chunk_id, rank)`
+    /// pairs, best match first. `None` phrase (no usable tokens) → empty result.
+    /// Same `doc_ids` file scope and `is_omitted = 0` guard as the keyword path.
+    pub fn phrase_search_context(
+        &self,
+        context_id: i64,
+        phrase: &str,
+        n: usize,
+        doc_ids: Option<&[i64]>,
+    ) -> Result<Vec<(i64, usize)>> {
+        if matches!(doc_ids, Some(d) if d.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let Some(match_expr) = escape_fts_phrase(phrase) else {
+            return Ok(Vec::new());
+        };
+        fts_match_scoped(&self.conn, &match_expr, context_id, n, doc_ids)
+    }
+}
+
+/// Run a prepared FTS5 MATCH (either the OR-fused keyword expr or a quoted
+/// phrase) scoped to one context, non-omitted, best-first, optionally restricted
+/// to a document set. Uses **anonymous** `?` placeholders throughout (mixing
+/// `?N` with a bare `?` collapses SQLite's parameter numbering and undercounts
+/// the binds), bound in textual order.
+fn fts_match_scoped(
+    conn: &rusqlite::Connection,
+    match_expr: &str,
+    context_id: i64,
+    n: usize,
+    doc_ids: Option<&[i64]>,
+) -> Result<Vec<(i64, usize)>> {
+    let mut sql = String::from(
+        "SELECT c.id \
+           FROM chunks_fts \
+           JOIN chunks c ON c.id = chunks_fts.rowid \
+          WHERE chunks_fts MATCH ? AND c.context_id = ? AND c.is_omitted = 0",
+    );
+    if let Some(allowed) = doc_ids {
+        let placeholders = std::iter::repeat("?")
+            .take(allowed.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(&format!(" AND c.document_id IN ({placeholders})"));
+    }
+    sql.push_str(" ORDER BY bm25(chunks_fts) LIMIT ?");
+    let mut stmt = conn.prepare(&sql)?;
+    let n_i64 = n as i64;
+    let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    binds.push(&match_expr);
+    binds.push(&context_id);
+    // Doc-id binds come BEFORE the LIMIT bind, matching their textual position
+    // (the IN clause precedes ORDER BY / LIMIT in the SQL above).
+    if let Some(allowed) = doc_ids {
+        for id in allowed {
+            binds.push(id);
+        }
+    }
+    binds.push(&n_i64);
+    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| row.get::<_, i64>(0))?;
+    let mut out = Vec::new();
+    for (i, id) in rows.enumerate() {
+        out.push((id?, i + 1));
+    }
+    Ok(out)
+}
+
+/// Quote the ENTIRE query as one FTS5 phrase (terms must be adjacent/in order),
+/// as opposed to `escape_fts_query`'s per-term OR fusion. Collapses internal
+/// whitespace to single spaces and doubles embedded quotes. Returns `None` when
+/// the query has no alphanumeric content (a lone "§" → an empty `""` phrase,
+/// which FTS5 treats as match-all).
+pub(crate) fn escape_fts_phrase(raw: &str) -> Option<String> {
+    if !raw.chars().any(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    // Rebuild from whitespace-split tokens so tabs/newlines/runs collapse to one
+    // space inside the phrase; double any embedded quote to keep it one string.
+    let joined = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let escaped = joined.replace('"', "\"\"");
+    Some(format!("\"{escaped}\""))
 }
 
 #[cfg(test)]

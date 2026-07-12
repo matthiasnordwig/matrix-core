@@ -107,6 +107,41 @@ impl Database {
             .expect("row just inserted must exist"))
     }
 
+    /// Append a turn carrying the reserved tool-loop columns (AP8): the assistant
+    /// turn of an agentic tool-loop chat stores its serialized trace in
+    /// `tool_calls_json` (the round-by-round assistant tool calls + usage) and the
+    /// raw retrieve payloads in `tool_payload_json`. Both are `None` for plain
+    /// turns (use `append_chat_message` there). Consumed by the AP9/AP11 trace
+    /// inspector; the plain history load ignores them.
+    pub fn append_chat_message_with_tools(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: &str,
+        tool_calls_json: Option<&str>,
+        tool_payload_json: Option<&str>,
+    ) -> Result<ChatMessage> {
+        self.conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, tool_calls_json, tool_payload_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, role, content, tool_calls_json, tool_payload_json],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.conn.execute(
+            "UPDATE chat_sessions SET updated_at = unixepoch() WHERE id = ?1",
+            [session_id],
+        )?;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT * FROM chat_messages WHERE id = ?1",
+                [id],
+                row_to_message,
+            )
+            .optional()?
+            .expect("row just inserted must exist"))
+    }
+
     /// The session's turns in chronological (insertion) order.
     pub fn chat_messages_for_session(&self, session_id: i64) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(

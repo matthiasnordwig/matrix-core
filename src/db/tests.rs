@@ -79,7 +79,7 @@ fn seed(db: &Database) -> (i64, i64, i64, i64) {
 #[test]
 fn migration_sets_version_and_seeds_settings() {
     let db = db();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
     // seeded defaults from schema_v1.sql
     let top_k: i64 = db.get_setting("top_k_default").unwrap().unwrap();
     assert_eq!(top_k, 5);
@@ -282,7 +282,7 @@ fn brute_force_cosine_ranks_nearest() {
     }
 
     // Query closest to the second vector.
-    let hits = db.search_context(ctx_id, &[0.1, 0.9, 0.0, 0.0], 2).unwrap();
+    let hits = db.search_context(ctx_id, &[0.1, 0.9, 0.0, 0.0], 2, None).unwrap();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].chunk_id, chunk_ids[1]);
     assert!(hits[0].score > hits[1].score);
@@ -611,6 +611,7 @@ fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
         max_concurrency: 2,
         is_reasoning: false,
         supports_structured_output: false,
+        supports_tools: false,
         stream_fallback: true,
         kv_quantization: None,
         cpu_threads: None,
@@ -645,6 +646,7 @@ fn llm_endpoint_stream_fallback_roundtrip() {
         max_concurrency: created.max_concurrency,
         is_reasoning: created.is_reasoning,
         supports_structured_output: created.supports_structured_output,
+        supports_tools: created.supports_tools,
         stream_fallback: false,
         kv_quantization: created.kv_quantization.clone(),
         cpu_threads: created.cpu_threads,
@@ -820,6 +822,7 @@ fn deleting_a_reasoning_list_nulls_endpoint_fk() {
             max_concurrency: 2,
             is_reasoning: true,
             supports_structured_output: false,
+            supports_tools: false,
             stream_fallback: true,
             kv_quantization: None,
             cpu_threads: None,

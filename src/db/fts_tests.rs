@@ -81,6 +81,20 @@ fn seed_ctx(db: &Database) -> (i64, i64) {
     (ctx.id, doc.id)
 }
 
+fn add_doc(db: &Database, ctx: i64, name: &str) -> i64 {
+    db.create_document(&NewDocument {
+        context_id: ctx,
+        name: name.into(),
+        zip_entry: None,
+        byte_size: None,
+        page_count: None,
+        content_hash: None,
+        extracted_text: None,
+    })
+    .unwrap()
+    .id
+}
+
 fn add_chunk(db: &Database, ctx: i64, doc: i64, idx: i64, text: &str) -> i64 {
     db.create_chunk(&NewChunk {
         context_id: ctx,
@@ -105,18 +119,18 @@ fn fts_triggers_keep_index_in_sync() {
 
     // INSERT -> searchable.
     let c1 = add_chunk(&db, ctx, doc, 0, "the quick brown fox");
-    let hits = db.keyword_search_context(ctx, "quick", 10).unwrap();
+    let hits = db.keyword_search_context(ctx, "quick", 10, None).unwrap();
     assert_eq!(hits.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![c1]);
 
     // UPDATE -> old term gone, new term present.
     db.update_chunk_text(c1, "a lazy sleeping dog").unwrap();
-    assert!(db.keyword_search_context(ctx, "quick", 10).unwrap().is_empty());
-    let hits = db.keyword_search_context(ctx, "lazy", 10).unwrap();
+    assert!(db.keyword_search_context(ctx, "quick", 10, None).unwrap().is_empty());
+    let hits = db.keyword_search_context(ctx, "lazy", 10, None).unwrap();
     assert_eq!(hits.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![c1]);
 
     // DELETE -> gone.
     db.delete_chunk(c1).unwrap();
-    assert!(db.keyword_search_context(ctx, "lazy", 10).unwrap().is_empty());
+    assert!(db.keyword_search_context(ctx, "lazy", 10, None).unwrap().is_empty());
 }
 
 /// Context isolation + rank ordering + robust escaping of identifier-like
@@ -133,7 +147,7 @@ fn keyword_search_context_scoping_and_escaping() {
 
     // Identifier with dots/spaces must not raise an FTS5 syntax error and must
     // stay scoped to ctx_a.
-    let hits = db.keyword_search_context(ctx_a, "AT 4.3.2", 10).unwrap();
+    let hits = db.keyword_search_context(ctx_a, "AT 4.3.2", 10, None).unwrap();
     let ids: Vec<i64> = hits.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids, vec![a1], "expected only ctx_a hit, got {ids:?}");
 
@@ -142,11 +156,11 @@ fn keyword_search_context_scoping_and_escaping() {
 
     // `§`, quotes and periods must be handled without error.
     for q in ["§ 25a KWG", "Art. 28", "a \"weird\" query", "()MATCH*"] {
-        db.keyword_search_context(ctx_a, q, 10).unwrap();
+        db.keyword_search_context(ctx_a, q, 10, None).unwrap();
     }
     // Empty / whitespace-only query is a well-defined empty result.
-    assert!(db.keyword_search_context(ctx_a, "   ", 10).unwrap().is_empty());
-    assert!(db.keyword_search_context(ctx_a, "", 10).unwrap().is_empty());
+    assert!(db.keyword_search_context(ctx_a, "   ", 10, None).unwrap().is_empty());
+    assert!(db.keyword_search_context(ctx_a, "", 10, None).unwrap().is_empty());
 }
 
 /// Omitted chunks are indexed by the FTS triggers but must NOT surface in
@@ -174,8 +188,86 @@ fn keyword_search_excludes_omitted_chunks() {
         .unwrap()
         .id;
 
-    let hits = db.keyword_search_context(ctx, "Auslagerung", 10).unwrap();
+    let hits = db.keyword_search_context(ctx, "Auslagerung", 10, None).unwrap();
     let ids: Vec<i64> = hits.iter().map(|(id, _)| *id).collect();
     assert!(ids.contains(&kept), "non-omitted chunk must be found");
     assert!(!ids.contains(&omitted), "omitted chunk must NOT surface in FTS results");
+}
+
+/// AP8 file-level scope: `keyword_search_context` with `doc_ids = Some(&[…])`
+/// must return only chunks of the named documents — the FTS leg of the doc_ids
+/// filter (leak-regression: the vector leg has its own guard, both must match).
+#[test]
+fn keyword_search_respects_doc_scope() {
+    let db = Database::open_in_memory().unwrap();
+    let (ctx, doc_a) = seed_ctx(&db);
+    let doc_b = add_doc(&db, ctx, "b.pdf");
+
+    let a1 = add_chunk(&db, ctx, doc_a, 0, "Auslagerung nach AT 9 (file A)");
+    let b1 = add_chunk(&db, ctx, doc_b, 0, "Auslagerung nach AT 9 (file B)");
+
+    // No scope: both files match.
+    let all: Vec<i64> = db
+        .keyword_search_context(ctx, "Auslagerung", 10, None)
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(all.contains(&a1) && all.contains(&b1));
+
+    // Scope to doc_a only: b1 must NOT surface.
+    let scoped: Vec<i64> = db
+        .keyword_search_context(ctx, "Auslagerung", 10, Some(&[doc_a]))
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(scoped.contains(&a1), "in-scope chunk must be found");
+    assert!(!scoped.contains(&b1), "out-of-scope chunk must NOT leak");
+
+    // Empty scope = no documents in scope → empty result (never "all").
+    assert!(db
+        .keyword_search_context(ctx, "Auslagerung", 10, Some(&[]))
+        .unwrap()
+        .is_empty());
+}
+
+/// AP8 `phrase_search_context`: exact-phrase (adjacent, in order) FTS, unlike
+/// the OR-fused keyword path. Terms out of order must NOT match; the same
+/// omitted-exclusion and doc-scope guards apply.
+#[test]
+fn phrase_search_is_exact_and_scoped() {
+    use super::fts::escape_fts_phrase;
+    // Pure escaping: whole query becomes one quoted phrase (not OR-joined).
+    assert_eq!(escape_fts_phrase("Art. 33").unwrap(), "\"Art. 33\"");
+    assert_eq!(escape_fts_phrase("  Art.\t33 ").unwrap(), "\"Art. 33\"");
+    assert!(escape_fts_phrase("§ — ()").is_none());
+
+    let db = Database::open_in_memory().unwrap();
+    let (ctx, doc_a) = seed_ctx(&db);
+    let doc_b = add_doc(&db, ctx, "b.pdf");
+
+    let hit = add_chunk(&db, ctx, doc_a, 0, "Meldepflicht nach Art. 33 DSGVO binnen 72 Stunden");
+    // Same terms, but not adjacent/in order → phrase must NOT match.
+    let _reorder = add_chunk(&db, ctx, doc_a, 1, "33 verschiedene Artikel");
+    let other_doc = add_chunk(&db, ctx, doc_b, 0, "Art. 33 in file B");
+
+    let ids: Vec<i64> = db
+        .phrase_search_context(ctx, "Art. 33", 10, None)
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(ids.contains(&hit), "exact adjacent phrase must be found");
+    assert!(ids.contains(&other_doc), "phrase in file B matches without scope");
+
+    // Doc scope restricts to file A.
+    let scoped: Vec<i64> = db
+        .phrase_search_context(ctx, "Art. 33", 10, Some(&[doc_a]))
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(scoped.contains(&hit));
+    assert!(!scoped.contains(&other_doc), "out-of-scope phrase hit must NOT leak");
 }

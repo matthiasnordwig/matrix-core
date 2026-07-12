@@ -36,6 +36,7 @@ fn row_to_document(row: &Row<'_>) -> rusqlite::Result<Document> {
         id: row.get("id")?,
         context_id: row.get("context_id")?,
         name: row.get("name")?,
+        description: row.get("description")?,
         zip_entry: row.get("zip_entry")?,
         byte_size: row.get("byte_size")?,
         page_count: row.get("page_count")?,
@@ -184,6 +185,20 @@ impl Database {
             .prepare("SELECT * FROM documents WHERE context_id = ?1 ORDER BY name")?;
         let rows = stmt.query_map([context_id], row_to_document)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Set (or clear, with `None`/empty) a document's tool-manifest description
+    /// (schema_v54, AP8). An empty string is normalized to `NULL` so the manifest
+    /// builder can simply skip files without a description.
+    pub fn set_document_description(&self, id: i64, description: Option<&str>) -> Result<bool> {
+        let normalized = description.map(str::trim).filter(|s| !s.is_empty());
+        Ok(self
+            .conn
+            .execute(
+                "UPDATE documents SET description = ?2 WHERE id = ?1",
+                params![id, normalized],
+            )?
+            > 0)
     }
 
     pub fn delete_document(&self, id: i64) -> Result<bool> {

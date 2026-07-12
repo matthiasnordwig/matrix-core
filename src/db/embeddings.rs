@@ -155,15 +155,29 @@ impl Database {
 
     /// Brute-force cosine top-k over a context's vectors. All vectors in a
     /// context share one dimension, so `query` must match it.
+    ///
+    /// `doc_ids = Some(&[…])` restricts the scan to vectors of those documents
+    /// (the file-level retrieval scope, AP8); `None` scans the whole context.
+    /// An empty slice means "no documents in scope" → empty result (never
+    /// interpreted as "all").
     pub fn search_context(
         &self,
         context_id: i64,
         query: &[f32],
         top_k: usize,
+        doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
+        if matches!(doc_ids, Some(d) if d.is_empty()) {
+            return Ok(Vec::new());
+        }
         let stored = self.scan_context_vectors(context_id)?;
         let mut scored = Vec::with_capacity(stored.len());
         for sv in &stored {
+            if let Some(allowed) = doc_ids {
+                if !allowed.contains(&sv.document_id) {
+                    continue;
+                }
+            }
             if sv.vector.len() != query.len() {
                 return Err(CoreError::DimMismatch {
                     expected: query.len(),

@@ -113,7 +113,7 @@ fn migrate_to_49_then_seed(dir: Option<&str>) -> Connection {
 fn migration_promotes_existing_reranker_dir_to_active_local_row() {
     let conn = migrate_to_49_then_seed(Some("/models/jina-reranker-v2"));
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
 
     // An active local_onnx row now exists with the migrated dir.
     let rows = db.list_reranker_models().unwrap();
@@ -136,7 +136,7 @@ fn migration_promotes_existing_reranker_dir_to_active_local_row() {
 fn migration_noop_without_legacy_setting() {
     let conn = migrate_to_49_then_seed(None);
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
     assert!(db.list_reranker_models().unwrap().is_empty());
     assert!(db.active_reranker_model().unwrap().is_none());
 }
@@ -204,7 +204,7 @@ fn migrate_to_51_then_seed_rerankers() -> Connection {
 fn v52_rebuild_preserves_rows_and_widens_kind() {
     let conn = migrate_to_51_then_seed_rerankers();
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
 
     // Both seeded rows survive verbatim (ids + kinds + columns intact).
     let rows = db.list_reranker_models().unwrap();
@@ -250,7 +250,7 @@ fn v52_fresh_open_lands_at_52_and_accepts_gguf() {
     // The normal fresh-open path already applies v52 (idempotency guard in the
     // hook sees `local_gguf` in the table SQL on any re-run).
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 53);
+    assert_eq!(db.schema_version().unwrap(), 54);
     assert!(db.list_reranker_models().unwrap().is_empty());
 
     let m = db

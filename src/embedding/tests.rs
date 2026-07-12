@@ -221,7 +221,7 @@ fn hybrid_keeps_cross_space_isolation() {
     qbm.insert(m3.id, vec![1.0, 0.0, 0.0]);
 
     // Raw query "chunk" hits every chunk's text ("<name> chunk <i>") in FTS.
-    let hits = db.retrieve_hybrid_with(&[1, 2], &qbm, "chunk", 4).unwrap();
+    let hits = db.retrieve_hybrid_with(&[1, 2], &qbm, "chunk", 4, None).unwrap();
     let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
     // Best of each space still surfaces; no cross-space crash / dim mismatch.
     assert!(ids.contains(&a[0]), "best A missing: {ids:?}");
@@ -243,9 +243,9 @@ fn hybrid_batch_matches_looped_single() {
     let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
     qbm.insert(m.id, vec![1.0, 0.0, 0.0, 0.0]);
 
-    let single = db.retrieve_hybrid_with(&[1], &qbm, "chunk 0", 2).unwrap();
+    let single = db.retrieve_hybrid_with(&[1], &qbm, "chunk 0", 2, None).unwrap();
     let batch = db
-        .retrieve_hybrid_batch(&[1], &[qbm.clone()], &["chunk 0".to_string()], 2)
+        .retrieve_hybrid_batch(&[1], &[qbm.clone()], &["chunk 0".to_string()], 2, None)
         .unwrap();
     assert_eq!(batch.len(), 1);
     assert_eq!(
@@ -254,4 +254,115 @@ fn hybrid_batch_matches_looped_single() {
     );
     // "chunk 0" text present, so at least the first chunk is retrieved.
     assert!(single.iter().any(|h| h.chunk_id == ids[0]));
+}
+
+/// AP8 file-level scope on the VECTOR path: `retrieve_with` / `retrieve_hybrid_with`
+/// with `doc_ids = Some(&[…])` must never return a chunk from an out-of-scope
+/// document (leak-regression, mirror of the FTS-side test in `db/fts_tests.rs`).
+#[test]
+fn doc_scope_restricts_vector_and_hybrid_lists() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "scope-4d", 4);
+    let ctx = db
+        .create_context(&NewContext {
+            name: "Scoped".into(),
+            description: None,
+            chunking_profile_id: None,
+            embedding_model_id: Some(m.id),
+            embedding_dim: Some(4),
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
+            ontology_extract_reasoning_effort: None,
+            extract_title_llm: false,
+            auto_merge_ontology: false,
+            chunking_strategy: "Semantic".into(),
+            structural_profile_id: None,
+        })
+        .unwrap();
+    // Two documents in the SAME context/embedding space.
+    let mut docs = Vec::new();
+    for name in ["a.pdf", "b.pdf"] {
+        docs.push(
+            db.create_document(&NewDocument {
+                context_id: ctx.id,
+                name: name.into(),
+                zip_entry: None,
+                byte_size: None,
+                page_count: None,
+                content_hash: None,
+                extracted_text: None,
+            })
+            .unwrap()
+            .id,
+        );
+    }
+    // One identical axis-0 vector per doc so both would tie without a filter.
+    let mut chunk_by_doc = Vec::new();
+    for (i, &doc) in docs.iter().enumerate() {
+        let chunk = db
+            .create_chunk(&NewChunk {
+                context_id: ctx.id,
+                document_id: doc,
+                chunk_index: i as i64,
+                char_start: 0,
+                char_end: 1,
+                text: format!("Auslagerung chunk in doc {i}"),
+                signature: None,
+                is_omitted: false,
+                metadata: "{}".into(),
+            })
+            .unwrap();
+        db.insert_embedding(&NewEmbedding {
+            chunk_id: chunk.id,
+            context_id: ctx.id,
+            document_id: doc,
+            embedding_model_id: m.id,
+            dim: 4,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+        })
+        .unwrap();
+        chunk_by_doc.push(chunk.id);
+    }
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m.id, vec![1.0, 0.0, 0.0, 0.0]);
+
+    // No scope: both docs' chunks retrievable.
+    let all: Vec<i64> = db
+        .retrieve_with(&[ctx.id], &qbm, 10, None)
+        .unwrap()
+        .into_iter()
+        .map(|h| h.chunk_id)
+        .collect();
+    assert!(all.contains(&chunk_by_doc[0]) && all.contains(&chunk_by_doc[1]));
+
+    // Scope to doc a: only a's chunk, vector path.
+    let scoped: Vec<i64> = db
+        .retrieve_with(&[ctx.id], &qbm, 10, Some(&[docs[0]]))
+        .unwrap()
+        .into_iter()
+        .map(|h| h.chunk_id)
+        .collect();
+    assert!(scoped.contains(&chunk_by_doc[0]), "in-scope chunk must be found");
+    assert!(!scoped.contains(&chunk_by_doc[1]), "out-of-scope chunk must NOT leak (vector)");
+
+    // Scope to doc a: hybrid path (vector + FTS) must be scoped identically.
+    let scoped_hybrid: Vec<i64> = db
+        .retrieve_hybrid_with(&[ctx.id], &qbm, "Auslagerung", 10, Some(&[docs[0]]))
+        .unwrap()
+        .into_iter()
+        .map(|h| h.chunk_id)
+        .collect();
+    assert!(scoped_hybrid.contains(&chunk_by_doc[0]));
+    assert!(!scoped_hybrid.contains(&chunk_by_doc[1]), "out-of-scope chunk must NOT leak (hybrid)");
+
+    // Empty scope → empty on both paths.
+    assert!(db.retrieve_with(&[ctx.id], &qbm, 10, Some(&[])).unwrap().is_empty());
+    assert!(db
+        .retrieve_hybrid_with(&[ctx.id], &qbm, "Auslagerung", 10, Some(&[]))
+        .unwrap()
+        .is_empty());
 }
