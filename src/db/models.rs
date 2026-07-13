@@ -721,6 +721,10 @@ pub struct EvalRunResult {
     pub hit5: bool,
     pub hit10: bool,
     pub skipped: bool,
+    /// Agentic tool-loop trace envelope ({v, fell_back, prompt_snapshot,
+    /// trace}, schema_v58). NULL for classic runs and pre-v58 rows.
+    #[serde(default)]
+    pub trace_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -734,6 +738,8 @@ pub struct NewEvalRunResult {
     pub hit5: bool,
     pub hit10: bool,
     pub skipped: bool,
+    #[serde(default)]
+    pub trace_json: Option<String>,
 }
 
 // --- Grid & async matrix-chat ----------------------------------------------

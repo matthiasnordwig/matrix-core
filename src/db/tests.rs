@@ -1001,6 +1001,7 @@ fn eval_run_and_results_roundtrip_and_cascade() {
         hit5: true,
         hit10: true,
         skipped: false,
+        trace_json: None,
     })
     .unwrap();
 
@@ -1008,6 +1009,7 @@ fn eval_run_and_results_roundtrip_and_cascade() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].first_rank, Some(2));
     assert!(results[0].hit5);
+    assert!(results[0].trace_json.is_none());
 
     let done = db.finish_eval_run(run.id, "done", r#"{"mrr":0.5}"#).unwrap();
     assert_eq!(done.status, "done");
@@ -1019,4 +1021,63 @@ fn eval_run_and_results_roundtrip_and_cascade() {
     // Cascade: deleting the run removes its result rows.
     assert!(db.delete_eval_run(run.id).unwrap());
     assert!(db.get_eval_run_results(run.id).unwrap().is_empty());
+}
+
+/// schema_v58: `trace_json` round-trips both when present (agentic eval
+/// entries) and when absent (classic eval entries / pre-v58 rows).
+#[test]
+fn eval_run_result_trace_json_roundtrip() {
+    let db = db();
+    let set = db
+        .create_eval_golden_set(&NewEvalGoldenSet { title: "S".into(), description: "".into() })
+        .unwrap();
+    let entry = db
+        .create_eval_golden_entry(&NewEvalGoldenEntry {
+            set_id: set.id,
+            entry_key: "k".into(),
+            question: "Q".into(),
+            anchors_any: "[]".into(),
+            note: "".into(),
+        })
+        .unwrap();
+    let run = db
+        .create_eval_run(&NewEvalRun {
+            set_id: set.id,
+            context_ids: "[1]".into(),
+            config: "{}".into(),
+        })
+        .unwrap();
+
+    let trace = r#"{"v":1,"fell_back":false,"prompt_snapshot":"[]","trace":[]}"#;
+    db.insert_eval_run_result(&NewEvalRunResult {
+        run_id: run.id,
+        entry_id: entry.id,
+        entry_key: "k".into(),
+        question: "Q".into(),
+        resolved_chunks: 1,
+        first_rank: Some(1),
+        hit5: true,
+        hit10: true,
+        skipped: false,
+        trace_json: Some(trace.to_string()),
+    })
+    .unwrap();
+    db.insert_eval_run_result(&NewEvalRunResult {
+        run_id: run.id,
+        entry_id: entry.id,
+        entry_key: "k2".into(),
+        question: "Q2".into(),
+        resolved_chunks: 0,
+        first_rank: None,
+        hit5: false,
+        hit10: false,
+        skipped: false,
+        trace_json: None,
+    })
+    .unwrap();
+
+    let results = db.get_eval_run_results(run.id).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].trace_json, Some(trace.to_string()));
+    assert_eq!(results[1].trace_json, None);
 }

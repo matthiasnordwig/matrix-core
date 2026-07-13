@@ -55,6 +55,7 @@ fn row_to_result(row: &Row<'_>) -> rusqlite::Result<EvalRunResult> {
         hit5: row.get("hit5")?,
         hit10: row.get("hit10")?,
         skipped: row.get("skipped")?,
+        trace_json: row.get("trace_json")?,
     })
 }
 
@@ -209,11 +210,11 @@ impl Database {
     pub fn insert_eval_run_result(&self, r: &NewEvalRunResult) -> Result<()> {
         self.conn.execute(
             "INSERT INTO eval_run_results
-                (run_id, entry_id, entry_key, question, resolved_chunks, first_rank, hit5, hit10, skipped)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                (run_id, entry_id, entry_key, question, resolved_chunks, first_rank, hit5, hit10, skipped, trace_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 r.run_id, r.entry_id, r.entry_key, r.question, r.resolved_chunks,
-                r.first_rank, r.hit5, r.hit10, r.skipped
+                r.first_rank, r.hit5, r.hit10, r.skipped, r.trace_json
             ],
         )?;
         Ok(())
