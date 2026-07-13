@@ -133,6 +133,51 @@ fn rebuild_chunk_refs_is_idempotent() {
 }
 
 #[test]
+fn delete_chunk_refs_for_context_only_touches_its_own_context() {
+    let db = db();
+    let (ctx_a, doc_a) = seed(&db);
+    // A second context, reusing ctx_a's embedding model (`seed` can't be
+    // called twice — it would collide on the model's unique `identifier`).
+    let ctx_b = db
+        .create_context(&NewContext {
+            name: "Ctx B".into(),
+            description: None,
+            chunking_profile_id: None,
+            embedding_model_id: None,
+            embedding_dim: None,
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
+            ontology_extract_reasoning_effort: None,
+            extract_title_llm: false,
+            auto_merge_ontology: false,
+            chunking_strategy: "Semantic".into(),
+            structural_profile_id: None,
+        })
+        .unwrap()
+        .id;
+    let doc_b = mk_doc(&db, ctx_b, "b.pdf");
+    let a = mk_chunk(&db, ctx_a, doc_a, 0, None, "§ 25a KWG");
+    let b = mk_chunk(&db, ctx_b, doc_b, 0, None, "§ 6 GwG");
+    db.set_chunk_refs(a, ctx_a, "§ 25a KWG").unwrap();
+    db.set_chunk_refs(b, ctx_b, "§ 6 GwG").unwrap();
+    assert_eq!(db.chunk_refs_for_context(ctx_a).unwrap().len(), 1);
+    assert_eq!(db.chunk_refs_for_context(ctx_b).unwrap().len(), 1);
+
+    let deleted = db.delete_chunk_refs_for_context(ctx_a).unwrap();
+    assert_eq!(deleted, 1);
+    assert!(db.chunk_refs_for_context(ctx_a).unwrap().is_empty(), "ctx_a refs must be gone");
+    assert_eq!(
+        db.chunk_refs_for_context(ctx_b).unwrap().len(),
+        1,
+        "ctx_b refs must be untouched"
+    );
+}
+
+#[test]
 fn chunk_refs_for_context_groups_by_chunk() {
     let db = db();
     let (ctx, doc) = seed(&db);

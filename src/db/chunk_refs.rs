@@ -88,14 +88,24 @@ impl Database {
         Ok(n)
     }
 
+    /// Delete every `chunk_refs` row for `context_id`. Returns the number of
+    /// rows deleted. Split out of [`rebuild_chunk_refs`](Self::rebuild_chunk_refs)
+    /// so a background-job caller (services' `rebuild_chunk_refs`, Proxy-502-Fix)
+    /// can hold the app-wide DB lock only for this cheap delete instead of the
+    /// whole rebuild (ISSUES_FIX_PLAN.md AP2).
+    pub fn delete_chunk_refs_for_context(&self, context_id: i64) -> Result<usize> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM chunk_refs WHERE context_id = ?1", [context_id])?)
+    }
+
     /// Derive + persist refs for every non-omitted chunk of `context_id`,
     /// replacing any existing rows for the context. Idempotent — a second run
     /// yields the same rows. Returns the number of ref rows inserted. Loads
     /// the active [`ref_lexicon`](Self::ref_lexicon) exactly once for the
     /// whole rebuild (not per chunk).
     pub fn rebuild_chunk_refs(&self, context_id: i64) -> Result<usize> {
-        self.conn
-            .execute("DELETE FROM chunk_refs WHERE context_id = ?1", [context_id])?;
+        self.delete_chunk_refs_for_context(context_id)?;
         let lexicon = self.ref_lexicon()?;
         // Non-omitted only: omitted chunks are never retrievable (not embedded,
         // excluded from the FTS leg), so their outgoing refs would be dead rows.
