@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 pub mod models;
 
-mod chat_sessions;
+pub mod chat_sessions;
 pub mod chunks;
 pub mod chunk_refs;
 mod contexts;
@@ -169,6 +169,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v54.sql"),
     include_str!("schema_v55.sql"),
     include_str!("schema_v56.sql"),
+    include_str!("schema_v57.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

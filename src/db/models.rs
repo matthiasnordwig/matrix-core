@@ -313,7 +313,7 @@ pub struct ChatSession {
 
 /// A single turn in a chat session (`chat_messages`). `role` is `"user"` or
 /// `"assistant"` (system prompt is rebuilt per request, never stored). The two
-/// `tool_*` columns are reserved for the later tool-loop AP and stay `None` here.
+/// `tool_*` columns carry the tool-loop trace of agentic assistant turns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: i64,
@@ -322,6 +322,15 @@ pub struct ChatMessage {
     pub content: String,
     pub tool_calls_json: Option<String>,
     pub tool_payload_json: Option<String>,
+    /// schema_v57 (bubble transcript): model_id of the endpoint that served
+    /// this assistant turn (pools can differ per turn). `None` for user turns
+    /// and pre-v57 rows.
+    pub model: Option<String>,
+    /// schema_v57: reasoning effort used for this assistant turn (`None` = off).
+    pub reasoning_effort: Option<String>,
+    /// schema_v57: serialized `{sources, citations}` of the answer, so history
+    /// turns can re-render clickable [n] citations + the sources list.
+    pub answer_json: Option<String>,
     pub created_at: i64,
 }
 

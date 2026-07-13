@@ -119,6 +119,17 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// All ref rows of a whole context (ordered by chunk then insertion), so the
+    /// chunk viewer can show each chunk's outgoing references in one batch
+    /// instead of one query per chunk.
+    pub fn chunk_refs_for_context(&self, context_id: i64) -> Result<Vec<ChunkRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM chunk_refs WHERE context_id = ?1 ORDER BY chunk_id, id",
+        )?;
+        let rows = stmt.query_map([context_id], row_to_chunk_ref)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Chunks in the given contexts that *carry* `ref_key` (i.e. mention it in
     /// their own text), ordered by chunk_index so "earliest mention" is a
     /// stable tiebreak. Used by the resolver to find a ref's target chunk.

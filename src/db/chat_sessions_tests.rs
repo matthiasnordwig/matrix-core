@@ -129,3 +129,42 @@ fn list_orders_most_recently_updated_first() {
         .collect();
     assert_eq!(listed, vec![b.id, c.id, a.id]);
 }
+
+#[test]
+fn turn_meta_round_trip() {
+    // schema_v57: assistant turns persist model / reasoning_effort / answer_json;
+    // plain appends leave them NULL (user turns, pre-v57 behavior).
+    let db = db();
+    let s = db.create_chat_session("Q").unwrap();
+
+    let plain = db.append_chat_message(s.id, "user", "hello").unwrap();
+    assert!(plain.model.is_none());
+    assert!(plain.reasoning_effort.is_none());
+    assert!(plain.answer_json.is_none());
+
+    let meta = super::ChatTurnMeta {
+        model: Some("gpt-5".into()),
+        reasoning_effort: Some("high".into()),
+        answer_json: Some(r#"{"sources":[],"citations":[]}"#.into()),
+    };
+    let a = db
+        .append_chat_message_with_meta(s.id, "assistant", "hi [1]", &meta)
+        .unwrap();
+    assert_eq!(a.model.as_deref(), Some("gpt-5"));
+    assert_eq!(a.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(a.answer_json.as_deref(), Some(r#"{"sources":[],"citations":[]}"#));
+
+    // Tool variant carries meta AND the trace columns.
+    let t = db
+        .append_chat_message_with_tools(s.id, "assistant", "looped", &meta, Some("[]"), Some("[]"))
+        .unwrap();
+    assert_eq!(t.model.as_deref(), Some("gpt-5"));
+    assert_eq!(t.tool_calls_json.as_deref(), Some("[]"));
+
+    // Reload path (row_to_message) preserves the columns.
+    let msgs = db.chat_messages_for_session(s.id).unwrap();
+    assert_eq!(msgs.len(), 3);
+    assert!(msgs[0].model.is_none());
+    assert_eq!(msgs[1].model.as_deref(), Some("gpt-5"));
+    assert_eq!(msgs[1].reasoning_effort.as_deref(), Some("high"));
+}

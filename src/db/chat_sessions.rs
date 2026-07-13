@@ -4,8 +4,9 @@
 //! A session bundles an ordered list of turns; `append_message` bumps the
 //! parent session's `updated_at` so the session list sorts most-recent-first.
 //! `delete_session` relies on the `ON DELETE CASCADE` FK to drop its messages.
-//! The `tool_*` columns exist for the later tool-loop AP and are always inserted
-//! as `NULL` here (`append_message` writes plain user/assistant turns only).
+//! Assistant turns additionally carry `ChatTurnMeta` (schema_v57: model /
+//! reasoning effort / answer payload) and — for agentic turns — the tool-loop
+//! trace in the `tool_*` columns.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -29,8 +30,22 @@ fn row_to_message(row: &Row<'_>) -> rusqlite::Result<ChatMessage> {
         content: row.get("content")?,
         tool_calls_json: row.get("tool_calls_json")?,
         tool_payload_json: row.get("tool_payload_json")?,
+        model: row.get("model")?,
+        reasoning_effort: row.get("reasoning_effort")?,
+        answer_json: row.get("answer_json")?,
         created_at: row.get("created_at")?,
     })
+}
+
+/// Per-turn metadata of an assistant answer (schema_v57, bubble transcript):
+/// which model served it, at which reasoning effort, plus the serialized
+/// `{sources, citations}` payload for re-rendering citations from history.
+/// `Default` = all-`None` (user turns, or answers without metadata).
+#[derive(Debug, Clone, Default)]
+pub struct ChatTurnMeta {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub answer_json: Option<String>,
 }
 
 impl Database {
@@ -80,51 +95,69 @@ impl Database {
             > 0)
     }
 
-    /// Append a plain (non-tool) turn and bump the session's `updated_at`.
+    /// Append a plain (non-tool, no-meta) turn — user questions and legacy
+    /// callers. Bumps the session's `updated_at`.
     pub fn append_chat_message(
         &self,
         session_id: i64,
         role: &str,
         content: &str,
     ) -> Result<ChatMessage> {
-        self.conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content) VALUES (?1, ?2, ?3)",
-            params![session_id, role, content],
-        )?;
-        let id = self.conn.last_insert_rowid();
-        self.conn.execute(
-            "UPDATE chat_sessions SET updated_at = unixepoch() WHERE id = ?1",
-            [session_id],
-        )?;
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT * FROM chat_messages WHERE id = ?1",
-                [id],
-                row_to_message,
-            )
-            .optional()?
-            .expect("row just inserted must exist"))
+        self.append_chat_message_full(session_id, role, content, &ChatTurnMeta::default(), None, None)
     }
 
-    /// Append a turn carrying the reserved tool-loop columns (AP8): the assistant
-    /// turn of an agentic tool-loop chat stores its serialized trace in
-    /// `tool_calls_json` (the round-by-round assistant tool calls + usage) and the
-    /// raw retrieve payloads in `tool_payload_json`. Both are `None` for plain
-    /// turns (use `append_chat_message` there). Consumed by the AP9/AP11 trace
-    /// inspector; the plain history load ignores them.
+    /// Append an assistant turn with its per-turn metadata (schema_v57).
+    pub fn append_chat_message_with_meta(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: &str,
+        meta: &ChatTurnMeta,
+    ) -> Result<ChatMessage> {
+        self.append_chat_message_full(session_id, role, content, meta, None, None)
+    }
+
+    /// Append a turn carrying the tool-loop columns (AP8): the assistant turn of
+    /// an agentic tool-loop chat stores its serialized trace in `tool_calls_json`
+    /// (the round-by-round assistant tool calls + usage) and the raw retrieve
+    /// payloads in `tool_payload_json`. Consumed by the AP9/AP11 trace inspector;
+    /// the plain history load ignores them.
     pub fn append_chat_message_with_tools(
         &self,
         session_id: i64,
         role: &str,
         content: &str,
+        meta: &ChatTurnMeta,
+        tool_calls_json: Option<&str>,
+        tool_payload_json: Option<&str>,
+    ) -> Result<ChatMessage> {
+        self.append_chat_message_full(session_id, role, content, meta, tool_calls_json, tool_payload_json)
+    }
+
+    /// Shared insert behind the `append_chat_message*` variants; bumps the
+    /// session's `updated_at` so the session list sorts most-recent-first.
+    fn append_chat_message_full(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: &str,
+        meta: &ChatTurnMeta,
         tool_calls_json: Option<&str>,
         tool_payload_json: Option<&str>,
     ) -> Result<ChatMessage> {
         self.conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content, tool_calls_json, tool_payload_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, role, content, tool_calls_json, tool_payload_json],
+            "INSERT INTO chat_messages (session_id, role, content, tool_calls_json, tool_payload_json, model, reasoning_effort, answer_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                session_id,
+                role,
+                content,
+                tool_calls_json,
+                tool_payload_json,
+                meta.model,
+                meta.reasoning_effort,
+                meta.answer_json
+            ],
         )?;
         let id = self.conn.last_insert_rowid();
         self.conn.execute(

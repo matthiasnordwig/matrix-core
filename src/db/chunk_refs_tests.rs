@@ -132,6 +132,29 @@ fn rebuild_chunk_refs_is_idempotent() {
     assert_eq!(at.len(), 1);
 }
 
+#[test]
+fn chunk_refs_for_context_groups_by_chunk() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let a = mk_chunk(&db, ctx, doc, 0, None, "Nach § 25a KWG und Art. 28 DORA.");
+    let b = mk_chunk(&db, ctx, doc, 1, None, "AT 4.3.2 der MaRisk");
+    mk_chunk(&db, ctx, doc, 2, None, "kein Verweis hier");
+    db.rebuild_chunk_refs(ctx).unwrap();
+
+    let all = db.chunk_refs_for_context(ctx).unwrap();
+    // Two refs on chunk a, one on chunk b, none on the third → 3 rows total.
+    assert_eq!(all.len(), 3);
+    // Ordered by chunk_id, so chunk a's rows come first (its two keys), then b.
+    assert!(all.iter().all(|r| r.context_id == ctx));
+    let a_keys: Vec<&str> = all.iter().filter(|r| r.chunk_id == a).map(|r| r.ref_key.as_str()).collect();
+    assert_eq!(a_keys.len(), 2);
+    let b_keys: Vec<&str> = all.iter().filter(|r| r.chunk_id == b).map(|r| r.ref_key.as_str()).collect();
+    assert_eq!(b_keys, vec!["MARISK:AT4.3.2"]);
+
+    // A different context sees none of them.
+    assert!(db.chunk_refs_for_context(ctx + 999).unwrap().is_empty());
+}
+
 // --- ref_abbreviations registry → set_chunk_refs/rebuild_chunk_refs --------
 // (TOOL_TIER_PLAN.md Teil B / AP4)
 
