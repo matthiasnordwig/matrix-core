@@ -79,6 +79,9 @@ mod imp {
         /// `execution_provider` (the reranker model's configured EP; `None`/
         /// non-apple → CPU) on every apple target, including iOS — no runtime
         /// force-override; iOS's own default is set at model-creation time.
+        // `execution_provider` is only read inside the apple cfg-block below;
+        // non-apple targets (Linux release build) deliberately ignore it (CPU).
+        #[cfg_attr(not(target_vendor = "apple"), allow(unused_variables))]
         pub fn load(model_dir: &Path, execution_provider: Option<ExecutionProvider>) -> Result<Self> {
             let model_path = model_dir.join("model.onnx");
             let tokenizer_path = model_dir.join("tokenizer.json");

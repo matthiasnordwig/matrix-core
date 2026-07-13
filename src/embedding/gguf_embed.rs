@@ -14,8 +14,6 @@
 //! optional Matryoshka truncation → L2-normalize (ourselves, for parity with
 //! the ONNX path and store/query invariants).
 
-use crate::db::models::EmbeddingModel;
-
 /// Attention-masked **mean pool** of a `(seq_len, hidden)` row-major token
 /// matrix. Pure, model-free, and unit-tested: llama.cpp normally does this
 /// internally when `pooling_type=mean`, but we keep the reference implementation
@@ -62,7 +60,7 @@ mod imp {
     use llama_cpp_2::model::params::LlamaModelParams;
     use llama_cpp_2::model::{AddBos, LlamaModel};
 
-    use super::EmbeddingModel;
+    use crate::db::models::EmbeddingModel;
     use crate::db::embeddings::l2_normalize;
     use crate::embedding::QueryEmbedder;
     use crate::{CoreError, Result};
