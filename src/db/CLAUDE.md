@@ -1,6 +1,6 @@
 # db/ — Lokaler Kontext
 
-Volle Doku: [HANDBUCH.md](../../../HANDBUCH.md), Abschnitt 1.2 „db/".
+Volle Doku: [`handbuch/db.md`](../../../handbuch/db.md) (Index: `HANDBUCH.md`).
 
 SQLite-Repository (rusqlite, bundled/statisch für iOS). Migrationen sind
 `schema_vN.sql`, `mod.rs::migrate()` läuft sie über `PRAGMA user_version`
@@ -45,8 +45,8 @@ EU-gebundene Artikel-Keys (`EU:2013/575:Art.395`) haben eine zweite
 Kandidatenquelle (`eu_article_def_candidates`): definitions-förmige Chunks aus
 dem Dokument der Verordnung selbst (identifiziert über frühe Chunks mit dem
 Basis-Key, Definitionsform auch über `metadata.section`, SQL-Prefilter
-inkludiert `metadata`) verdrängen Zitier-Erwähnungen — Details HANDBUCH.md
-§1.2 `chunk_refs.rs`.
+inkludiert `metadata`) verdrängen Zitier-Erwähnungen — Details `handbuch/db.md`,
+`chunk_refs.rs`.
 Reine Expansion-Kapp-Logik `expand_with_refs` (≤1 Zusatz je Treffer, gesamt
 ≤⌈top_k/2⌉, nie Primärtreffer/Duplikate). Von `services::commands::retrieval`
 konsumiert.

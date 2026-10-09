@@ -1,6 +1,6 @@
 # refs/ — Lokaler Kontext
 
-Volle Doku: [HANDBUCH.md](../../../HANDBUCH.md), Abschnitt „refs/" (AP2,
+Volle Doku: [`handbuch/core.md`](../../../handbuch/core.md), Abschnitt „refs/" (AP2,
 RETRIEVAL_QUALITY_PLAN.md).
 
 Deterministischer (kein LLM, kein Netz) Parser für Normverweise:
@@ -18,7 +18,7 @@ sie) sowie §-Langform-Bindung „§§ 13 bis 13c … des Kreditwesengesetzes" �
 KWG-Keys (`LONG_FORM_AFTER_PARAGRAPH_RE`, Genitiv nur als `es`/`s`-Suffix).
 Bereiche (`§§ 13 bis 13c`, `Artikel 387 bis 410`, Mehrfach-Aufzählungen via
 `extra`-Gruppe) expandieren kontrolliert (Cap 30, darüber nur Endpunkte) —
-s. HANDBUCH.md-Abschnitt „refs/".
+s. `handbuch/core.md`, Abschnitt „refs/".
 
 **Leitregel: Präzision vor Recall.** Ein Falsch-Positiv, der auf den falschen
 Chunk auflöst, verschmutzt das Retrieval — im Zweifel NICHT matchen. Der

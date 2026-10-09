@@ -1,6 +1,6 @@
 # embedding/ — Lokaler Kontext
 
-Volle Doku: [HANDBUCH.md](../../../HANDBUCH.md), Abschnitt 1.2 „embedding/".
+Volle Doku: [`handbuch/core.md`](../../../handbuch/core.md), Abschnitt „embedding/" (Index: `HANDBUCH.md`).
 
 `trait QueryEmbedder` (mod.rs) wird von `onnx.rs::OrtEmbedder` **und**
 `gguf_embed.rs::GgufEmbedder` (MODEL_INFRA_PLAN AP4b, hinter `gguf`-Feature —
@@ -10,7 +10,7 @@ Modell-ID, `kind local_gguf`, s. HANDBUCH §2). Pooling (`mean_pool`, rein/getes
 + L2-Norm; llama.cpp poolt bei `pooling_type=mean` selbst, `mean_pool` bleibt als
 testbare Referenz/Fallback. Bridge: `services/localgguf.rs`.
 Retrieval in `retrieval.rs` gruppiert nach Embedding-Raum — **kein** globaler
-Cross-Model-Vektor, siehe Designentscheidungen in HANDBUCH.md Abschnitt 2.
+Cross-Model-Vektor, siehe gelockte Designentscheidungen im Index `HANDBUCH.md` §2.
 Hybrid (AP1): `retrieve_hybrid_with`/`retrieve_hybrid_batch` fusionieren Vektor- und
 FTS5/BM25-Ränge per RRF (`rrf_fuse`, k=60, reine Fn) — **pro Kontext/Raum, nur über
 Ränge**, damit die Cross-Space-Isolation erhalten bleibt. FTS-Seite in `db/fts.rs`.
