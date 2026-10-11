@@ -15,7 +15,10 @@
 //! written by `--dump` (1-based page[, index on the page]).
 //! Per question it reports the rank of the expected image among all images
 //! (image-only), among images + page texts (mixed), and — as the text-search
-//! baseline — the rank of that page's TEXT among all page texts.
+//! baseline — the rank of that page's TEXT among all page texts, and `fused`:
+//! page-level rank fusion (RRF, k = 10 like the hybrid search) of the image
+//! list and the text list. `--cache <file.json>` stores the image vectors
+//! (keyed by model + key) so a re-run skips the slow image embedding.
 //! Image folder instead of a PDF (key = file stem, no page texts):
 //!   ... -- --images <dir> --model-dir <dir> --queries q.json
 //! Exit 0 = completed, 2 = usage, 3 = runtime error.
@@ -126,10 +129,25 @@ fn main() {
 
     // Every image in the page range + one text vector per page.
     let mut items: Vec<(String, bool, Vec<f32>)> = Vec::new(); // (key, is_image, vec)
+    let cache_path = get("--cache");
+    let cache_ns = format!("{text_name}+{vision_name}");
+    let mut cache: BTreeMap<String, Vec<f32>> = cache_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
     let t_img = Instant::now();
     for page in from..=to.min(pages) {
         for (key, img) in images_of(page) {
-            let v = emb.embed_image(&img).unwrap_or_else(|e| fail(format!("{key}: {e}")));
+            let ck = format!("{cache_ns}|{key}");
+            let v = match cache.get(&ck) {
+                Some(v) => v.clone(),
+                None => {
+                    let v = emb.embed_image(&img).unwrap_or_else(|e| fail(format!("{key}: {e}")));
+                    cache.insert(ck, v.clone());
+                    v
+                }
+            };
             items.push((key, true, v));
         }
         if page % 25 == 0 {
@@ -145,6 +163,9 @@ fn main() {
             let v = emb.embed_image(&img).unwrap_or_else(|e| fail(format!("{key}: {e}")));
             items.push((key, true, v));
         }
+    }
+    if let Some(p) = &cache_path {
+        std::fs::write(p, serde_json::to_string(&cache).unwrap()).unwrap_or_else(|e| fail(e));
     }
     let n_img = items.len();
     let img_secs = t_img.elapsed().as_secs_f64();
@@ -172,8 +193,10 @@ fn main() {
 
     let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
     let mut rows = Vec::new();
-    let (mut rr_img, mut rr_mix, mut rr_txt, mut n) = (0.0f64, 0.0f64, 0.0f64, 0usize);
-    println!("img#   mix#  text#  best      question");
+    let (mut rr_img, mut rr_mix, mut rr_txt, mut rr_fused, mut n) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
+    // Page of an item key: "p33", "p33_0" and "text p33" all → "p33".
+    let page_of = |k: &str| k.trim_start_matches("text ").split('_').next().unwrap_or(k).to_string();
+    println!("img#   mix#  text#  fused  best      question");
     for q in spec["queries"].as_array().into_iter().flatten() {
         let (question, target) = (q["q"].as_str().unwrap_or(""), q["image"].as_str().unwrap_or(""));
         let qv = text.embed_query(&model, &format!("{QUERY_PREFIX}{question}")).unwrap_or_else(|e| fail(e));
@@ -186,23 +209,46 @@ fn main() {
         rr_img += img_rank.map_or(0.0, |r| 1.0 / r as f64);
         rr_mix += mix_rank.map_or(0.0, |r| 1.0 / r as f64);
         rr_txt += txt_rank.map_or(0.0, |r| 1.0 / r as f64);
+        // RRF over pages: best rank of the page in the image list + in the text list.
+        let mut fused: BTreeMap<String, f64> = BTreeMap::new();
+        for want_img in [true, false] {
+            let mut seen = BTreeSet::new();
+            for (r, it) in scored.iter().filter(|s| s.1 == want_img).enumerate() {
+                let pg = page_of(it.0);
+                if seen.insert(pg.clone()) {
+                    *fused.entry(pg).or_default() += 1.0 / (10.0 + (r + 1) as f64);
+                }
+            }
+        }
+        let mut fused: Vec<(String, f64)> = fused.into_iter().collect();
+        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let fused_rank = fused.iter().position(|(pg, _)| *pg == page_of(target)).map(|p| p + 1);
+        rr_fused += fused_rank.map_or(0.0, |r| 1.0 / r as f64);
         n += 1;
         let show = |r: Option<usize>| r.map_or("-".to_string(), |r| r.to_string());
-        println!("{:<6} {:<5} {:<6} {:<9} {question}", show(img_rank), show(mix_rank), show(txt_rank), scored[0].0);
+        println!(
+            "{:<6} {:<5} {:<6} {:<6} {:<9} {question}",
+            show(img_rank),
+            show(mix_rank),
+            show(txt_rank),
+            show(fused_rank),
+            scored[0].0
+        );
         let top: BTreeMap<usize, Value> = scored.iter().take(5).enumerate().map(|(i, s)| (i + 1, json!({"key": s.0, "score": s.2}))).collect();
-        rows.push(json!({"q": question, "image": target, "image_rank": img_rank, "mixed_rank": mix_rank, "text_rank": txt_rank, "top5": top}));
+        rows.push(json!({"q": question, "image": target, "image_rank": img_rank, "mixed_rank": mix_rank, "text_rank": txt_rank, "fused_rank": fused_rank, "top5": top}));
     }
     let summary = json!({
         "pdf": pdf, "text_model": text_name, "vision_model": vision_name, "images": n_img,
         "page_texts": items.len() - n_img, "mrr_image_only": rr_img / n.max(1) as f64,
-        "mrr_mixed": rr_mix / n.max(1) as f64, "mrr_text_only": rr_txt / n.max(1) as f64, "seconds_per_image": img_secs / n_img.max(1) as f64, "queries": rows,
+        "mrr_mixed": rr_mix / n.max(1) as f64, "mrr_text_only": rr_txt / n.max(1) as f64, "mrr_fused": rr_fused / n.max(1) as f64, "seconds_per_image": img_secs / n_img.max(1) as f64, "queries": rows,
     });
     let nf = n.max(1) as f64;
     println!(
-        "MRR image-only {:.3} · mixed {:.3} · text-only baseline {:.3} · {n} questions, {n_img} images",
+        "MRR image-only {:.3} · mixed {:.3} · text-only baseline {:.3} · fused (RRF) {:.3} · {n} questions, {n_img} images",
         rr_img / nf,
         rr_mix / nf,
-        rr_txt / nf
+        rr_txt / nf,
+        rr_fused / nf
     );
     if let Some(out) = get("--out") {
         std::fs::write(&out, serde_json::to_string_pretty(&summary).unwrap()).unwrap_or_else(|e| fail(e));
