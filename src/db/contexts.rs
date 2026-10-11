@@ -201,6 +201,31 @@ impl Database {
             > 0)
     }
 
+    /// Rename a document and carry the new name into the denormalised
+    /// `metadata.document_title` of its chunks (written at ingest/rechunk time and
+    /// shown as the source title in answers) — otherwise a renamed document keeps
+    /// answering under its old title. Returns `false` for an unknown id or a blank
+    /// name. One transaction: either both places change or neither.
+    pub fn rename_document(&self, id: i64, name: &str) -> Result<bool> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(false);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = tx.execute("UPDATE documents SET name = ?2 WHERE id = ?1", params![id, name])?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE chunks SET metadata = json_set(metadata, '$.document_title', ?2)
+             WHERE document_id = ?1 AND json_valid(metadata)
+               AND json_type(metadata) = 'object'",
+            params![id, name],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn delete_document(&self, id: i64) -> Result<bool> {
         Ok(self
             .conn
@@ -208,3 +233,7 @@ impl Database {
             > 0)
     }
 }
+
+#[cfg(test)]
+#[path = "rename_tests.rs"]
+mod rename_tests;
