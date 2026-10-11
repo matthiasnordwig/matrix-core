@@ -274,7 +274,8 @@ impl Database {
         let mut query_by_model: HashMap<i64, Vec<f32>> = HashMap::new();
         for model_id in self.contexts_by_model(context_ids)?.keys().copied() {
             if let Some(model) = self.embedding_model(model_id)? {
-                query_by_model.insert(model_id, embedder.embed_query(&model, query)?);
+                let q = super::prefix::apply_task_prefix(&model, super::prefix::EmbedRole::Query, query);
+                query_by_model.insert(model_id, embedder.embed_query(&model, &q)?);
             }
         }
         self.retrieve_with(context_ids, &query_by_model, top_k, None)

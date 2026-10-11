@@ -57,6 +57,8 @@ pub enum CoreError {
     NotFound(String),
     #[error("invalid pool membership: {0}")]
     InvalidPoolMembers(String),
+    #[error("invalid state: {0}")]
+    InvalidState(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -181,6 +183,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v56.sql"),
     include_str!("schema_v57.sql"),
     include_str!("schema_v58.sql"),
+    include_str!("schema_v59.sql"),
+    include_str!("schema_v60.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

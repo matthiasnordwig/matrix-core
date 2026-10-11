@@ -30,6 +30,8 @@ fn model(db: &Database, ident: &str, dim: i64) -> EmbeddingModel {
         tpm_limit: None,
         rpm_limit: None,
         max_concurrency: 1,
+        query_prefix: None,
+        document_prefix: None,
     })
     .unwrap()
 }

@@ -9,6 +9,8 @@ Embedding-Raum** (nie der ONNX-jina-Raum, auch beim identischen Modell — eigen
 Modell-ID, `kind local_gguf`, s. HANDBUCH §2). Pooling (`mean_pool`, rein/getestet)
 + L2-Norm; llama.cpp poolt bei `pooling_type=mean` selbst, `mean_pool` bleibt als
 testbare Referenz/Fallback. Bridge: `services/localgguf.rs`.
+Task-Präfixe (`query_prefix`/`document_prefix`, schema_v59) werden NUR in
+`prefix.rs::apply_task_prefix` angewendet (rein/getestet), nie in den Embeddern.
 Retrieval in `retrieval.rs` gruppiert nach Embedding-Raum — **kein** globaler
 Cross-Model-Vektor, siehe gelockte Designentscheidungen im Index `HANDBUCH.md` §2.
 Hybrid (AP1): `retrieve_hybrid_with`/`retrieve_hybrid_batch` fusionieren Vektor- und

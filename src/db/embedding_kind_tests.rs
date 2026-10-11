@@ -139,6 +139,8 @@ fn v51_accepts_local_gguf_and_still_rejects_garbage() {
             tpm_limit: None,
             rpm_limit: None,
             max_concurrency: 1,
+            query_prefix: None,
+            document_prefix: None,
         })
         .unwrap();
     let fetched = db
@@ -162,7 +164,102 @@ fn v51_accepts_local_gguf_and_still_rejects_garbage() {
     assert!(err.is_err(), "CHECK must still reject unknown kinds");
 }
 
+/// schema_v59: task prefixes round-trip through create/update; rows created
+/// without them (and pre-v59 rows) read back as `None`.
+#[test]
+fn v59_task_prefixes_roundtrip_create_and_update() {
+    let db = Database::open_in_memory().unwrap();
+    let mut spec = NewEmbeddingModel {
+        identifier: "gemma".into(),
+        kind: ModelKind::LocalOnnx,
+        model_path: Some("/m/model.onnx".into()),
+        tokenizer_path: Some("/m/tokenizer.json".into()),
+        api_config: None,
+        execution_provider: None,
+        is_matryoshka: true,
+        native_dim: 768,
+        default_dim: 768,
+        normalize: true,
+        tpm_limit: None,
+        rpm_limit: None,
+        max_concurrency: 1,
+        query_prefix: None,
+        document_prefix: None,
+    };
+    let m = db.create_embedding_model(&spec).unwrap();
+    assert_eq!((m.query_prefix.as_deref(), m.document_prefix.as_deref()), (None, None));
+
+    spec.query_prefix = Some("task: search result | query: ".into());
+    spec.document_prefix = Some("title: none | text: ".into());
+    let u = db.update_embedding_model(m.id, &spec).unwrap();
+    assert_eq!(u.query_prefix.as_deref(), Some("task: search result | query: "));
+    assert_eq!(u.document_prefix.as_deref(), Some("title: none | text: "));
+
+    // Older JSON clients omit the fields entirely → serde default None.
+    let json = r#"{"identifier":"x","kind":"remote_api","model_path":null,"tokenizer_path":null,
+        "api_config":null,"execution_provider":null,"is_matryoshka":false,"native_dim":1,
+        "default_dim":1,"normalize":true,"tpm_limit":null,"rpm_limit":null,"max_concurrency":1}"#;
+    let parsed: NewEmbeddingModel = serde_json::from_str(json).unwrap();
+    assert!(parsed.query_prefix.is_none() && parsed.document_prefix.is_none());
+}
+
 /// Test-only accessor to the underlying connection for raw assertions.
 fn db_conn(db: &Database) -> &Connection {
     &db.conn
+}
+
+/// Deleting a model drops its vectors (cascade) and must take bound contexts
+/// back from 'embedded' to 'staged' — v60 repairs DBs where this was missed.
+#[test]
+fn deleting_embedding_model_unmarks_embedded_contexts() {
+    let db = Database::open_in_memory().unwrap();
+    let m = db
+        .create_embedding_model(&NewEmbeddingModel {
+            identifier: "gone".into(),
+            kind: ModelKind::LocalOnnx,
+            model_path: Some("/m/model.onnx".into()),
+            tokenizer_path: None,
+            api_config: None,
+            execution_provider: None,
+            is_matryoshka: false,
+            native_dim: 4,
+            default_dim: 4,
+            normalize: true,
+            tpm_limit: None,
+            rpm_limit: None,
+            max_concurrency: 1,
+            query_prefix: None,
+            document_prefix: None,
+        })
+        .unwrap();
+    let ctx = db
+        .create_context(&NewContext {
+            name: "c".into(),
+            description: None,
+            chunking_strategy: "structural".into(),
+            chunking_profile_id: None,
+            structural_profile_id: None,
+            embedding_model_id: Some(m.id),
+            embedding_dim: Some(4),
+            llm_id: None,
+            fallback_llm_id: None,
+            ontology_profile_id: None,
+            ontology_pool_id: None,
+            ontology_extract_llm_id: None,
+            ontology_extract_pool_id: None,
+            ontology_extract_reasoning_effort: None,
+            extract_title_llm: false,
+            auto_merge_ontology: false,
+        })
+        .unwrap();
+    db.set_context_status(ctx.id, ContextStatus::Embedded).unwrap();
+    assert!(db.delete_embedding_model(m.id).unwrap());
+    let after = db.context(ctx.id).unwrap().unwrap();
+    assert_eq!(after.status, ContextStatus::Staged);
+    assert_eq!(after.embedding_model_id, None);
+
+    // The v60 repair statement on an already-broken row.
+    db_conn(&db).execute("UPDATE contexts SET status = 'embedded' WHERE id = ?1", [ctx.id]).unwrap();
+    db_conn(&db).execute_batch(include_str!("schema_v60.sql")).unwrap();
+    assert_eq!(db.context(ctx.id).unwrap().unwrap().status, ContextStatus::Staged);
 }

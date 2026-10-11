@@ -123,6 +123,12 @@ pub struct EmbeddingModel {
     pub tpm_limit: Option<i64>,
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
+    /// Prepended to texts embedded as a query (`schema_v59`); None/empty = none.
+    #[serde(default)]
+    pub query_prefix: Option<String>,
+    /// Prepended to texts embedded as a stored document/chunk; None/empty = none.
+    #[serde(default)]
+    pub document_prefix: Option<String>,
     pub created_at: i64,
 }
 
@@ -142,6 +148,12 @@ pub struct NewEmbeddingModel {
     pub tpm_limit: Option<i64>,
     pub rpm_limit: Option<i64>,
     pub max_concurrency: i64,
+    /// See [`EmbeddingModel::query_prefix`]. Optional in JSON (older clients).
+    #[serde(default)]
+    pub query_prefix: Option<String>,
+    /// See [`EmbeddingModel::document_prefix`]. Optional in JSON (older clients).
+    #[serde(default)]
+    pub document_prefix: Option<String>,
 }
 
 /// Reranker as a first-class model (MODEL_INFRA_PLAN.md AP2). Deliberately a

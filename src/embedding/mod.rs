@@ -15,6 +15,10 @@ use crate::Result;
 
 pub mod retrieval;
 
+/// Task prefixes for asymmetric models (query vs. document side); the one
+/// place `EmbeddingModel::{query,document}_prefix` are applied.
+pub mod prefix;
+
 /// Cross-encoder reranker (AP3). `rank_merge` (pure) is always compiled;
 /// `OrtReranker` is behind the `onnx` feature.
 pub mod rerank;

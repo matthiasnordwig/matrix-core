@@ -103,6 +103,8 @@ mod tests {
                 tpm_limit: None,
                 rpm_limit: None,
                 max_concurrency: 1,
+                query_prefix: None,
+                document_prefix: None,
             })
             .unwrap();
         let ctx = db

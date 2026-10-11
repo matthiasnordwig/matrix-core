@@ -32,6 +32,8 @@ fn row_to_embedding_model(row: &Row<'_>) -> rusqlite::Result<EmbeddingModel> {
         tpm_limit: row.get("tpm_limit")?,
         rpm_limit: row.get("rpm_limit")?,
         max_concurrency: row.get("max_concurrency")?,
+        query_prefix: row.get("query_prefix")?,
+        document_prefix: row.get("document_prefix")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -84,8 +86,8 @@ impl Database {
             "INSERT INTO embedding_models
                 (identifier, kind, model_path, tokenizer_path, api_config,
                  execution_provider, is_matryoshka, native_dim, default_dim, normalize,
-                 tpm_limit, rpm_limit, max_concurrency)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 tpm_limit, rpm_limit, max_concurrency, query_prefix, document_prefix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 m.identifier,
                 m.kind,
@@ -100,6 +102,8 @@ impl Database {
                 m.tpm_limit,
                 m.rpm_limit,
                 m.max_concurrency,
+                m.query_prefix,
+                m.document_prefix,
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -137,7 +141,8 @@ impl Database {
                 identifier = ?2, kind = ?3, model_path = ?4, tokenizer_path = ?5,
                 api_config = ?6, execution_provider = ?7, is_matryoshka = ?8,
                 native_dim = ?9, default_dim = ?10, normalize = ?11,
-                tpm_limit = ?12, rpm_limit = ?13, max_concurrency = ?14
+                tpm_limit = ?12, rpm_limit = ?13, max_concurrency = ?14,
+                query_prefix = ?15, document_prefix = ?16
              WHERE id = ?1",
             params![
                 id,
@@ -154,6 +159,8 @@ impl Database {
                 m.tpm_limit,
                 m.rpm_limit,
                 m.max_concurrency,
+                m.query_prefix,
+                m.document_prefix,
             ],
         )?;
         self.embedding_model(id)?
@@ -171,7 +178,14 @@ impl Database {
         Ok(())
     }
 
+    /// Deletes the model; its vectors go with it (FK cascade), so contexts
+    /// bound to it fall back from 'embedded' to 'staged' (chunks kept, no
+    /// longer searchable) — the FK only nulls `embedding_model_id`.
     pub fn delete_embedding_model(&self, id: i64) -> Result<bool> {
+        self.conn.execute(
+            "UPDATE contexts SET status = 'staged' WHERE embedding_model_id = ?1 AND status = 'embedded'",
+            [id],
+        )?;
         Ok(self
             .conn
             .execute("DELETE FROM embedding_models WHERE id = ?1", [id])?

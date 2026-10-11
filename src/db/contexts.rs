@@ -1,4 +1,10 @@
 //! CRUD for `contexts` and their `documents`.
+//!
+//! `copy_context_chunks` duplicates a context's documents + chunks (verbatim
+//! rows, new ids) into an empty target context — used to embed the identical
+//! chunk set with a second embedding model for side-by-side retrieval evals
+//! (`services/examples/embed_compare.rs`). Embeddings, prechunks, chunk_refs
+//! and ontology rows are NOT copied.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -234,8 +240,61 @@ impl Database {
             .execute("DELETE FROM documents WHERE id = ?1", [id])?
             > 0)
     }
+
+    /// Copy all documents of context `src` and their chunks (text, offsets,
+    /// signature, omitted flag, metadata) into context `dst`, in one
+    /// transaction. `dst` must have no documents yet (guards against a double
+    /// copy). Returns the number of chunks copied. FTS rows follow via the
+    /// `chunks_fts_*` triggers.
+    pub fn copy_context_chunks(&self, src: i64, dst: i64) -> Result<usize> {
+        if src == dst {
+            return Err(super::CoreError::InvalidState("copy source and target are the same context".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let existing: i64 =
+            tx.query_row("SELECT COUNT(*) FROM documents WHERE context_id = ?1", [dst], |r| r.get(0))?;
+        if existing > 0 {
+            return Err(super::CoreError::InvalidState(format!(
+                "target context {dst} already has {existing} document(s)"
+            )));
+        }
+        let doc_ids: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM documents WHERE context_id = ?1 ORDER BY id")?;
+            let rows = stmt.query_map([src], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut copied = 0usize;
+        for doc_id in doc_ids {
+            tx.execute(
+                "INSERT INTO documents
+                    (context_id, name, zip_entry, byte_size, page_count, content_hash,
+                     extracted_text, ingested_at, description)
+                 SELECT ?2, name, zip_entry, byte_size, page_count, content_hash,
+                        extracted_text, ingested_at, description
+                 FROM documents WHERE id = ?1",
+                params![doc_id, dst],
+            )?;
+            let new_doc = tx.last_insert_rowid();
+            copied += tx.execute(
+                "INSERT INTO chunks
+                    (context_id, document_id, chunk_index, char_start, char_end, text,
+                     signature, is_omitted, metadata, created_at)
+                 SELECT ?2, ?3, chunk_index, char_start, char_end, text,
+                        signature, is_omitted, metadata, created_at
+                 FROM chunks WHERE document_id = ?1 AND context_id = ?4
+                 ORDER BY chunk_index",
+                params![doc_id, dst, new_doc, src],
+            )?;
+        }
+        tx.commit()?;
+        Ok(copied)
+    }
 }
 
 #[cfg(test)]
 #[path = "rename_tests.rs"]
 mod rename_tests;
+
+#[cfg(test)]
+#[path = "context_copy_tests.rs"]
+mod context_copy_tests;
