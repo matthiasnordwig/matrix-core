@@ -37,6 +37,12 @@ execution_provider}`); Session-Caches (`localembed.rs`/`localrerank.rs`) sind se
 per `(id|dir, execution_provider)` gekeyt, nicht mehr nur per Pfad/Id — eine EP-Änderung
 im UI wirkt so ohne App-Neustart.
 
+Bild-Embedding (EmbeddingGemma 2): `vision_prep.rs` (rein, Gemma-4-Bildvorverarbeitung,
+getestet in `tests_vision.rs`) + `vision.rs::OrtImageEmbedder` (hinter `onnx`): Bild-Encoder
+→ `image_features` in dieselbe Text-Session (`OrtEmbedder::embed_with_features`) → gleicher
+Vektorraum wie Text. Messwerkzeug `core/examples/image_probe.rs` (Seiten-Rendering über
+Feature `pdf-render`). Noch nicht in Chunks/DB/UI verdrahtet.
+
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn \|^pub struct \|^pub trait " *.rs`.
 
 **Tests:** `tests.rs` deckt `retrieve`/`retrieve_with` über gemischte Embedding-Räume

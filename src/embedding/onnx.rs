@@ -14,10 +14,12 @@
 //!   `video_features`, `audio_features`) gets an EMPTY `[0, D]` tensor (D from
 //!   the declared last dim, default 512) — text-only use.
 //! - models with external weights (`<model>.onnx_data`/`.data` next to the
-//!   `.onnx`) get the ORT config entry
-//!   `session.model_external_initializers_file_folder_path` = the model's dir,
-//!   so the in-memory load resolves the sidecar; all others load unchanged.
+//!   `.onnx`) need nothing extra: the session loads from the file path, so ORT
+//!   resolves the sidecar relative to the model's directory.
+//!
 //! Models without these inputs/outputs (jina-de) take the unchanged path.
+//! `embed_with_features` fills `image_features` for real (image embedding via
+//! `vision.rs`); plain text embedding keeps feeding it empty.
 //! Task prefixes (`query_prefix`/`document_prefix`) are NOT applied here — the
 //! callers add them via `embedding::prefix::apply_task_prefix`.
 //!
@@ -37,9 +39,7 @@ use ndarray::Array2;
 // so the import + the `use_coreml` branch below are gated to apple; non-apple
 // always takes the CPU path.
 #[cfg(target_vendor = "apple")]
-use ort::execution_providers::coreml::CoreMLComputeUnits;
-#[cfg(target_vendor = "apple")]
-use ort::execution_providers::CoreMLExecutionProvider;
+use ort::ep::coreml::{ComputeUnits as CoreMLComputeUnits, CoreML as CoreMLExecutionProvider};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
@@ -52,8 +52,8 @@ use crate::db::models::EmbeddingModel;
 use crate::db::models::ExecutionProvider;
 use crate::{CoreError, Result};
 
-impl From<ort::Error> for CoreError {
-    fn from(e: ort::Error) -> Self {
+impl<R> From<ort::Error<R>> for CoreError {
+    fn from(e: ort::Error<R>) -> Self {
         CoreError::Embedding(e.to_string())
     }
 }
@@ -71,20 +71,14 @@ pub struct OrtEmbedder {
 }
 
 /// Declared last dimension of a `*_features` input, default 512 when dynamic/unknown.
-fn feature_dim(input: &ort::session::Input) -> usize {
-    match &input.input_type {
+fn feature_dim(input: &ort::value::Outlet) -> usize {
+    match input.dtype() {
         ort::value::ValueType::Tensor { shape, .. } => match shape.last() {
             Some(&d) if d > 0 => d as usize,
             _ => 512,
         },
         _ => 512,
     }
-}
-
-/// External-data sidecar (`<model>_data` / `<model>.data`) next to the model file.
-fn has_external_data(model_path: &str) -> bool {
-    std::path::Path::new(&format!("{model_path}_data")).exists()
-        || std::path::Path::new(&format!("{model_path}.data")).exists()
 }
 
 impl OrtEmbedder {
@@ -128,35 +122,24 @@ impl OrtEmbedder {
                     .build()])?;
             }
         }
-        let model_bytes = std::fs::read(model_path)
-            .map_err(|e| CoreError::Embedding(format!("read model {model_path}: {e}")))?;
-        let mut builder = builder.with_optimization_level(GraphOptimizationLevel::Level3)?;
-        if has_external_data(model_path) {
-            // In-memory load has no base path → tell ORT where the sidecar lives
-            // (`commit_from_file` needs ort's `std` feature, which we don't enable).
-            if let Some(dir) = std::path::Path::new(model_path).parent() {
-                builder = builder.with_config_entry(
-                    "session.model_external_initializers_file_folder_path",
-                    dir.to_string_lossy(),
-                )?;
-            }
-        }
-        let session = builder.commit_from_memory(&model_bytes)?;
+        let session = builder
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .commit_from_file(model_path)?;
 
-        let has_token_type = session.inputs.iter().any(|i| i.name == "token_type_ids");
+        let has_token_type = session.inputs().iter().any(|i| i.name() == "token_type_ids");
         let feature_inputs: Vec<(String, usize)> = session
-            .inputs
+            .inputs()
             .iter()
-            .filter(|i| i.name.ends_with("_features"))
+            .filter(|i| i.name().ends_with("_features"))
             .filter(|i| {
                 matches!(
-                    &i.input_type,
-                    ort::value::ValueType::Tensor { ty: ort::tensor::TensorElementType::Float32, .. }
+                    i.dtype(),
+                    ort::value::ValueType::Tensor { ty: ort::value::TensorElementType::Float32, .. }
                 )
             })
-            .map(|i| (i.name.clone(), feature_dim(i)))
+            .map(|i| (i.name().to_string(), feature_dim(i)))
             .collect();
-        let has_sentence_embedding = session.outputs.iter().any(|o| o.name == "sentence_embedding");
+        let has_sentence_embedding = session.outputs().iter().any(|o| o.name() == "sentence_embedding");
 
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| CoreError::Embedding(format!("tokenizer load: {e}")))?;
@@ -173,6 +156,14 @@ impl OrtEmbedder {
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed_with_features(text, None)
+    }
+
+    /// Embed `text`, feeding `image_features` (`[n, D]`, from the vision
+    /// encoder) into the `image_features` input instead of an empty tensor.
+    /// `text` then carries the image placeholder tokens (`vision.rs`).
+    pub(crate) fn embed_with_features(&self, text: &str, image_features: Option<Array2<f32>>) -> Result<Vec<f32>> {
+        let mut image_features = image_features;
         let encoding = self
             .tokenizer
             .encode(text, true)
@@ -209,8 +200,17 @@ impl OrtEmbedder {
             ]
         };
         for (name, dim) in &self.feature_inputs {
-            let empty = Array2::<f32>::zeros((0, *dim));
-            inputs.push((name.clone().into(), Tensor::from_array(empty)?.into()));
+            let feats = match (name.as_str(), image_features.take()) {
+                ("image_features", Some(f)) => f,
+                (_, other) => {
+                    image_features = other;
+                    Array2::<f32>::zeros((0, *dim))
+                }
+            };
+            inputs.push((name.clone().into(), Tensor::from_array(feats)?.into()));
+        }
+        if image_features.is_some() {
+            return Err(CoreError::Embedding("model has no image_features input".into()));
         }
         let outputs = session.run(inputs)?;
 

@@ -57,9 +57,7 @@ mod imp {
     // CoreML EP is apple-only (see core/Cargo.toml AP7 split); non-apple always
     // takes the CPU path, so the import + branch are apple-gated like in onnx.rs.
     #[cfg(target_vendor = "apple")]
-    use ort::execution_providers::coreml::CoreMLComputeUnits;
-    #[cfg(target_vendor = "apple")]
-    use ort::execution_providers::CoreMLExecutionProvider;
+    use ort::ep::coreml::{ComputeUnits as CoreMLComputeUnits, CoreML as CoreMLExecutionProvider};
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::Tensor;
     use tokenizers::Tokenizer;
@@ -93,9 +91,6 @@ mod imp {
             let model_path = model_dir.join("model.onnx");
             let tokenizer_path = model_dir.join("tokenizer.json");
 
-            let model_bytes = std::fs::read(&model_path).map_err(|e| {
-                CoreError::Embedding(format!("read reranker model {}: {e}", model_path.display()))
-            })?;
             #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
             let mut builder = Session::builder()?;
             // No iOS force-override here either (MODEL_INFRA_PLAN.md AP3): the
@@ -118,9 +113,9 @@ mod imp {
             }
             let session = builder
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .commit_from_memory(&model_bytes)?;
+                .commit_from_file(&model_path)?;
 
-            let has_token_type = session.inputs.iter().any(|i| i.name == "token_type_ids");
+            let has_token_type = session.inputs().iter().any(|i| i.name() == "token_type_ids");
 
             let tokenizer = Tokenizer::from_file(&tokenizer_path)
                 .map_err(|e| CoreError::Embedding(format!("reranker tokenizer load: {e}")))?;

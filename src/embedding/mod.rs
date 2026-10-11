@@ -26,6 +26,15 @@ pub mod rerank;
 
 #[cfg(feature = "onnx")]
 pub mod onnx;
+/// glibc < 2.38 shims for the prebuilt ONNX Runtime (Linux only).
+#[cfg(all(target_os = "linux", feature = "onnx"))]
+mod glibc_compat;
+
+/// Image embedding (EmbeddingGemma 2 vision encoder). Preprocessing is pure
+/// and always compiled (`vision_prep`); `OrtImageEmbedder` needs `onnx`.
+pub mod vision_prep;
+#[cfg(feature = "onnx")]
+pub mod vision;
 
 /// Local GGUF/llama.cpp embedder (MODEL_INFRA_PLAN.md AP4b). The pure
 /// pooling/normalize helpers compile unconditionally (and are tested); the
@@ -45,3 +54,5 @@ pub trait QueryEmbedder {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_vision;

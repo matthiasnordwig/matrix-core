@@ -14,9 +14,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # the core builds/tests with zero heavy/native deps.
 #   * `onnx`          — link against an externally provided ONNX Runtime
 #                       (iOS device build: set ORT_LIB_LOCATION to the static lib).
-#   * `onnx-download` — host/dev convenience: fetch a prebuilt ONNX Runtime.
-onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
-onnx-download = ["onnx", "ort/download-binaries"]
+#   * `onnx-download` — host/dev convenience: fetch a prebuilt ONNX Runtime
+#                       (pyke CDN, ONNX Runtime 1.28; rustls for the build-time fetch).
+onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:image"]
+onnx-download = ["onnx", "ort/download-binaries", "ort/tls-rustls"]
+# Render PDF pages to images (pdf_oxide + tiny-skia, pure Rust). Only the image
+# probe example uses it so far (`examples/image_probe.rs --render`).
+pdf-render = ["pdf_oxide/rendering"]
 gguf = ["dep:llama-cpp-2"]
 gguf-metal = ["gguf", "llama-cpp-2/metal"]
 gguf-cuda = ["gguf", "llama-cpp-2/cuda"]
@@ -33,9 +37,12 @@ pdf_oxide = "0.3.60"
 # targets. Cargo unifies the two entries: apple → coreml+ndarray (unchanged from
 # before the AP7 split), non-apple → ndarray only (CPU EP). See DUAL_TARGET_PLAN.md
 # AP7 (embedding-parity: local ONNX on Linux via CPU-EP).
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["ndarray"] }
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "ndarray"] }
 tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
-ndarray = { version = "0.16", optional = true }
+ndarray = { version = "0.17", optional = true }
+# Image decode/resize for the vision embedder (`embedding/vision.rs`); already in
+# the graph via pdf_oxide, so no extra build cost.
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
 llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 
 # Apple-only: re-add the CoreML execution provider. iOS runs on the ANE via
@@ -44,10 +51,4 @@ llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 # coreml+ndarray, non-apple stays CPU-only. Keeps the apple build byte-identical
 # to before the split while letting Linux type-check without the coreml feature.
 [target.'cfg(target_vendor = "apple")'.dependencies]
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["coreml", "ndarray"] }
-
-# Patched ort-sys: links clang_rt.ios (not clang_rt.osx) on iOS targets so the ONNX
-# Runtime static lib links into the device build. Vendored in-repo (not ../vendor)
-# so this crate builds standalone, e.g. as a git dependency from another repo.
-[patch.crates-io]
-ort-sys = { path = "vendor/ort-sys-2.0.0-rc.10" }
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "coreml", "ndarray"] }

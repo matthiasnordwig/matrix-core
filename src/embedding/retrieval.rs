@@ -24,7 +24,8 @@ use crate::db::models::ScoredChunk;
 use crate::{Database, Result};
 
 /// Textbook Reciprocal Rank Fusion constant, used by `rrf_fuse`. The hybrid
-/// path takes its k from `fusion::FusionParams` (measured: 10).
+/// path takes its k from `fusion::FusionParams` (measured: 10); test-only now.
+#[cfg(test)]
 pub(crate) const RRF_K: usize = 60;
 
 /// Retrieval fan-out N for each list before fusion: `max(50, 5·top_k)`.
@@ -41,6 +42,8 @@ pub(crate) fn hybrid_fanout(top_k: usize) -> usize {
 /// Fusion works purely on **ranks within each list** — it never mixes scores
 /// across lists, which is what preserves the embedding-space isolation
 /// invariant when the caller only ever fuses lists from the *same* space.
+/// Unweighted reference form, kept for the fusion-math tests.
+#[cfg(test)]
 pub(crate) fn rrf_fuse(lists: &[Vec<i64>], k: usize, top_k: usize) -> Vec<ScoredChunk> {
     let weighted: Vec<(&[i64], f32)> = lists.iter().map(|l| (l.as_slice(), 1.0)).collect();
     rrf_fuse_weighted(&weighted, k, top_k)
