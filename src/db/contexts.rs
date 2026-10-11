@@ -1,10 +1,10 @@
 //! CRUD for `contexts` and their `documents`.
 //!
-//! `copy_context_chunks` duplicates a context's documents + chunks (verbatim
-//! rows, new ids) into an empty target context — used to embed the identical
-//! chunk set with a second embedding model for side-by-side retrieval evals
-//! (`services/examples/embed_compare.rs`). Embeddings, prechunks, chunk_refs
-//! and ontology rows are NOT copied.
+//! `copy_context_chunks` duplicates a context's documents + chunks + graphics
+//! page images (verbatim rows, new ids) into an empty target context — used to
+//! embed the identical chunk set with a second embedding model for side-by-side
+//! retrieval evals (`services/examples/embed_compare.rs`). Embeddings (text and
+//! image), prechunks, chunk_refs and ontology rows are NOT copied.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -253,8 +253,9 @@ impl Database {
             > 0)
     }
 
-    /// Copy all documents of context `src` and their chunks (text, offsets,
-    /// signature, omitted flag, metadata) into context `dst`, in one
+    /// Copy all documents of context `src` with their chunks (text, offsets,
+    /// signature, omitted flag, metadata) and page images (without vectors)
+    /// into context `dst`, in one
     /// transaction. `dst` must have no documents yet (guards against a double
     /// copy). Returns the number of chunks copied. FTS rows follow via the
     /// `chunks_fts_*` triggers.
@@ -296,6 +297,13 @@ impl Database {
                  FROM chunks WHERE document_id = ?1 AND context_id = ?4
                  ORDER BY chunk_index",
                 params![doc_id, dst, new_doc, src],
+            )?;
+            tx.execute(
+                "INSERT INTO page_images
+                    (context_id, document_id, page, char_start, char_end, width, height, image, created_at)
+                 SELECT ?2, ?3, page, char_start, char_end, width, height, image, created_at
+                 FROM page_images WHERE document_id = ?1 ORDER BY page",
+                params![doc_id, dst, new_doc],
             )?;
         }
         tx.commit()?;

@@ -1,4 +1,4 @@
-//! Tests for `copy_context_chunks` — verbatim document/chunk duplication into
+//! Tests for `copy_context_chunks` — verbatim document/chunk/page-image duplication into
 //! an empty target context (same texts/metadata, new ids, FTS indexed), with a
 //! guard against copying into a non-empty or the same context.
 
@@ -65,6 +65,11 @@ fn seeded() -> (Database, i64) {
     chunk(&db, src, d1, 0, "Rechnungen sind fällig", false);
     chunk(&db, src, d1, 1, "Kündigungsfrist drei Monate", false);
     chunk(&db, src, d2, 0, "ausgelassen", true);
+    db.insert_page_image(&NewPageImage {
+        context_id: src, document_id: d1, page: 2, char_start: Some(0), char_end: Some(10),
+        width: 8, height: 6, image: vec![0xFF, 0xD8, 1, 2],
+    })
+    .unwrap();
     (db, src)
 }
 
@@ -93,6 +98,12 @@ fn copies_documents_and_chunks_verbatim() {
     assert!(d_chunks.iter().all(|c| dst_doc_ids.contains(&c.document_id) && c.context_id == dst));
     // Source is untouched.
     assert_eq!(db.list_chunks(src, true).unwrap().len(), 3);
+    // Page images follow their (copied) document, bytes included.
+    let imgs = db.list_page_images_for_context(dst).unwrap();
+    assert_eq!(imgs.len(), 1);
+    assert!(dst_doc_ids.contains(&imgs[0].document_id));
+    assert_eq!((imgs[0].page, imgs[0].char_end), (2, Some(10)));
+    assert_eq!(db.page_image_bytes(imgs[0].id).unwrap(), Some(vec![0xFF, 0xD8, 1, 2]));
     // FTS triggers indexed the copies.
     assert_eq!(db.keyword_search_context(dst, "Kündigungsfrist", 5, None).unwrap().len(), 1);
 }

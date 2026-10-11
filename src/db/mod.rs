@@ -39,6 +39,8 @@ mod pools;
 pub mod settings;
 mod eval;
 pub(crate) mod page_images;
+mod transfer;
+pub use transfer::TableSchema;
 pub mod ontology;
 
 /// Errors surfaced by the persistence layer.
