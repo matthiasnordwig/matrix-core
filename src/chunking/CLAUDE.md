@@ -7,6 +7,11 @@ Index-basierter Ansatz (nicht signatur-/string-basiert): `sentences.rs` →
 LLM-freie Layout-Pfad für PDFs (separate Heuristiken, siehe `handbuch/core.md` für Details
 zu Line-Gap/Forward-/Backward-Merge).
 
+`markdown.rs` ist der LLM-freie Überschriften-Chunker für `.md` (Tests: `markdown_tests.rs`).
+**Index-Basis:** `char_start`/`char_end` sind überall **Byte-Offsets** in den Dokumenttext
+(`signatures.rs`, `structural.rs`, `markdown.rs`); `markdown.rs` garantiert zusätzlich
+`text[char_start..char_end] == chunk.text`.
+
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn " *.rs` zeigt alle
 Signaturen im Ordner.
 

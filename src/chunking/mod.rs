@@ -11,6 +11,7 @@ pub mod sentences;
 pub mod signatures;
 pub mod window;
 pub mod structural;
+pub mod markdown;
 
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};
@@ -26,3 +27,5 @@ pub fn prepare_windows(raw: &str, window_tokens: usize, overlap_ratio: f64) -> V
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod markdown_tests;
