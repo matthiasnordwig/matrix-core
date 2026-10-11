@@ -30,6 +30,7 @@ use crate::{CoreError, Result};
 pub struct OrtImageEmbedder {
     vision: Mutex<Session>,
     text: OrtEmbedder,
+    max_soft_tokens: usize,
 }
 
 impl OrtImageEmbedder {
@@ -40,7 +41,15 @@ impl OrtImageEmbedder {
         let vision = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .commit_from_file(vision_model_path)?;
-        Ok(Self { vision: Mutex::new(vision), text })
+        Ok(Self { vision: Mutex::new(vision), text, max_soft_tokens: MAX_SOFT_TOKENS })
+    }
+
+    /// Image-token budget per image (default `MAX_SOFT_TOKENS`); fewer tokens
+    /// = faster, coarser. Vectors made with different budgets still share the
+    /// space, but rank slightly differently.
+    pub fn with_max_soft_tokens(mut self, n: usize) -> Self {
+        self.max_soft_tokens = n.max(1);
+        self
     }
 
     /// The text side, for queries/documents in the same space.
@@ -52,7 +61,7 @@ impl OrtImageEmbedder {
     pub fn embed_image(&self, img: &DynamicImage) -> Result<Vec<f32>> {
         let rgb = img.to_rgb8();
         let (h, w) = (rgb.height() as usize, rgb.width() as usize);
-        let budget = max_patches(MAX_SOFT_TOKENS, POOL);
+        let budget = max_patches(self.max_soft_tokens, POOL);
         let (th, tw) = target_size(h, w, PATCH, budget, POOL);
         let rgb = if (th, tw) == (h, w) {
             rgb

@@ -10,7 +10,7 @@
 //! Probe (embed every image + every page's text in the page range, rank per question):
 //!   cargo run --release --example image_probe --features onnx-download -- \
 //!       --pdf <file.pdf> --model-dir ~/matrix/models/embeddinggemma-2-onnx \
-//!       [--text model_q4] [--vision vision_encoder_q4] --queries q.json [--out r.json]
+//!       [--text model_q4] [--vision vision_encoder_q4] [--soft 280] --queries q.json [--out r.json]
 //! `q.json`: `{"queries": [{"q": "…", "image": "p12_0"}, …]}` — image keys as
 //! written by `--dump` (1-based page[, index on the page]).
 //! Per question it reports the rank of the expected image among all images
@@ -19,6 +19,8 @@
 //! page-level rank fusion (RRF, k = 10 like the hybrid search) of the image
 //! list and the text list. `--cache <file.json>` stores the image vectors
 //! (keyed by model + key) so a re-run skips the slow image embedding.
+//! `--chunk-chars N [--image-pages 9,13,…]`: additionally a chunk-level run
+//! (how an image hit is mapped to the chunks of its page; see the code).
 //! Image folder instead of a PDF (key = file stem, no page texts):
 //!   ... -- --images <dir> --model-dir <dir> --queries q.json
 //! Exit 0 = completed, 2 = usage, 3 = runtime error.
@@ -122,7 +124,10 @@ fn main() {
     };
     let vision_path = model_dir.join("onnx").join(format!("{vision_name}.onnx"));
     let t0 = Instant::now();
-    let emb = OrtImageEmbedder::load(&model, &vision_path.to_string_lossy()).unwrap_or_else(|e| fail(e));
+    let soft: usize = get("--soft").and_then(|v| v.parse().ok()).unwrap_or(app::embedding::vision_prep::MAX_SOFT_TOKENS);
+    let emb = OrtImageEmbedder::load(&model, &vision_path.to_string_lossy())
+        .unwrap_or_else(|e| fail(e))
+        .with_max_soft_tokens(soft);
     eprintln!("loaded {text_name} + {vision_name} in {:.1}s", t0.elapsed().as_secs_f64());
     let text: &OrtEmbedder = emb.text();
     use app::embedding::QueryEmbedder;
@@ -130,7 +135,7 @@ fn main() {
     // Every image in the page range + one text vector per page.
     let mut items: Vec<(String, bool, Vec<f32>)> = Vec::new(); // (key, is_image, vec)
     let cache_path = get("--cache");
-    let cache_ns = format!("{text_name}+{vision_name}");
+    let cache_ns = format!("{text_name}+{vision_name}@{soft}");
     let mut cache: BTreeMap<String, Vec<f32>> = cache_path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -253,6 +258,92 @@ fn main() {
     if let Some(out) = get("--out") {
         std::fs::write(&out, serde_json::to_string_pretty(&summary).unwrap()).unwrap_or_else(|e| fail(e));
     }
+
+    // Chunk level (`--chunk-chars N`): page texts cut into ~N-char chunks; the
+    // image list is fused into the chunk vector list after mapping each image
+    // hit to chunks of its page — (a) only the page's most query-similar
+    // chunk, (b) every chunk of the page with weight 1/n, (c) every chunk with
+    // full weight. `--image-pages 9,13,…` keeps only those pages' images (the
+    // graphics-page selection). MRR = rank of the first chunk of the target page.
+    let Some(cc) = get("--chunk-chars").and_then(|v| v.parse::<usize>().ok()) else { return };
+    let Some(doc) = doc.as_ref() else { return };
+    let img_pages: Option<BTreeSet<String>> =
+        get("--image-pages").map(|s| s.split(',').map(|p| format!("p{}", p.trim())).collect());
+    let mut chunks: Vec<(String, Vec<f32>)> = Vec::new(); // (page key, vec)
+    for page in from..=to.min(pages) {
+        let t = doc.extract_text(page - 1).unwrap_or_default();
+        let mut cur = String::new();
+        let mut flush = |cur: &mut String| {
+            if cur.len() >= 40 {
+                let v = text.embed_query(&model, &format!("{DOC_PREFIX}{cur}")).unwrap_or_else(|e| fail(e));
+                chunks.push((format!("p{page}"), v));
+            }
+            cur.clear();
+        };
+        for w in t.split_whitespace() {
+            if cur.len() + w.len() + 1 > cc {
+                flush(&mut cur);
+            }
+            if !cur.is_empty() {
+                cur.push(' ');
+            }
+            cur.push_str(w);
+        }
+        flush(&mut cur);
+    }
+    let images: Vec<&(String, bool, Vec<f32>)> = items
+        .iter()
+        .filter(|(k, im, _)| *im && img_pages.as_ref().is_none_or(|s| s.contains(k)))
+        .collect();
+    eprintln!("chunk level: {} chunks of ≤{cc} chars, {} page images", chunks.len(), images.len());
+    let k = 10.0f64;
+    let mut rr = [0.0f64; 4]; // text-only, (a), (b), (c)
+    let mut nq = 0usize;
+    for q in spec["queries"].as_array().into_iter().flatten() {
+        let (question, target) = (q["q"].as_str().unwrap_or(""), q["image"].as_str().unwrap_or(""));
+        let target = page_of(target);
+        let qv = text.embed_query(&model, &format!("{QUERY_PREFIX}{question}")).unwrap_or_else(|e| fail(e));
+        let cs: Vec<f32> = chunks.iter().map(|(_, v)| dot(&qv, v)).collect();
+        let mut vec_order: Vec<usize> = (0..chunks.len()).collect();
+        vec_order.sort_by(|&a, &b| cs[b].total_cmp(&cs[a]));
+        let mut img_order: Vec<(&str, f32)> = images.iter().map(|(k, _, v)| (k.as_str(), dot(&qv, v))).collect();
+        img_order.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for variant in 0..4 {
+            let mut score = vec![0.0f64; chunks.len()];
+            for (r, &ci) in vec_order.iter().enumerate() {
+                score[ci] += 1.0 / (k + (r + 1) as f64);
+            }
+            if variant > 0 {
+                for (r, (pg, _)) in img_order.iter().enumerate() {
+                    let on_page: Vec<usize> = (0..chunks.len()).filter(|&i| chunks[i].0 == *pg).collect();
+                    let contrib = 1.0 / (k + (r + 1) as f64);
+                    match variant {
+                        1 => {
+                            if let Some(&best) = on_page.iter().max_by(|&&a, &&b| cs[a].total_cmp(&cs[b])) {
+                                score[best] += contrib;
+                            }
+                        }
+                        2 => on_page.iter().for_each(|&i| score[i] += contrib / on_page.len() as f64),
+                        _ => on_page.iter().for_each(|&i| score[i] += contrib),
+                    }
+                }
+            }
+            let mut order: Vec<usize> = (0..chunks.len()).collect();
+            order.sort_by(|&a, &b| score[b].total_cmp(&score[a]));
+            if let Some(p) = order.iter().position(|&i| chunks[i].0 == target) {
+                rr[variant] += 1.0 / (p + 1) as f64;
+            }
+        }
+        nq += 1;
+    }
+    let nf = nq.max(1) as f64;
+    println!(
+        "chunk-level MRR: text-only {:.3} · (a) best chunk {:.3} · (b) all chunks 1/n {:.3} · (c) all chunks full {:.3}",
+        rr[0] / nf,
+        rr[1] / nf,
+        rr[2] / nf,
+        rr[3] / nf
+    );
 }
 
 #[cfg(all(feature = "onnx", feature = "pdf-render"))]
