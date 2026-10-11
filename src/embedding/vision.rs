@@ -11,10 +11,12 @@
 //! Images get no task prefix (model card: prefixes are text-only).
 //!
 //! The text model is the regular `OrtEmbedder` (same file as text embedding),
-//! held here so an image and its text queries share one session. The vision
-//! session runs on the CPU EP; CoreML for it is unmeasured.
+//! shared through an `Arc` so an image and its text queries use ONE session
+//! ([`OrtImageEmbedder::with_text`] takes the app's cached text embedder
+//! instead of loading the ~1 GB model a second time). The vision session runs
+//! on the CPU EP; CoreML for it is unmeasured.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use image::imageops::FilterType;
 use image::DynamicImage;
@@ -29,7 +31,7 @@ use crate::{CoreError, Result};
 
 pub struct OrtImageEmbedder {
     vision: Mutex<Session>,
-    text: OrtEmbedder,
+    text: Arc<OrtEmbedder>,
     max_soft_tokens: usize,
 }
 
@@ -37,7 +39,12 @@ impl OrtImageEmbedder {
     /// `model` describes the text model (as for `OrtEmbedder::load`);
     /// `vision_model_path` is the matching `vision_encoder*.onnx`.
     pub fn load(model: &EmbeddingModel, vision_model_path: &str) -> Result<Self> {
-        let text = OrtEmbedder::load(model)?;
+        Self::with_text(Arc::new(OrtEmbedder::load(model)?), vision_model_path)
+    }
+
+    /// Like [`Self::load`], but on an already loaded text embedder of the same
+    /// model (shared session, no second copy of the text model in memory).
+    pub fn with_text(text: Arc<OrtEmbedder>, vision_model_path: &str) -> Result<Self> {
         let vision = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .commit_from_file(vision_model_path)?;
@@ -55,6 +62,12 @@ impl OrtImageEmbedder {
     /// The text side, for queries/documents in the same space.
     pub fn text(&self) -> &OrtEmbedder {
         &self.text
+    }
+
+    /// Embed an encoded image (JPEG/PNG bytes, e.g. a stored page image).
+    pub fn embed_image_bytes(&self, bytes: &[u8]) -> Result<Vec<f32>> {
+        let img = image::load_from_memory(bytes).map_err(|e| CoreError::Embedding(format!("decode image: {e}")))?;
+        self.embed_image(&img)
     }
 
     /// Embed one image (L2-normalised, model dimension).

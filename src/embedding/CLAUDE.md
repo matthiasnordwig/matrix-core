@@ -40,7 +40,8 @@ im UI wirkt so ohne App-Neustart.
 Bild-Embedding (EmbeddingGemma 2): `vision_prep.rs` (rein, Gemma-4-Bildvorverarbeitung,
 getestet in `tests_vision.rs`) + `vision.rs::OrtImageEmbedder` (hinter `onnx`): Bild-Encoder
 → `image_features` in dieselbe Text-Session (`OrtEmbedder::embed_with_features`) → gleicher
-Vektorraum wie Text. Messwerkzeug `core/examples/image_probe.rs` (Seiten-Rendering über
+Vektorraum wie Text; `OrtImageEmbedder::with_text` übernimmt ein vorhandenes
+`Arc<OrtEmbedder>` (die App teilt so die gecachte Text-Session, `services/localembed.rs`). Messwerkzeug `core/examples/image_probe.rs` (Seiten-Rendering über
 Feature `pdf-render`). Bildsuche: `page_select.rs` (rein: Grafikseiten-Regel,
 Seitenanfänge nach Textreparatur, Seite → Chunks; Tests `tests_page_select.rs`),
 `page_render.rs` (Feature `pdf-render`: PDF → JPEG der Grafikseiten; Messtabelle

@@ -100,10 +100,18 @@ pub fn graphics_page_numbers(doc: &PdfDocument) -> Vec<usize> {
 /// PDF bytes → JPEG renders of its graphics pages, in page order. Fails only
 /// when the PDF cannot be opened at all.
 pub fn graphics_pages(pdf: &[u8]) -> Result<Vec<RenderedPage>> {
+    Ok(graphics_pages_counted(pdf)?.1)
+}
+
+/// [`graphics_pages`] plus the page count pdf_oxide sees — the ingest only
+/// trusts page offsets from `pdf_extract` when both libraries agree on it.
+pub fn graphics_pages_counted(pdf: &[u8]) -> Result<(usize, Vec<RenderedPage>)> {
     let doc = guarded(|| Some(PdfDocument::from_bytes(pdf.to_vec())))
         .ok_or_else(|| CoreError::Embedding("PDF parser panicked".into()))?
         .map_err(|e| CoreError::Embedding(format!("open PDF: {e}")))?;
-    Ok(graphics_page_numbers(&doc).into_iter().filter_map(|p| render_page_jpeg(&doc, p - 1)).collect())
+    let count = guarded(|| doc.page_count().ok()).unwrap_or(0);
+    let pages = graphics_page_numbers(&doc).into_iter().filter_map(|p| render_page_jpeg(&doc, p - 1)).collect();
+    Ok((count, pages))
 }
 
 #[cfg(test)]
