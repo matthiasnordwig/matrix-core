@@ -12,6 +12,7 @@ pub mod signatures;
 pub mod window;
 pub mod structural;
 pub mod markdown;
+pub mod text_repair;
 
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};

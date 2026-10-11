@@ -156,3 +156,50 @@ fn zero_max_uses_default_and_signature_is_prefix() {
     assert_eq!(cs.len(), 1);
     assert_eq!(cs[0].signature.as_deref().unwrap().chars().count(), 80);
 }
+
+#[test]
+fn long_list_without_blank_lines_is_split_at_items() {
+    let items: String = (0..30).map(|i| format!("- item {i} {}\n", "w".repeat(40))).collect();
+    let t = format!("# A\n\n{items}");
+    let cs = chunk(&t, 1, 1, 400);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 3, "got {} chunks", cs.len());
+    for c in &cs {
+        assert!(c.text.chars().count() <= 400, "len {}", c.text.chars().count());
+        assert!(c.text.starts_with("# A") || c.text.starts_with("- item"), "cut mid-item: {:?}", &c.text[..20]);
+    }
+}
+
+#[test]
+fn numbered_list_and_wrapped_items_cut_only_at_item_starts() {
+    let items: String = (1..=12)
+        .map(|i| format!("{i}. first line {}\n   continuation {}\n", "u".repeat(30), "v".repeat(30)))
+        .collect();
+    let t = format!("# N\n{items}");
+    let cs = chunk(&t, 1, 1, 300);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 2);
+    for c in cs.iter().skip(1) {
+        assert!(c.text.split('.').next().unwrap().parse::<u32>().is_ok(), "cut mid-item: {:?}", &c.text[..15]);
+    }
+}
+
+#[test]
+fn block_without_list_items_falls_back_to_line_ends() {
+    let lines: String = (0..20).map(|i| format!("| row {i} | {} |\n", "c".repeat(40))).collect();
+    let t = format!("# T\n{lines}");
+    let cs = chunk(&t, 1, 1, 300);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 2);
+    assert!(cs.iter().all(|c| c.text.chars().count() <= 300));
+}
+
+#[test]
+fn list_cut_never_falls_inside_a_fence() {
+    let code = format!("```\n{}\n- not an item\n{}\n```", "a".repeat(150), "b".repeat(150));
+    let items: String = (0..6).map(|i| format!("- item {i} {}\n", "w".repeat(40))).collect();
+    let t = format!("# F\n{items}{code}\n{items}");
+    let cs = chunk(&t, 1, 1, 250);
+    assert_offsets(&t, &cs);
+    assert!(cs.iter().any(|c| c.text.contains(&code)), "fence was split");
+}

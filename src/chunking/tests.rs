@@ -169,3 +169,44 @@ fn short_trailing_block_is_backward_merged() {
     assert!(chunks[0].text.contains("Art. 5 Schluss"));
     assert!(chunks[0].text.contains("Ende."));
 }
+
+// ── text_repair::repair_mojibake ────────────────────────────────────────────
+
+use super::text_repair::repair_mojibake;
+
+#[test]
+fn mojibake_thin_space_and_header_are_repaired() {
+    // Real lines from KfW-Gesetz-DE-EN.pdf.
+    assert_eq!(repair_mojibake("(1)\tâ€‰Die Kreditanstalt"), "(1)\t Die Kreditanstalt");
+    assert_eq!(
+        repair_mojibake("Gesetz über die Kreditanstalt für WiederÂa\u{AD}ufbauâ€‚|â€‚4"),
+        "Gesetz über die Kreditanstalt für Wiederaufbau | 4"
+    );
+    // Glyph order reversed by x-sorting, and a line-final leftover "Â".
+    assert_eq!(repair_mojibake("Vorsitzenden. ‰€âZur BeschlussÂ"), "Vorsitzenden.  Zur Beschluss");
+    assert_eq!(repair_mojibake("Beschluss\u{AD}Â"), "Beschluss");
+}
+
+#[test]
+fn mojibake_soft_hyphen_is_dropped() {
+    assert_eq!(repair_mojibake("gemeinsam durchÂ\u{AD}zuführen"), "gemeinsam durchzuführen");
+    assert_eq!(repair_mojibake("Gemeinde\u{AD}verbände"), "Gemeindeverbände");
+}
+
+#[test]
+fn mojibake_umlauts_and_double_encoded_umlauts() {
+    assert_eq!(repair_mojibake("GeschÃ¤ftsfÃ¼hrung"), "Geschäftsführung");
+    assert_eq!(repair_mojibake("Kosten 5 â‚¬"), "Kosten 5 €");
+}
+
+#[test]
+fn mojibake_leaves_genuine_text_alone() {
+    for s in [
+        "„Fuß“ und „KfW“ — Größe, Übermaß, ÄÖÜ äöü ß",
+        "§\u{A0}1 Absatz\u{A0}2 – Satz 3 © 2026 ±5 %",
+        "Ça va, Âme, crème brûlée, naïve",
+        "ASCII only text.",
+    ] {
+        assert_eq!(repair_mojibake(s), s, "changed: {s}");
+    }
+}

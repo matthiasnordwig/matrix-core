@@ -10,13 +10,16 @@
 //!   a definition at a sentence end) are glued to the previous chunk;
 //! - `max_chunk_chars` is only an emergency brake for very long unstructured
 //!   blocks.
-//! Offsets are byte offsets into the extracted text (see `chunking/CLAUDE.md`).
+//! Each line passes `text_repair::repair_mojibake` (PDFs whose character map
+//! encodes UTF-8 read as Windows-1252) before it is classified.
+//! Offsets are byte offsets into the repaired text (see `chunking/CLAUDE.md`).
 
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
 use std::collections::BTreeMap;
 
 use super::sentences::split_sentences;
+use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
 
 #[derive(Debug, Clone)]
@@ -201,6 +204,7 @@ pub fn chunk_pdf_structurally(
             }
 
             let is_mostly_bold = bold_chars > line_chars.len() / 2;
+            let line_text = repair_mojibake(&line_text);
             let line_text_trimmed = line_text.trim();
             if line_text_trimmed.is_empty() {
                 continue;

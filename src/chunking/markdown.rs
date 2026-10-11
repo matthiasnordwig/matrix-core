@@ -9,7 +9,10 @@
 //! Rules: a section runs from its heading to the next heading of any level;
 //! heading-only sections are merged into the following one (a trailing one into
 //! the previous chunk); sections over `max_chars` are split at blank lines
-//! outside code fences (a single oversized block stays whole); every part
+//! outside code fences; a block still over `max_chars` (typically a long list
+//! without blank lines) is split before its top-level list items, and failing
+//! that at line ends — never inside a code fence (an oversized fence stays
+//! whole); every part
 //! carries the same `heading_path`. Text before the first heading is its own
 //! section with empty `heading_path`. Setext headings (`===`/`---` underline)
 //! are not recognised.
@@ -29,6 +32,11 @@ struct Line {
     end: usize,
     /// Whitespace-only line outside a code fence.
     blank: bool,
+    /// Inside a code fence (after the opening line, closing line included):
+    /// no cut may fall right before this line.
+    in_fence: bool,
+    /// Starts a top-level list item (`- `, `* `, `+ `, `1. `, `1) `).
+    list_item: bool,
     heading: Option<(u8, String)>,
 }
 
@@ -118,9 +126,10 @@ fn scan_lines(text: &str) -> Vec<Line> {
         let content = raw.trim_end_matches(['\n', '\r']);
         let indent = content.len() - content.trim_start_matches(' ').len();
         let body = &content[indent..];
-        let mut line = Line { start, end: pos, blank: false, heading: None };
+        let mut line = Line { start, end: pos, blank: false, in_fence: false, list_item: false, heading: None };
 
         if let Some((ch, len)) = fence {
+            line.in_fence = true;
             let run = body.chars().take_while(|&c| c == ch).count();
             if indent <= 3 && run >= len && body[run..].trim().is_empty() {
                 fence = None;
@@ -131,6 +140,7 @@ fn scan_lines(text: &str) -> Vec<Line> {
             line.blank = true;
         } else if indent <= 3 {
             line.heading = parse_heading(body);
+            line.list_item = is_list_item(body);
         }
         lines.push(line);
     }
@@ -146,6 +156,14 @@ fn fence_open(body: &str) -> Option<(char, usize)> {
         return None;
     }
     Some((ch, run))
+}
+
+fn is_list_item(body: &str) -> bool {
+    if body.starts_with("- ") || body.starts_with("* ") || body.starts_with("+ ") {
+        return true;
+    }
+    let digits = body.chars().take_while(char::is_ascii_digit).count();
+    (1..=9).contains(&digits) && (body[digits..].starts_with(". ") || body[digits..].starts_with(") "))
 }
 
 fn parse_heading(body: &str) -> Option<(u8, String)> {
@@ -218,8 +236,9 @@ fn build_sections(lines: &[Line]) -> Vec<Section> {
 }
 
 /// Splits lines `[a, b)` into line ranges of at most `max_chars` each, at
-/// blank-line block boundaries. Leading heading-only blocks stick to the
-/// following block; an oversized single block stays whole.
+/// blank-line block boundaries, then (for a still oversized block) before
+/// list items, then at line ends. Leading heading-only blocks stick to the
+/// following block; an oversized code fence stays whole.
 fn split_range(text: &str, lines: &[Line], a: usize, b: usize, max_chars: usize) -> Vec<(usize, usize)> {
     let whole_end = trimmed_end(text, lines[a].start, lines[b - 1].end);
     if text[lines[a].start..whole_end].chars().count() <= max_chars {
@@ -260,12 +279,49 @@ fn split_range(text: &str, lines: &[Line], a: usize, b: usize, max_chars: usize)
         let end = trimmed_end(text, lines[s].start, lines[e - 1].end);
         text[lines[s].start..end].chars().count()
     };
+    let units: Vec<(usize, usize)> = fused
+        .into_iter()
+        .flat_map(|(s, e)| {
+            if size(s, e) <= max_chars {
+                return vec![(s, e)];
+            }
+            cut_before(lines, s, e, |k| lines[k].list_item)
+                .into_iter()
+                .flat_map(|(us, ue)| {
+                    if size(us, ue) <= max_chars {
+                        vec![(us, ue)]
+                    } else {
+                        cut_before(lines, us, ue, |_| true)
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
     let mut parts: Vec<(usize, usize)> = Vec::new();
-    for (s, e) in fused {
+    for (s, e) in units {
         match parts.last_mut() {
             Some(cur) if size(cur.0, e) <= max_chars => cur.1 = e,
             _ => parts.push((s, e)),
         }
     }
     parts
+}
+
+/// Cuts lines `[s, e)` before every non-blank line `k > s` with `pred(k)` that
+/// is not inside a code fence and does not directly follow a heading. The packer in `split_range` merges the pieces back up
+/// to `max_chars`.
+fn cut_before(lines: &[Line], s: usize, e: usize, pred: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = s;
+    for k in s + 1..e {
+        // A heading stays glued to the content that follows it.
+        let after_heading = lines[s..k].iter().rev().find(|l| !l.blank).is_some_and(|l| l.heading.is_some());
+        if !lines[k].in_fence && !lines[k].blank && !after_heading && pred(k) {
+            out.push((start, k));
+            start = k;
+        }
+    }
+    out.push((start, e));
+    out
 }
