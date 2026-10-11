@@ -14,7 +14,8 @@ Task-Präfixe (`query_prefix`/`document_prefix`, schema_v59) werden NUR in
 Retrieval in `retrieval.rs` gruppiert nach Embedding-Raum — **kein** globaler
 Cross-Model-Vektor, siehe gelockte Designentscheidungen im Index `HANDBUCH.md` §2.
 Hybrid (AP1): `retrieve_hybrid_with`/`retrieve_hybrid_batch` fusionieren Vektor- und
-FTS5/BM25-Ränge per RRF (`rrf_fuse`, k=60, reine Fn) — **pro Kontext/Raum, nur über
+FTS5/BM25-Ränge per RRF (`rrf_fuse_weighted`, Parameter und Füllwort-Filter der
+Stichwortsuche in `fusion.rs`, k=10 gemessen) — **pro Kontext/Raum, nur über
 Ränge**, damit die Cross-Space-Isolation erhalten bleibt. FTS-Seite in `db/fts.rs`.
 
 Rerank (AP3): `rerank.rs`. Reine `rank_merge(scores, top_k)` (immer kompiliert,

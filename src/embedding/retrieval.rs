@@ -13,7 +13,7 @@
 //!
 //! `retrieve_hybrid_*` additionally fuse the vector list with the FTS5/BM25 list
 //! per context via Reciprocal Rank Fusion (ranks only, never scores across
-//! spaces); `retrieve_with` stays the pure vector path. Every retrieve fn takes
+//! spaces; keyword query and list weight per `fusion.rs`); `retrieve_with` stays the pure vector path. Every retrieve fn takes
 //! `doc_ids` (file-level scope); in the hybrid path the same filter is applied to
 //! BOTH lists before fusion, otherwise out-of-scope chunks leak.
 
@@ -23,7 +23,8 @@ use super::QueryEmbedder;
 use crate::db::models::ScoredChunk;
 use crate::{Database, Result};
 
-/// Reciprocal Rank Fusion constant (dampening). Standard value.
+/// Textbook Reciprocal Rank Fusion constant, used by `rrf_fuse`. The hybrid
+/// path takes its k from `fusion::FusionParams` (measured: 10).
 pub(crate) const RRF_K: usize = 60;
 
 /// Retrieval fan-out N for each list before fusion: `max(50, 5·top_k)`.
@@ -41,11 +42,18 @@ pub(crate) fn hybrid_fanout(top_k: usize) -> usize {
 /// across lists, which is what preserves the embedding-space isolation
 /// invariant when the caller only ever fuses lists from the *same* space.
 pub(crate) fn rrf_fuse(lists: &[Vec<i64>], k: usize, top_k: usize) -> Vec<ScoredChunk> {
+    let weighted: Vec<(&[i64], f32)> = lists.iter().map(|l| (l.as_slice(), 1.0)).collect();
+    rrf_fuse_weighted(&weighted, k, top_k)
+}
+
+/// [`rrf_fuse`] with a weight per list: a chunk's score is
+/// `Σ w_list / (k + rank)`. Weight 1.0 everywhere is plain RRF.
+pub(crate) fn rrf_fuse_weighted(lists: &[(&[i64], f32)], k: usize, top_k: usize) -> Vec<ScoredChunk> {
     let mut acc: HashMap<i64, f32> = HashMap::new();
-    for list in lists {
+    for (list, weight) in lists {
         for (i, &chunk_id) in list.iter().enumerate() {
             let rank = i + 1; // 1-based
-            *acc.entry(chunk_id).or_insert(0.0) += 1.0 / (k + rank) as f32;
+            *acc.entry(chunk_id).or_insert(0.0) += weight / (k + rank) as f32;
         }
     }
     let mut fused: Vec<ScoredChunk> = acc
@@ -171,6 +179,8 @@ impl Database {
         doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
         let n = hybrid_fanout(top_k);
+        let fusion = super::fusion::FusionParams::current();
+        let keyword_query = super::fusion::keyword_query(raw_query, fusion.drop_stopwords);
         // Accumulate RRF scores globally across contexts/spaces.
         let mut acc: HashMap<i64, f32> = HashMap::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
@@ -187,13 +197,14 @@ impl Database {
                 let vec_ranked: Vec<i64> = vec_hits.iter().map(|h| h.chunk_id).collect();
                 // FTS list (best-first) for the same context, same file scope.
                 let fts_ranked: Vec<i64> = self
-                    .keyword_search_context(cid, raw_query, n, doc_ids)?
+                    .keyword_search_context(cid, &keyword_query, n, doc_ids)?
                     .into_iter()
                     .map(|(id, _rank)| id)
                     .collect();
                 // Fuse the two rank lists for this context, then fold the
                 // per-context RRF scores into the global accumulator.
-                for sc in rrf_fuse(&[vec_ranked, fts_ranked], RRF_K, n) {
+                let lists = [(vec_ranked.as_slice(), 1.0), (fts_ranked.as_slice(), fusion.fts_weight)];
+                for sc in rrf_fuse_weighted(&lists, fusion.k, n) {
                     *acc.entry(sc.chunk_id).or_insert(0.0) += sc.score;
                 }
             }

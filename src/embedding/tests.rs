@@ -472,3 +472,51 @@ fn score_chunks_by_ids_missing_vector_scores_zero() {
     let scores = db.score_chunks_by_ids(&[chunk.id], &qbm).unwrap();
     assert_eq!(scores[&chunk.id], 0.0);
 }
+
+// --- fusion.rs: keyword cleanup + weighted RRF ------------------------------
+
+use super::fusion::{keyword_query, FusionParams};
+use super::retrieval::rrf_fuse_weighted;
+
+#[test]
+fn keyword_query_drops_function_words_but_keeps_identifiers() {
+    assert_eq!(
+        keyword_query("Within what period must the client pay the provider's invoices?", true),
+        "period client pay provider's invoices?"
+    );
+    assert_eq!(
+        keyword_query("Welche Pflichten gelten nach § 25b KWG und Art. 28 DORA?", true),
+        "Pflichten gelten § 25b KWG Art. 28 DORA?"
+    );
+    // A number/identifier is never a function word, even if short.
+    assert_eq!(keyword_query("in 2 Nr. 6", true), "2 Nr. 6");
+    // Only function words: keep the query as typed.
+    assert_eq!(keyword_query("Was ist das?", true), "Was ist das?");
+    // Switched off: unchanged.
+    assert_eq!(keyword_query("Was regelt die CRR?", false), "Was regelt die CRR?");
+}
+
+#[test]
+fn fusion_params_parse_and_defaults() {
+    let d = FusionParams::default();
+    assert!(d.drop_stopwords);
+    assert_eq!((d.k, d.fts_weight), (10, 1.0));
+    assert_eq!(FusionParams::parse("stop=0"), FusionParams { drop_stopwords: false, ..d });
+    assert_eq!(FusionParams::parse("stop=1,w=0.5,k=10"), FusionParams { drop_stopwords: true, fts_weight: 0.5, k: 10 });
+    assert_eq!(FusionParams::parse("w=9"), FusionParams { fts_weight: 2.0, ..d });
+    assert_eq!(FusionParams::parse("bogus,w=x"), d);
+}
+
+#[test]
+fn weighted_rrf_lets_a_strong_vector_hit_beat_double_presence() {
+    // Chunk 1: vector rank 1 only. Chunk 2: rank 5 in both lists.
+    let vec_list: Vec<i64> = vec![1, 9, 8, 7, 2];
+    let fts_list: Vec<i64> = vec![6, 5, 4, 3, 2];
+    let top = |w: f32, k: usize| rrf_fuse_weighted(&[(&vec_list, 1.0), (&fts_list, w)], k, 10)[0].chunk_id;
+    assert_eq!(top(1.0, RRF_K), 2, "plain RRF: double presence wins");
+    // With k = 60 even a quarter weight is not enough (1.25/65 > 1/61) ...
+    assert_eq!(top(0.25, RRF_K), 2);
+    // ... a small k makes the position count.
+    assert_eq!(top(0.25, 10), 1);
+    assert_eq!(top(1.0, 10), 2);
+}
