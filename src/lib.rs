@@ -4,6 +4,8 @@ pub mod chunking;
 pub mod db;
 pub mod embedding;
 pub mod inference;
+#[cfg(feature = "gguf")]
+pub mod llama_backend;
 pub mod refs;
 
 pub use db::{models, CoreError, Database, Result};

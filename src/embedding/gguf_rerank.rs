@@ -58,7 +58,6 @@ pub use imp::GgufReranker;
 #[cfg(feature = "gguf")]
 mod imp {
     use std::num::NonZeroU32;
-    use std::sync::Mutex;
 
     use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
     use llama_cpp_2::llama_backend::LlamaBackend;
@@ -74,28 +73,12 @@ mod imp {
     /// pair to fit; the caller already caps the doc snippet upstream (Phase 1).
     const MAX_SEQ_LEN: usize = 1024;
 
-    /// Shared llama.cpp backend init (mirrors `gguf_embed.rs`/`inference/gguf.rs`).
-    /// Process-global singleton; the LLM engine, GGUF embedder and this reranker
-    /// may all hold it concurrently.
+    /// Process-global llama.cpp backend, shared with the LLM engine and the
+    /// GGUF embedder via `crate::llama_backend` (a module-local singleton here
+    /// caused `BackendAlreadyInitialized` when another consumer initialized
+    /// first).
     fn backend() -> Result<&'static LlamaBackend> {
-        use std::sync::OnceLock;
-        static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
-        static INIT: Mutex<()> = Mutex::new(());
-        if let Some(b) = BACKEND.get() {
-            return Ok(b);
-        }
-        let _lock = INIT
-            .lock()
-            .map_err(|_| CoreError::Embedding("backend init lock poisoned".into()))?;
-        if let Some(b) = BACKEND.get() {
-            return Ok(b);
-        }
-        let b = LlamaBackend::init()
-            .map_err(|e| CoreError::Embedding(format!("llama backend init: {e}")))?;
-        let _ = BACKEND.set(b);
-        BACKEND
-            .get()
-            .ok_or_else(|| CoreError::Embedding("failed to set llama backend".into()))
+        crate::llama_backend::backend().map_err(CoreError::Embedding)
     }
 
     /// Loaded GGUF reranker. Holds the model; a fresh context is created per

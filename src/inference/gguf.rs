@@ -1,25 +1,12 @@
-use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
 use std::num::NonZeroU32;
-use std::sync::{OnceLock, Mutex};
 
-static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
-static BACKEND_INIT_MUTEX: Mutex<()> = Mutex::new(());
-
-fn get_backend() -> Result<&'static LlamaBackend, String> {
-    if let Some(b) = BACKEND.get() {
-        return Ok(b);
-    }
-    let _lock = BACKEND_INIT_MUTEX.lock().unwrap();
-    if let Some(b) = BACKEND.get() {
-        return Ok(b);
-    }
-    let backend = LlamaBackend::init().map_err(|e| format!("llama backend init: {e}"))?;
-    let _ = BACKEND.set(backend);
-    BACKEND.get().ok_or_else(|| "Failed to set LlamaBackend".to_string())
-}
+// Process-global backend shared with the GGUF embedder/reranker — a
+// module-local singleton here caused `BackendAlreadyInitialized` for
+// whichever GGUF consumer initialized second (see `crate::llama_backend`).
+use crate::llama_backend::backend as get_backend;
 
 pub struct GgufEngine {
     model: LlamaModel,
