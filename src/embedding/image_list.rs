@@ -6,8 +6,8 @@
 //! Invariants (same as the vector list): only vectors with the context's
 //! `embedding_model_id` and the query's length are compared (never across
 //! embedding spaces); the `doc_ids` scope applies; omitted chunks and chunks
-//! without a vector of this model are never chosen. Mapping (BILDSUCHE_PLAN
-//! AP0.4, measured best): of the chunks of the hit's page
+//! without a vector of this model are never chosen. Mapping (measured best,
+//! `eval_runs/retrieval/images/ap0/README.md`): of the chunks of the hit's page
 //! (`page_select::chunks_for_page`), the one whose vector is most similar to
 //! the query. A chunk reached by several page images keeps its best rank;
 //! a page without a usable chunk drops out.

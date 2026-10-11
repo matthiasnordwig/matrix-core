@@ -116,7 +116,7 @@ pub fn graphics_pages_counted(pdf: &[u8]) -> Result<(usize, Vec<RenderedPage>)> 
 
 #[cfg(test)]
 mod tests {
-    /// The calibrated rule on the KfW report excerpt (BILDSUCHE_PLAN AP0.1).
+    /// The calibrated rule on the KfW report excerpt (`eval_runs/retrieval/images/ap0/README.md`).
     /// Needs the sample PDF next to the repos: `cargo test --features
     /// pdf-render --lib page_render -- --ignored`.
     #[test]

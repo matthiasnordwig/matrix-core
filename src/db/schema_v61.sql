@@ -1,4 +1,4 @@
--- Image search over graphics pages (BILDSUCHE_PLAN AP1).
+-- Image search over graphics pages (handbuch/core.md "Bildsuche in der Hybrid-Fusion").
 --
 -- `page_images`: the rendered page image (JPEG, ~100 dpi) of every PDF page the
 -- ingest classified as a graphics page (charts, org charts, diagrams). Stored
