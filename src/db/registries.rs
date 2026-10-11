@@ -1,4 +1,15 @@
-//! CRUD for the model registries: `embedding_models` and `llm_endpoints`.
+//! CRUD for the model registries: `embedding_models`, `reranker_models` and
+//! `llm_endpoints`.
+//!
+//! `reranker_models` is deliberately separate from `embedding_models` (rerank
+//! API semantics: query + documents -> scores). The active reranker is the
+//! single global setting `active_reranker_id` (see `settings.rs`): the reranker
+//! works on raw chunk text, not in an embedding space, so do NOT add a
+//! per-context binding. `reranker_models` has no incoming FKs.
+//!
+//! `llm_endpoints` capability/tuning columns (`supports_tools`, `tools_advanced`,
+//! `stream_fallback`, `reasoning_list_id` -> `reasoning_effort_lists`, ...) are
+//! described on `LlmEndpoint` in `models.rs`.
 
 use rusqlite::{params, OptionalExtension, Row};
 

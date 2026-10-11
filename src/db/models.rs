@@ -1,5 +1,11 @@
 //! Typed row models, mirrored 1:1 by the future `ipc.ts` so the frontend and
 //! core never drift. All structs derive `Serialize`/`Deserialize`.
+//!
+//! The single home of all domain types: the CRUD files define none. `New*`
+//! structs are the insert/update payloads. A column added to a table whose
+//! JSON bodies may predate it (web adapter, stored context bundles) gets
+//! `#[serde(default)]` on both the row and the `New*` struct so old payloads
+//! still deserialize.
 
 use serde::{Deserialize, Serialize};
 
@@ -198,6 +204,8 @@ pub struct LlmEndpoint {
     /// first search) — default false preserves today's ("basic") behaviour.
     #[serde(default)]
     pub tools_advanced: bool,
+    /// Adaptive streaming fallback under provider throttling (schema_v45);
+    /// on by default.
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
     pub cpu_threads: Option<i64>,

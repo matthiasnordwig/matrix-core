@@ -3,6 +3,12 @@
 //! the run *logic* (embedding, anchor resolution, metric computation) lives in
 //! `matrix_services::commands::eval`, not here. Models live in `models.rs`
 //! (project convention: no model structs in CRUD files).
+//!
+//! `anchors_any` is stored as a JSON-array TEXT (`EvalGoldenEntry::anchors()`
+//! parses it); `eval_runs.context_ids`/`config`/`metrics` are JSON too. Deleting
+//! a golden set cascades to its entries and runs, deleting a run to its results.
+//! `eval_run_results.trace_json` (schema_v58) holds the tool-loop trace envelope
+//! of agentic runs and is NULL for classic ones.
 
 use rusqlite::{params, OptionalExtension, Row};
 

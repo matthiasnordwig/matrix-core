@@ -1,6 +1,13 @@
 //! Grid surface: `grid_sheets`, `grid_rows`, and the async matrix-chat
 //! results (`grid_chat_results`). Chat is not history-aware, so a cell upsert
 //! overwrites the row's prior result for the same run.
+//!
+//! `grid_run_meta` stores, once per run, the system prompt and the grid
+//! profile's `json_schema` (instead of duplicating them in every row's
+//! `prompt_snapshot`). `json_schema` semantics: a real schema string = JSON
+//! profile, NULL = plain-text profile (never explodes), `''` = legacy run
+//! (pre-schema_v41, mode unknown, so history loading falls back to lenient
+//! shape-based explosion).
 
 use rusqlite::{params, OptionalExtension, Row};
 

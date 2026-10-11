@@ -1,3 +1,17 @@
+//! Structural chunking for PDFs (LLM-free): `chunk_pdf_structurally` reads the
+//! characters with `pdf_oxide` (incl. x/y position and font size) and cuts by
+//! the administrable regex roles of a `StructuralProfile` (headings,
+//! definitions, ignore patterns). Heuristics that get it close to LLM quality:
+//! - line-gap detection: enumerations are recognised by conspicuous vertical
+//!   gaps (`y_gap > font_size * 1.5`);
+//! - forward merge: a short heading (buffer `< min_chunk_chars`) flows into the
+//!   following paragraph instead of standing alone;
+//! - backward merge: too-short leftovers (`< min_chunk_chars`, e.g. a cut after
+//!   a definition at a sentence end) are glued to the previous chunk;
+//! - `max_chunk_chars` is only an emergency brake for very long unstructured
+//!   blocks.
+//! Offsets are byte offsets into the extracted text (see `chunking/CLAUDE.md`).
+
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
 use std::collections::BTreeMap;

@@ -8,6 +8,13 @@
 //! (XLMRobertaForSequenceClassification, `num_labels=1`). A tokenized
 //! (query, document) **pair** goes in, a single classification logit comes out
 //! = the relevance score (higher = more relevant).
+//!
+//! Execution provider: same per-model choice as `onnx.rs` (default CPU, also on
+//! iOS; non-apple always CPU). Pitfall: CoreML's default compute units
+//! (`Coreml` → `All`) reliably crash during inference with this XLM-R model
+//! (large vocab, `word_embeddings` exceeds CoreML's 16384-dim limit); `Ane`
+//! avoids the crash but is slower than CPU, so CPU stays the default.
+//! Smoke run: `core/examples/rerank_smoke.rs`.
 
 /// Pure rank-merge (RETRIEVAL_QUALITY_PLAN.md AP3): given the reranker scores
 /// for `n` candidates, return the indices of the `top_k` highest-scoring

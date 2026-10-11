@@ -1,8 +1,15 @@
 //! `Database` methods for the ontology/GraphRAG schema (profiles, nodes,
 //! edges, communities, retrieval, metrics, dedup cache, quarantine +
-//! resumability). Split into one file per concern — see HANDBUCH.md for the
-//! full map. Each submodule adds methods to `Database` via its own
-//! `impl Database { ... }` block; nothing needs to be re-exported here.
+//! resumability, lenses, run log). One file per concern; each submodule adds
+//! methods to `Database` via its own `impl Database { ... }` block, so nothing
+//! needs to be re-exported here.
+//!
+//! Lens system: `entity_type`/`relation_type` and their `raw_*` twins are
+//! identical from insert on and stay so; only manual curation rewrites both.
+//! A lens (`lenses.rs`) is a display-time overlay in separate tables, and every
+//! read that shows types to a user or LLM joins `contexts.active_lens_id`
+//! (`COALESCE(lens value, raw)`). The un-lensed reads remain for the pipeline
+//! and export.
 mod profiles;
 mod nodes;
 mod edges;

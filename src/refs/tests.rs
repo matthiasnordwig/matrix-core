@@ -1,6 +1,7 @@
 //! Table-driven tests for the norm-reference parser. ≥ 20 positive cases with
 //! real MaRisk/DORA/KWG/GwG phrasings and ≥ 8 negative cases (anaphoric refs,
-//! page numbers, dates) that MUST NOT match — precision is the priority.
+//! page numbers, dates) that MUST NOT match — precision is the priority. Also
+//! covers the long-form, insert-grammar and custom-lexicon groups.
 
 use super::{parse_refs, RefKind};
 

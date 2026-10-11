@@ -3,7 +3,7 @@
 //! your profile has no slot for") — see BACKLOG.md "Schema-Typ-Vorschläge aus
 //! Rohtyp-Häufigkeiten". Pure SQL, no LLM; canonicalization of the resulting
 //! raw-type clusters against a broad reference catalog lives in
-//! `app/src-tauri/src/ontology/extract/schema_suggest.rs`.
+//! `app/crates/services/src/ontology/extract/schema_suggest.rs`.
 use crate::db::{Database, Result};
 
 impl Database {

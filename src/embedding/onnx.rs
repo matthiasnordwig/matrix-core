@@ -5,6 +5,14 @@
 //! others (Jina v2) do not — we pass it only if the model declares that input.
 //! Pipeline: tokenize → run → attention-masked mean-pool → optional Matryoshka
 //! truncation → L2-normalize.
+//!
+//! Execution provider (apple only): `EmbeddingModel::execution_provider` is a
+//! real per-model choice, default CPU, also on iOS (no runtime force-override;
+//! the iOS seed merely sets `Ane` as the creation default). `Ane` →
+//! `CPUAndNeuralEngine`, `Coreml` → `All`; they are distinct EPs, not aliases.
+//! Non-apple targets always use the CPU EP (the `coreml` ort feature exists
+//! only on apple, see `core/Cargo.toml`). CoreML is slower than CPU for the
+//! jina-de embedder (graph partitioning), hence the CPU default.
 
 use std::sync::Mutex;
 

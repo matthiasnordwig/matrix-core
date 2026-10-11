@@ -24,6 +24,11 @@
 //! slice over it is an out-of-bounds read (UB / heap overread). We therefore call
 //! `llama_cpp_sys_2::llama_get_embeddings_seq` directly and read **exactly one**
 //! float (see `read_rank_score` below).
+//!
+//! Pitfall: llama.cpp can fail a Metal residency-set assertion at teardown
+//! (`ggml_metal_device_free`) under `cargo run`/examples, *after* all scores were
+//! computed. It is an artifact of the non-bundled run (Metal is only fully stable
+//! in the bundled `.app`) and does not affect the scores.
 
 /// Build the XLM-R reranker pair token id sequence for
 /// `<s> query </s> </s> document </s>` from separately-tokenized query and

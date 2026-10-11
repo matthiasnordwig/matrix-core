@@ -90,6 +90,8 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Internal progress marker, written by the chunking/ingestion/embedding
+    /// pipelines; deliberately not exposed as an IPC command or HTTP route.
     pub fn set_context_status(&self, id: i64, status: ContextStatus) -> Result<()> {
         self.conn.execute(
             "UPDATE contexts SET status = ?2, updated_at = unixepoch() WHERE id = ?1",

@@ -1,9 +1,9 @@
 //! CRUD for `ontology_edges` (+ their `ontology_edge_chunks` evidence rows).
-//! Split out of the former monolithic `db/ontology.rs` — see HANDBUCH.md.
-//! Manual-curation edge methods (invert/update/insert-primitive/add-chunk/
-//! remove-chunk) were originally grouped under an "Admin / Manual Curation"
-//! comment at the bottom of that file; they're grouped here by entity
-//! instead.
+//! Includes the manual-curation methods (invert/update/insert-primitive/
+//! add-chunk/remove-chunk). `relation_type`/`raw_relation_type` behave like the
+//! node twins (see `nodes.rs`); `list_ontology_edges_for_active_lens` applies the
+//! active lens as a display overlay (`deleted` excluded, `reversed` swaps
+//! source/target in the result only, stored edge `id` unchanged).
 use crate::db::{Database, Result};
 use crate::db::models::{OntologyEdge, NewOntologyEdge};
 

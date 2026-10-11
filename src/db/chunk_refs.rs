@@ -5,6 +5,19 @@
 //! is shared by the chunking-run finalization hook and the idempotent
 //! `rebuild_chunk_refs(context_id)`. Resolution + expansion follows a hit's
 //! outgoing refs to a target chunk, preferring the *definition site*.
+//!
+//! Table `chunk_refs(chunk_id, context_id, ref_key)` with index
+//! `(context_id, ref_key)` and FK cascade on chunks and contexts. Definition-site
+//! matching is word-boundary exact (`§ 25` does not match `§ 25a`) and
+//! Kürzel-sensitive (a `§ 25a VAG` signature does not satisfy `KWG:§25a`, but a
+//! chunk without any explicit Kürzel stays valid). Among several definition
+//! sites the *earliest* wins, so a multi-part article resolves to its opening
+//! chunk, not a citation-heavy later paragraph. Without a definition site the
+//! most ref-dense, then earliest, mentioning chunk is used. EU-bound article
+//! keys additionally look inside the regulation's own document (see
+//! `eu_article_def_candidates`). Consumed by
+//! `services::commands::retrieval::expand_refs_for_hits` and the chunk viewer's
+//! "References" column.
 
 use std::collections::{HashMap, HashSet};
 

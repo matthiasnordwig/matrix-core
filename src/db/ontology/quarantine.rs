@@ -1,8 +1,7 @@
 //! Quarantine (genuinely-failed extraction chunks awaiting manual repair, see
 //! `app/src/tabs/contexts/QuarantineViewer.tsx`) and per-chunk extraction
 //! resumability state (completed LLM batches + partial graph, so a chunk
-//! doesn't restart from scratch after an interrupted extraction run). Split
-//! out of the former monolithic `db/ontology.rs` — see HANDBUCH.md.
+//! doesn't restart from scratch after an interrupted extraction run).
 use crate::db::{Database, Result};
 
 impl Database {

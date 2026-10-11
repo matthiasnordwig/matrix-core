@@ -7,7 +7,7 @@
 //! NOTE on the Uniper2 community-coloring bugfix: this file intentionally
 //! does NOT contain a bulk "assign raw label-propagation IDs to all nodes"
 //! method anymore (there used to be an `assign_communities` here). See
-//! `app/src-tauri/src/ontology/community/mod.rs` for the full explanation — in
+//! `app/crates/services/src/ontology/community/mod.rs` for the full explanation — in
 //! short, that method wrote non-`ontology_communities` IDs into
 //! `ontology_nodes.community_id`, which broke the frontend's community color
 //! lookup for nodes outside the top-100-by-size cutoff.

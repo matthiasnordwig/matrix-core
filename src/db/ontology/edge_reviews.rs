@@ -1,8 +1,12 @@
 //! CRUD for `ontology_edge_reviews` — the non-blocking review list for edges
 //! flagged by the stage-2 negation/polarity verification (see
-//! `app/src-tauri/src/ontology/extract/verify.rs`) as "unclear" or whose
+//! `app/crates/services/src/ontology/extract/verify.rs`) as "unclear" or whose
 //! verification call failed outright. Unlike `ontology_quarantine` (s.
 //! `quarantine.rs`), rows here never block the pipeline.
+//!
+//! `attempts` counts failed verification calls only: `upsert_verification_failure`
+//! dedups per edge (one row, `attempts` bumped) so the re-verify logic can
+//! auto-eject after `MAX_VERIFY_ATTEMPTS` (`extract/verify.rs`).
 use crate::db::{Database, Result};
 use crate::db::models::OntologyEdgeReview;
 

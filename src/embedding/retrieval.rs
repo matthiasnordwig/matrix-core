@@ -10,6 +10,12 @@
 //! [`QueryEmbedder`] (sync). [`Database::retrieve_with`] takes them
 //! precomputed, which lets an async caller (the bridge) embed over the network
 //! first and then run the sync scan.
+//!
+//! `retrieve_hybrid_*` additionally fuse the vector list with the FTS5/BM25 list
+//! per context via Reciprocal Rank Fusion (ranks only, never scores across
+//! spaces); `retrieve_with` stays the pure vector path. Every retrieve fn takes
+//! `doc_ids` (file-level scope); in the hybrid path the same filter is applied to
+//! BOTH lists before fusion, otherwise out-of-scope chunks leak.
 
 use std::collections::HashMap;
 

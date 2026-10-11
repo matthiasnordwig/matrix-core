@@ -5,6 +5,16 @@
 //! are stored as raw f32 BLOBs and scanned with pure-Rust cosine — no
 //! `sqlite-vec` / HNSW C-extensions, so the crate links statically for
 //! `aarch64-apple-ios`.
+//!
+//! Schema evolution: the `schema_vN.sql` files are listed in `MIGRATIONS` and
+//! run in order, one transaction each, gated by `PRAGMA user_version`. A new
+//! migration is a new file with the next number; old files are never edited.
+//! `migrate()` calls a Rust hook for targets plain SQL cannot handle: v9
+//! (structural profiles -> `structural_patterns` rows), v50 (promote the legacy
+//! `reranker_model_dir` setting) and v51/v52 (table rebuilds that widen a
+//! `kind` CHECK, which SQLite cannot ALTER; `schema_v51.sql`/`schema_v52.sql`
+//! are deliberate no-ops). Repository methods live in the sibling files as
+//! `impl Database` blocks; all row types live in `models.rs`.
 
 use std::path::Path;
 

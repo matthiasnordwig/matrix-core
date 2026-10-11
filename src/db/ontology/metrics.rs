@@ -1,7 +1,7 @@
 //! Rolling per-phase performance metrics for the ontology pipeline (extract/
 //! dedup/embed/community ms-per-chunk, keeps only the last 3 runs per
-//! phase+model). Split out of the former monolithic `db/ontology.rs` — see
-//! HANDBUCH.md.
+//! phase+model). Rolling on purpose: a short window of one ms-per-chunk float,
+//! aggressively pruned; for a durable log see `run_log.rs`.
 use crate::db::{Database, Result};
 
 impl Database {

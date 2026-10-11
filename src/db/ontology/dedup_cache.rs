@@ -1,7 +1,8 @@
 //! Cache of prior LLM dedup decisions (`ontology_dedup_cache`), keyed by
 //! unordered node-ID pair, so re-running dedup on a context doesn't re-ask
-//! the LLM about pairs it has already judged. Split out of the former
-//! monolithic `db/ontology.rs` — see HANDBUCH.md.
+//! the LLM about pairs it has already judged. Reads return both directions of
+//! each pair. The cache records decisions only, not merge history (that is
+//! `ontology_merge_log`, see `nodes.rs`).
 use crate::db::{Database, Result};
 
 impl Database {

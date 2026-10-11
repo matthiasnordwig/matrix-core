@@ -1,6 +1,8 @@
 //! Whole-context ontology teardown (used when a context's documents are
-//! re-processed or deleted). Split out of the former monolithic
-//! `db/ontology.rs` — see HANDBUCH.md.
+//! re-processed or deleted). Deletes edges, nodes and the extracted-chunk
+//! markers; dependent rows (edge evidence, lens types/verdicts, edge reviews,
+//! community members) go via FK cascade. Communities (`communities.rs`),
+//! quarantine/chunk states and lenses are separate and not touched here.
 use crate::db::{Database, Result};
 
 impl Database {

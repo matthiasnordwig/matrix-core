@@ -6,6 +6,13 @@
 //! stored value always matches `RefLexicon`'s lowercase matching key (the
 //! `COLLATE NOCASE UNIQUE` constraint on the column additionally guards
 //! against a race inserting a differently-cased duplicate).
+//!
+//! Feeds `Database::ref_lexicon()` (in `chunk_refs.rs`): enabled rows become the
+//! `RefLexicon`; an EMPTY table falls back to `RefLexicon::builtin()`, so
+//! unseeded/legacy DBs parse exactly as before. Pitfall: a seeded, non-empty
+//! registry REPLACES the builtin lexicon entirely — the seed
+//! (`refs::builtin_seed_entries()`, applied by `services::seed`) must cover
+//! every builtin Kürzel.
 
 use rusqlite::{params, OptionalExtension, Row};
 

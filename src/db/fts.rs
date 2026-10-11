@@ -11,6 +11,12 @@
 //! terms). This treats every term as a literal phrase — robust, not a query
 //! language. (Implicit AND was tried first and measured to regress hybrid eval;
 //! see the `escape_fts_query` body / RETRIEVAL_QUALITY_PLAN AP1.)
+//!
+//! Index: external-content FTS5 table `chunks_fts` over `chunks(text)`
+//! (tokenizer `unicode61 remove_diacritics 2`), kept in sync by
+//! INSERT/UPDATE/DELETE triggers and backfilled in `schema_v48.sql`. The
+//! triggers index *every* chunk including omitted ones, so each query here must
+//! filter `is_omitted = 0` itself.
 
 use crate::{Database, Result};
 

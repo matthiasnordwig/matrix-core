@@ -80,6 +80,9 @@ fn row_to_stored_vector(row: &Row<'_>) -> rusqlite::Result<StoredVector> {
 
 impl Database {
     /// Store a chunk's embedding. Fails if `vector.len()` disagrees with `dim`.
+    /// `INSERT OR REPLACE` (one row per chunk): re-embedding overwrites in place,
+    /// which is what makes both the force-re-embed path and the model-switch
+    /// self-correction idempotent.
     pub fn insert_embedding(&self, e: &NewEmbedding) -> Result<()> {
         if e.vector.len() as i64 != e.dim {
             return Err(CoreError::DimMismatch {

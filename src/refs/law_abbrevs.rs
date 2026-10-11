@@ -7,6 +7,10 @@
 //! the MaRisk/DORA/banking-supervision corpus; adding an over-broad word here
 //! (e.g. a common noun) would let anaphoric cross-references leak through, so
 //! new entries should be genuine act abbreviations only.
+//!
+//! `KNOWN` and `BUILTIN_LONG_FORMS` are `pub(super)`: reachable from outside only
+//! via `RefLexicon` / `builtin_seed_entries`, with `is_known_law_abbrev_public`
+//! as the builtin-only wrapper.
 
 /// Recognized law/act abbreviations, lowercased. `DORA` is included so
 /// `Art. 28 DORA` resolves; the EU-regulation *number* form is handled

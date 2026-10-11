@@ -24,6 +24,32 @@
 //! "§ 25a Abs. 1 KWG" and "§ 25a Abs. 3 Satz 2 KWG" should resolve to the same
 //! norm. The full span/sub-parts are retained on the `NormRef` for callers that
 //! want them.
+//!
+//! Ranges: `§§ 13 bis 13c KWG` expands to `§13/§13a/§13b/§13c` (same stem →
+//! letter iteration), `Artikel 90 bis 92 CRR` to consecutive numbers (`bis`, `-`,
+//! `–` all work as range marks). Above `MAX_RANGE_EXPANSION` only the start and
+//! end ref are emitted, so "Artikel 1 bis 521" cannot flood retrieval with a
+//! regulation-wide ref cloud.
+//!
+//! Binding without a Kürzel (deliberately narrow windows, anchored right after
+//! the match, no binding across sentences or free text):
+//!   - article + EU long form: "Artikel 387 bis 410 der Verordnung (EU) Nr.
+//!     575/2013" → `EU:2013/575:Art.387…`; `ARTICLE_RE` swallows a closed grammar
+//!     of inserts ("Absatz 1 Buchstabe c", "Satz 1 bis 3" …) before the long
+//!     form — without it the greedy law group would eat "Buchstabe" as a
+//!     pseudo-Kürzel and the binding would be lost.
+//!   - paragraph + German long form: "§§ 13 bis 13c, 15 und 17 bis 22 des
+//!     Kreditwesengesetzes" → KWG keys (genitive only as `es`/`s` suffix);
+//!     "§ 3 des Vertrages" never matches.
+//! An article with neither a known Kürzel nor a directly following regulation
+//! long form never matches.
+//!
+//! The Kürzel/long-form vocabulary is a value, not a constant ([`RefLexicon`]):
+//! `parse_refs` uses [`RefLexicon::builtin`]; DB-backed callers load their own via
+//! `Database::ref_lexicon()` and call [`parse_refs_with`].
+//! [`builtin_seed_entries`] is the single source for seeding that registry.
+//!
+//! Consumer: `db/chunk_refs.rs` (derivation + persistence of the refs per chunk).
 
 use std::collections::HashSet;
 use std::sync::LazyLock;

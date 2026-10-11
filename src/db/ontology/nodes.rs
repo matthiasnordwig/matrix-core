@@ -1,8 +1,12 @@
-//! CRUD + embedding/merge logic for `ontology_nodes`. Split out of the former
-//! monolithic `db/ontology.rs` — see HANDBUCH.md. Manual-curation node
-//! methods (insert/update/delete/context lookup/semantic search) were
-//! originally grouped under an "Admin / Manual Curation" comment at the
-//! bottom of that file; they're grouped here by entity instead.
+//! CRUD + embedding/merge logic for `ontology_nodes`, including the manual
+//! curation methods (insert/update/delete/context lookup/semantic search).
+//!
+//! `entity_type` and `raw_entity_type` are identical from insert on; only
+//! manual curation (`update_ontology_node`) rewrites both. The `*_for_active_lens`
+//! list variant shows the active lens's type instead (for the Ontology tab);
+//! the plain list stays for pipeline/export. `get_ontology_node(s_with_types)`
+//! return the real `entity_type`, unlike `get_ontology_nodes_with_descriptions`
+//! (label + description, for display/prompts only).
 use crate::db::{Database, Result};
 use crate::db::models::{OntologyNode, NewOntologyNode, MergeLogEntry};
 use rusqlite::OptionalExtension;
@@ -328,7 +332,10 @@ impl Database {
     /// see ISSUES.md "ontology_dedup_cache — keine Merge-Historie ..." — the
     /// log write and the DELETE below happen in the same transaction, so the
     /// history survives the hard-delete atomically), then hard-deletes the
-    /// loser node. Returns the pairs actually executed: a pair whose WINNER no
+    /// loser node. `ontology_merge_log` has deliberately NO FK on the node ids:
+    /// the loser row is hard-deleted, and an FK would either block that DELETE
+    /// or cascade the log row away — the table exists to survive exactly that.
+    /// Returns the pairs actually executed: a pair whose WINNER no
     /// longer exists is skipped instead of failing the whole transaction —
     /// with `PRAGMA foreign_keys = ON`, the edge-rewire UPDATE would otherwise
     /// hit a FOREIGN KEY error and roll back every merge in the batch (seen in
@@ -336,7 +343,9 @@ impl Database {
     /// as winner; chain resolution happens in the caller, this is the
     /// last-line safety net). A pair whose LOSER no longer exists (already
     /// merged away by an earlier pair in the same batch) is skipped the same
-    /// way — nothing left to log or delete.
+    /// way — nothing left to log or delete. After rewiring, self-loops on the
+    /// winner are deleted: an edge keep<->drop becomes keep->keep, a meaningless
+    /// "A -> A" artefact the duplicate-edge collapse does not catch.
     pub fn merge_ontology_nodes(&self, merges: &[(i64, i64)]) -> Result<Vec<(i64, i64)>> {
         let tx = self.conn.unchecked_transaction()?;
         let mut executed = Vec::with_capacity(merges.len());

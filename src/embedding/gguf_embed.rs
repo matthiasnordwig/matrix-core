@@ -13,6 +13,15 @@
 //! jina-de) so `embeddings_seq_ith` already returns the pooled vector →
 //! optional Matryoshka truncation → L2-normalize (ourselves, for parity with
 //! the ONNX path and store/query invariants).
+//!
+//! `load` takes only `model_path` (no `tokenizer_path`: llama.cpp reads the
+//! tokenizer from the GGUF). Each query gets its own llama.cpp context. GGUF is
+//! an *additive* option: ONNX-jina stays the default; retrieval quality on dense
+//! legal-norm chunks matched ONNX in the eval, GGUF's advantage is throughput.
+//! The llama.cpp backend is the process-global singleton in
+//! `crate::llama_backend`, shared with the LLM engine and `gguf_rerank.rs`.
+//! Session cache / availability (`gguf` feature or apple target): bridge
+//! `services::localgguf`.
 
 /// Attention-masked **mean pool** of a `(seq_len, hidden)` row-major token
 /// matrix. Pure, model-free, and unit-tested: llama.cpp normally does this

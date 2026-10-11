@@ -1,6 +1,5 @@
 //! CRUD for `ontology_profiles` (the entity/relation-type schema used to
-//! drive GraphRAG extraction). Split out of the former monolithic
-//! `db/ontology.rs` — see HANDBUCH.md.
+//! drive GraphRAG extraction).
 use crate::db::{Database, Result};
 use crate::db::models::{OntologyProfile, NewOntologyProfile};
 use rusqlite::OptionalExtension;

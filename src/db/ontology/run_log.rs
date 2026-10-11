@@ -1,8 +1,9 @@
 //! Persistent ontology run log (`ontology_run_log`, schema_v43): per-phase
 //! success/failure counters that survive app restart, unlike the in-memory
 //! applog ring buffer (CAPACITY=500). Only the community-summarization phase
-//! writes rows for now — see `app/src-tauri/src/ontology/community/mod.rs`
-//! and BACKLOG.md.
+//! writes rows for now — see `app/crates/services/src/ontology/community/mod.rs`.
+//! A separate table from `ontology_phase_metrics` because the lifetimes are
+//! opposite (durable log vs. rolling last-3 window).
 use crate::db::{Database, Result};
 use crate::db::models::OntologyRunLogEntry;
 

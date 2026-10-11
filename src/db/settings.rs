@@ -1,5 +1,6 @@
 //! Key/value application settings. Values are stored JSON-encoded so any
-//! serde type round-trips through the same two methods.
+//! serde type round-trips through the same two methods. The module is `pub` so
+//! the `KEY_*` constants are reachable from the adapters.
 
 use rusqlite::{params, OptionalExtension};
 use serde::de::DeserializeOwned;

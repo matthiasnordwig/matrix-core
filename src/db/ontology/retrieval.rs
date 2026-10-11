@@ -1,7 +1,14 @@
 //! GraphRAG retrieval: brute-force cosine search over node/community
 //! embeddings followed by a recursive-CTE hop expansion, formatted into
-//! plain-text `GraphContext` snippets for the chat prompt. Split out of the
-//! former monolithic `db/ontology.rs` — see HANDBUCH.md.
+//! plain-text `GraphContext` snippets for the chat prompt.
+//!
+//! Lens: both functions join each context's own `contexts.active_lens_id`
+//! against `ontology_lens_node_types`/`ontology_lens_edge_verdicts` (no extra
+//! parameter needed — `context_id` is on every row). Type labels are
+//! `COALESCE(lens value, raw)`, `deleted` edges are excluded from traversal and
+//! display, `reversed` only swaps the displayed source/target (via `CASE`), not
+//! the stored edge. The community cosine scan is per-lens too: only communities
+//! of the active lens or with `lens_id IS NULL` (raw view/legacy) may match.
 //!
 //! `retrieve_graph_with` and `retrieve_graph_batch` implement the same
 //! algorithm; the batch variant caches the node/community embedding scan
