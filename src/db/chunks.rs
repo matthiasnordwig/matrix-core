@@ -243,6 +243,29 @@ impl Database {
         )?)
     }
 
+    /// Non-omitted chunks of a context (what `list_chunks(.., false).len()`
+    /// returns), counted in SQL without loading chunk texts.
+    pub fn count_active_chunks(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE context_id = ?1 AND is_omitted = 0",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Chunk count per document of a context (omitted chunks included, like
+    /// `count_chunks`); documents without chunks are absent from the map.
+    pub fn count_chunks_per_document(
+        &self,
+        context_id: i64,
+    ) -> Result<std::collections::HashMap<i64, i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT document_id, COUNT(*) FROM chunks WHERE context_id = ?1 GROUP BY document_id",
+        )?;
+        let rows = stmt.query_map([context_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?)
+    }
+
     pub fn delete_chunk(&self, id: i64) -> Result<bool> {
         Ok(self.conn.execute("DELETE FROM chunks WHERE id = ?1", [id])? > 0)
     }

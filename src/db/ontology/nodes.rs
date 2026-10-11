@@ -172,6 +172,19 @@ impl Database {
         Ok(set)
     }
 
+    /// Non-omitted chunks of a context that are not yet marked extracted —
+    /// the count behind `get_unextracted_chunks`, without loading chunk texts.
+    pub fn count_unextracted_chunks(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM chunks c
+             WHERE c.context_id = ?1 AND c.is_omitted = 0
+               AND NOT EXISTS (SELECT 1 FROM ontology_extracted_chunks e
+                               WHERE e.context_id = ?1 AND e.chunk_id = c.id)",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn insert_extracted_chunk(&self, context_id: i64, chunk_id: i64) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO ontology_extracted_chunks (context_id, chunk_id) VALUES (?1, ?2)",

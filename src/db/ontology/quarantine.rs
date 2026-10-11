@@ -30,6 +30,15 @@ impl Database {
         Ok(rows)
     }
 
+    /// Number of quarantined chunks of a context (no `graph_json` loaded).
+    pub fn count_quarantined_chunks(&self, context_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM ontology_quarantine WHERE context_id = ?1",
+            [context_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn delete_quarantined_chunk(&self, chunk_id: i64) -> Result<()> {
         self.conn.execute(
             "DELETE FROM ontology_quarantine WHERE chunk_id = ?1",

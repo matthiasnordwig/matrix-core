@@ -183,3 +183,20 @@ fn max_extra_zero_still_reports_continues_at() {
     assert!(solo_result.chunks.is_empty());
     assert_eq!(solo_result.continues_at, None);
 }
+
+#[test]
+fn chunk_counts_per_document_and_active() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    assert_eq!(db.count_active_chunks(ctx).unwrap(), 0);
+    assert!(db.count_chunks_per_document(ctx).unwrap().is_empty());
+    mk_section_chunk(&db, ctx, doc, 0, None, false);
+    mk_section_chunk(&db, ctx, doc, 1, None, false);
+    mk_section_chunk(&db, ctx, doc, 2, None, true);
+    assert_eq!(db.count_chunks(ctx).unwrap(), 3);
+    assert_eq!(db.count_active_chunks(ctx).unwrap(), 2, "omitted chunk not counted");
+    assert_eq!(db.count_active_chunks(ctx).unwrap() as usize, db.list_chunks(ctx, false).unwrap().len());
+    let per_doc = db.count_chunks_per_document(ctx).unwrap();
+    assert_eq!(per_doc.len(), 1);
+    assert_eq!(per_doc[&doc], 3, "per-document count includes omitted chunks");
+}

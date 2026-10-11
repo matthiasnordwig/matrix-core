@@ -44,6 +44,22 @@ fn quarantine_round_trip() {
 }
 
 #[test]
+fn unextracted_and_quarantine_counts_match_list_based_results() {
+    let db = db();
+    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx11b");
+    assert_eq!(db.count_unextracted_chunks(ctx).unwrap(), 1);
+    assert_eq!(db.count_quarantined_chunks(ctx).unwrap(), 0);
+    db.insert_extracted_chunk(ctx, chunk_id).unwrap();
+    assert_eq!(db.count_unextracted_chunks(ctx).unwrap(), 0);
+    db.insert_quarantined_chunk(ctx, chunk_id, "{}", "x").unwrap();
+    assert_eq!(db.count_quarantined_chunks(ctx).unwrap(), 1);
+    assert_eq!(
+        db.count_quarantined_chunks(ctx).unwrap() as usize,
+        db.get_quarantined_chunks(ctx).unwrap().len()
+    );
+}
+
+#[test]
 fn chunk_state_save_load_delete_round_trip() {
     let db = db();
     let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx12");

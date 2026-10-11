@@ -36,7 +36,7 @@ impl GgufEngine {
             model_params = model_params.with_n_gpu_layers(999);
         }
         if !std::path::Path::new(model_path).exists() {
-            return Err(format!("FILE NOT FOUND! iOS sucht nach der Datei unter dem Pfad: {}", model_path));
+            return Err(format!("Model file not found: {}", model_path));
         }
 
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
