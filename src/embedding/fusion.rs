@@ -1,5 +1,6 @@
-//! Parameters of the hybrid fusion (vector list + FTS5/BM25 keyword list, see
-//! `retrieval.rs::retrieve_hybrid_with`) and the keyword-query cleanup.
+//! Parameters of the hybrid fusion (vector list + FTS5/BM25 keyword list +
+//! page-image list, see `retrieval.rs::retrieve_hybrid_with`) and the
+//! keyword-query cleanup.
 //!
 //! Why this exists: the keyword list is built from an OR over EVERY word of
 //! the question. Function words ("in", "der", "the", "of") match almost every
@@ -16,8 +17,10 @@
 //! measured production choice (function words dropped, k = 10, weight 1 — the
 //! grid over all golden sets and both embedding models: dropping function words
 //! is the large lever, k = 10 is never worse than 60 in any cell, a lower
-//! keyword weight does not help; numbers in `handbuch/core.md`); the `MATRIX_HYBRID_FUSION` env var (`stop=0|1`,
-//! `w=<f32>`, `k=<usize>`, comma-separated) only
+//! keyword weight does not help; numbers in `handbuch/core.md`); the page-image
+//! list ([`FusionParams::img`]) is on by default with weight 1 and only
+//! contributes where image vectors exist. The `MATRIX_HYBRID_FUSION` env var (`stop=0|1`,
+//! `w=<f32>`, `k=<usize>`, `img=0|1`, comma-separated) only
 //! exists to re-measure alternatives headlessly (`services/examples/embed_compare.rs`).
 
 use std::sync::OnceLock;
@@ -33,22 +36,25 @@ pub struct FusionParams {
     /// only ~6 %, so presence in both lists dominates and down-weighting the
     /// keyword list barely helps; a smaller k makes the position count.
     pub k: usize,
+    /// Fuse the page-image rank list (graphics pages mapped onto chunks).
+    pub img: bool,
 }
 
 impl Default for FusionParams {
     fn default() -> Self {
-        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10 }
+        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10, img: true }
     }
 }
 
 impl FusionParams {
-    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, comma-separated; unknown parts are ignored and
+    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, comma-separated; unknown parts are ignored and
     /// missing ones keep their default.
     pub fn parse(spec: &str) -> Self {
         let mut p = FusionParams::default();
         for part in spec.split(',').map(str::trim) {
             match part.split_once('=') {
                 Some(("stop", v)) => p.drop_stopwords = v != "0",
+                Some(("img", v)) => p.img = v != "0",
                 Some(("k", v)) => {
                     if let Ok(k) = v.parse::<usize>() {
                         p.k = k.clamp(1, 1000);

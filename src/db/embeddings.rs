@@ -190,6 +190,7 @@ impl Database {
             scored.push(ScoredChunk {
                 chunk_id: sv.chunk_id,
                 score: cosine(query, &sv.vector),
+                page_image_id: None,
             });
         }
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));

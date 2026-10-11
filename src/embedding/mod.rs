@@ -36,6 +36,13 @@ pub mod vision_prep;
 #[cfg(feature = "onnx")]
 pub mod vision;
 
+/// Image search over graphics pages: the pure rule/offset/page→chunk logic is
+/// always compiled (`page_select`); PDF rendering needs `pdf-render`.
+pub mod page_select;
+mod image_list;
+#[cfg(feature = "pdf-render")]
+pub mod page_render;
+
 /// Local GGUF/llama.cpp embedder (MODEL_INFRA_PLAN.md AP4b). The pure
 /// pooling/normalize helpers compile unconditionally (and are tested); the
 /// `GgufEmbedder` itself is behind the `gguf` feature.
@@ -56,3 +63,7 @@ pub trait QueryEmbedder {
 mod tests;
 #[cfg(test)]
 mod tests_vision;
+#[cfg(test)]
+mod tests_page_select;
+#[cfg(test)]
+mod tests_images;

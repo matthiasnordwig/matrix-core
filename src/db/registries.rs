@@ -34,6 +34,7 @@ fn row_to_embedding_model(row: &Row<'_>) -> rusqlite::Result<EmbeddingModel> {
         max_concurrency: row.get("max_concurrency")?,
         query_prefix: row.get("query_prefix")?,
         document_prefix: row.get("document_prefix")?,
+        vision_model_path: row.get("vision_model_path")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -165,6 +166,17 @@ impl Database {
         )?;
         self.embedding_model(id)?
             .ok_or_else(|| super::CoreError::NotFound(format!("embedding_model {id}")))
+    }
+
+    /// Set (or clear with `None`) the model's vision encoder path
+    /// (`vision_encoder*.onnx`, schema_v61). Kept out of `NewEmbeddingModel`
+    /// so `update_embedding_model` leaves it untouched.
+    pub fn set_embedding_model_vision_path(&self, id: i64, path: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE embedding_models SET vision_model_path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        Ok(())
     }
 
     /// Self-healing dimension: once a model's true embedding length is known (from

@@ -15,7 +15,13 @@
 //! per context via Reciprocal Rank Fusion (ranks only, never scores across
 //! spaces; keyword query and list weight per `fusion.rs`); `retrieve_with` stays the pure vector path. Every retrieve fn takes
 //! `doc_ids` (file-level scope); in the hybrid path the same filter is applied to
-//! BOTH lists before fusion, otherwise out-of-scope chunks leak.
+//! ALL lists before fusion, otherwise out-of-scope chunks leak.
+//!
+//! The hybrid path fuses a third list per context where page-image vectors of
+//! the context's model exist (`image_list.rs`): graphics pages scored in the
+//! same space, each mapped onto a chunk of its page; such hits carry
+//! `ScoredChunk::page_image_id`. Without image vectors the result is
+//! bit-identical to the two-list fusion.
 
 use std::collections::HashMap;
 
@@ -61,7 +67,7 @@ pub(crate) fn rrf_fuse_weighted(lists: &[(&[i64], f32)], k: usize, top_k: usize)
     }
     let mut fused: Vec<ScoredChunk> = acc
         .into_iter()
-        .map(|(chunk_id, score)| ScoredChunk { chunk_id, score })
+        .map(|(chunk_id, score)| ScoredChunk { chunk_id, score, page_image_id: None })
         .collect();
     fused.sort_by(|a, b| {
         b.score
@@ -150,6 +156,7 @@ impl Database {
                             row_merged[row_idx].push(ScoredChunk {
                                 chunk_id: sv.chunk_id,
                                 score: crate::db::embeddings::cosine(qvec, &sv.vector),
+                                page_image_id: None,
                             });
                         }
                     }
@@ -167,12 +174,14 @@ impl Database {
         Ok(row_merged)
     }
 
-    /// Hybrid retrieval: Reciprocal Rank Fusion of the per-context vector list
-    /// and the per-context FTS5/BM25 keyword list. Fusion happens **per context
-    /// (per embedding space)** and only on ranks — no cross-space score
-    /// comparison — then the RRF scores accumulate globally across all
-    /// (model, context) pairs before the final top-`k` cut. The RRF score is
-    /// placed in `ScoredChunk::score`.
+    /// Hybrid retrieval: Reciprocal Rank Fusion of the per-context vector list,
+    /// the per-context FTS5/BM25 keyword list and — where page-image vectors
+    /// exist — the per-context page-image list (mapped onto chunks). Fusion
+    /// happens **per context (per embedding space)** and only on ranks — no
+    /// cross-space score comparison — then the RRF scores accumulate globally
+    /// across all (model, context) pairs before the final top-`k` cut. The RRF
+    /// score is placed in `ScoredChunk::score`. Parameters from
+    /// `FusionParams::current()`.
     pub fn retrieve_hybrid_with(
         &self,
         context_ids: &[i64],
@@ -181,21 +190,36 @@ impl Database {
         top_k: usize,
         doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
-        let n = hybrid_fanout(top_k);
         let fusion = super::fusion::FusionParams::current();
+        self.retrieve_hybrid_with_params(context_ids, query_by_model, raw_query, top_k, doc_ids, &fusion)
+    }
+
+    /// [`Self::retrieve_hybrid_with`] with explicit fusion parameters.
+    pub fn retrieve_hybrid_with_params(
+        &self,
+        context_ids: &[i64],
+        query_by_model: &HashMap<i64, Vec<f32>>,
+        raw_query: &str,
+        top_k: usize,
+        doc_ids: Option<&[i64]>,
+        fusion: &super::fusion::FusionParams,
+    ) -> Result<Vec<ScoredChunk>> {
+        let n = hybrid_fanout(top_k);
         let keyword_query = super::fusion::keyword_query(raw_query, fusion.drop_stopwords);
         // Accumulate RRF scores globally across contexts/spaces.
         let mut acc: HashMap<i64, f32> = HashMap::new();
+        // Chunk → best-ranked page image that contributed to it.
+        let mut page_image_of: HashMap<i64, i64> = HashMap::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             let Some(qvec) = query_by_model.get(&model_id) else {
                 continue;
             };
             for cid in ctxs {
                 // Vector list (best-first) restricted to this one context/space.
-                // The SAME `doc_ids` filter is applied to BOTH the vector list
-                // and the FTS list below, so both are scoped identically before
-                // RRF fusion — a leak here would surface out-of-scope chunks with
-                // valid provenance (the `is_omitted` leak class).
+                // The SAME `doc_ids` filter is applied to ALL lists below, so
+                // they are scoped identically before RRF fusion — a leak here
+                // would surface out-of-scope chunks with valid provenance (the
+                // `is_omitted` leak class).
                 let vec_hits = self.search_context(cid, qvec, n, doc_ids)?;
                 let vec_ranked: Vec<i64> = vec_hits.iter().map(|h| h.chunk_id).collect();
                 // FTS list (best-first) for the same context, same file scope.
@@ -204,17 +228,36 @@ impl Database {
                     .into_iter()
                     .map(|(id, _rank)| id)
                     .collect();
-                // Fuse the two rank lists for this context, then fold the
-                // per-context RRF scores into the global accumulator.
-                let lists = [(vec_ranked.as_slice(), 1.0), (fts_ranked.as_slice(), fusion.fts_weight)];
+                // Page-image list (best-first, already mapped onto chunks), only
+                // vectors of this context's model — same space as `qvec`.
+                let img_ranked = if fusion.img {
+                    self.image_ranked_chunks(cid, model_id, qvec, n, doc_ids)?
+                } else {
+                    Vec::new()
+                };
+                let img_ids: Vec<i64> = img_ranked.iter().map(|(c, _)| *c).collect();
+                // Fuse the rank lists for this context, then fold the
+                // per-context RRF scores into the global accumulator. An empty
+                // image list is left out entirely (bit-identical to before).
+                let mut lists = vec![(vec_ranked.as_slice(), 1.0), (fts_ranked.as_slice(), fusion.fts_weight)];
+                if !img_ids.is_empty() {
+                    lists.push((img_ids.as_slice(), 1.0));
+                }
                 for sc in rrf_fuse_weighted(&lists, fusion.k, n) {
                     *acc.entry(sc.chunk_id).or_insert(0.0) += sc.score;
+                }
+                for (chunk_id, page_image_id) in img_ranked {
+                    page_image_of.entry(chunk_id).or_insert(page_image_id);
                 }
             }
         }
         let mut merged: Vec<ScoredChunk> = acc
             .into_iter()
-            .map(|(chunk_id, score)| ScoredChunk { chunk_id, score })
+            .map(|(chunk_id, score)| ScoredChunk {
+                chunk_id,
+                score,
+                page_image_id: page_image_of.get(&chunk_id).copied(),
+            })
             .collect();
         merged.sort_by(|a, b| {
             b.score

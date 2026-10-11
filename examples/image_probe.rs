@@ -121,6 +121,7 @@ fn main() {
         max_concurrency: 1,
         query_prefix: None,
         document_prefix: None,
+        vision_model_path: None,
     };
     let vision_path = model_dir.join("onnx").join(format!("{vision_name}.onnx"));
     let t0 = Instant::now();

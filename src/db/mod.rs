@@ -38,6 +38,7 @@ mod ref_abbreviations;
 mod pools;
 pub mod settings;
 mod eval;
+pub(crate) mod page_images;
 pub mod ontology;
 
 /// Errors surfaced by the persistence layer.
@@ -185,6 +186,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v58.sql"),
     include_str!("schema_v59.sql"),
     include_str!("schema_v60.sql"),
+    include_str!("schema_v61.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

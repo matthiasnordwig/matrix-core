@@ -15,7 +15,7 @@ impl QueryEmbedder for FakeEmbedder {
     }
 }
 
-fn model(db: &Database, ident: &str, dim: i64) -> EmbeddingModel {
+pub(super) fn model(db: &Database, ident: &str, dim: i64) -> EmbeddingModel {
     db.create_embedding_model(&NewEmbeddingModel {
         identifier: ident.into(),
         kind: ModelKind::LocalOnnx,
@@ -36,7 +36,7 @@ fn model(db: &Database, ident: &str, dim: i64) -> EmbeddingModel {
     .unwrap()
 }
 
-fn context_with_vectors(
+pub(super) fn context_with_vectors(
     db: &Database,
     name: &str,
     model_id: i64,
@@ -502,7 +502,10 @@ fn fusion_params_parse_and_defaults() {
     assert!(d.drop_stopwords);
     assert_eq!((d.k, d.fts_weight), (10, 1.0));
     assert_eq!(FusionParams::parse("stop=0"), FusionParams { drop_stopwords: false, ..d });
-    assert_eq!(FusionParams::parse("stop=1,w=0.5,k=10"), FusionParams { drop_stopwords: true, fts_weight: 0.5, k: 10 });
+    assert_eq!(FusionParams::parse("stop=1,w=0.5,k=10"), FusionParams { drop_stopwords: true, fts_weight: 0.5, k: 10, img: true });
+    assert!(d.img);
+    assert_eq!(FusionParams::parse("img=0"), FusionParams { img: false, ..d });
+    assert_eq!(FusionParams::parse("img=1,k=20"), FusionParams { k: 20, ..d });
     assert_eq!(FusionParams::parse("w=9"), FusionParams { fts_weight: 2.0, ..d });
     assert_eq!(FusionParams::parse("bogus,w=x"), d);
 }

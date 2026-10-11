@@ -32,6 +32,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         auto_merge_ontology: row.get("auto_merge_ontology")?,
         active_lens_id: row.get("active_lens_id")?,
         status: row.get("status")?,
+        embed_images: row.get("embed_images")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -112,6 +113,17 @@ impl Database {
         self.conn.execute(
             "UPDATE contexts SET embedding_dim = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id, dim],
+        )?;
+        Ok(())
+    }
+
+    /// Whether the context embeds graphics pages automatically after a
+    /// document's text chunks (schema_v61). Not part of `NewContext`, so
+    /// `update_context` leaves it untouched.
+    pub fn set_context_embed_images(&self, id: i64, on: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE contexts SET embed_images = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id, on],
         )?;
         Ok(())
     }

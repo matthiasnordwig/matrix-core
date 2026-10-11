@@ -63,6 +63,7 @@ mod tests {
             max_concurrency: 1,
             query_prefix: q.map(Into::into),
             document_prefix: d.map(Into::into),
+            vision_model_path: None,
             created_at: 0,
         }
     }

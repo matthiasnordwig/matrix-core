@@ -19,6 +19,15 @@ pub const PATCH: usize = 16;
 pub const POOL: usize = 3;
 pub const MAX_SOFT_TOKENS: usize = 280;
 
+/// Image-token budget the app embeds every page image with (instead of
+/// `MAX_SOFT_TOKENS`). Measured on the KfW report excerpt with the int4
+/// vision encoder (`vision_encoder_q4`): 140 tokens give the same fused MRR as
+/// fp32 with 280 (0.724) at 0.96 s per page instead of 1.45 s, and a 0.11 GB
+/// instead of 0.67 GB download; fp32 with 140 is faster still but loses
+/// exactly the org charts (0.655). Changing it changes the vectors' ranking,
+/// so stored page vectors should then be re-embedded.
+pub const APP_SOFT_TOKENS: usize = 140;
+
 /// Patch budget for one image (`max_soft_tokens * pool²`).
 pub fn max_patches(max_soft_tokens: usize, pool: usize) -> usize {
     max_soft_tokens * pool * pool

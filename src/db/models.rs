@@ -129,6 +129,11 @@ pub struct EmbeddingModel {
     /// Prepended to texts embedded as a stored document/chunk; None/empty = none.
     #[serde(default)]
     pub document_prefix: Option<String>,
+    /// Vision encoder (`vision_encoder*.onnx`) that embeds images into this
+    /// model's space (`schema_v61`); None = text only. Set via
+    /// `set_embedding_model_vision_path`.
+    #[serde(default)]
+    pub vision_model_path: Option<String>,
     pub created_at: i64,
 }
 
@@ -506,6 +511,10 @@ pub struct Context {
     /// state a context falls back to if its active lens is deleted).
     pub active_lens_id: Option<i64>,
     pub status: ContextStatus,
+    /// Embed graphics pages automatically after a document's text chunks
+    /// (`schema_v61`). Retrieval uses existing image vectors regardless.
+    #[serde(default)]
+    pub embed_images: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -643,6 +652,52 @@ pub struct StoredVector {
 pub struct ScoredChunk {
     pub chunk_id: i64,
     pub score: f32,
+    /// Set when the hit got a contribution from the page-image rank list
+    /// (hybrid retrieval): the best-ranked page image mapped onto this chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_image_id: Option<i64>,
+}
+
+// --- Page images (schema_v61, image search over graphics pages) --------------
+
+/// A stored graphics-page image without its JPEG bytes (`page_image_bytes`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageImage {
+    pub id: i64,
+    pub context_id: i64,
+    pub document_id: i64,
+    /// 1-based page number.
+    pub page: i64,
+    /// Byte range of the page in `documents.extracted_text`, if known.
+    pub char_start: Option<i64>,
+    pub char_end: Option<i64>,
+    pub width: i64,
+    pub height: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewPageImage {
+    pub context_id: i64,
+    pub document_id: i64,
+    pub page: i64,
+    pub char_start: Option<i64>,
+    pub char_end: Option<i64>,
+    pub width: i64,
+    pub height: i64,
+    /// JPEG bytes.
+    pub image: Vec<u8>,
+}
+
+/// A page-image vector loaded for a scan, with the page's position.
+#[derive(Debug, Clone)]
+pub struct StoredPageImageVector {
+    pub page_image_id: i64,
+    pub document_id: i64,
+    pub page: i64,
+    pub char_start: Option<i64>,
+    pub char_end: Option<i64>,
+    pub vector: Vec<f32>,
 }
 
 // --- Norm references (schema_v49, RETRIEVAL_QUALITY_PLAN.md AP2) -------------

@@ -41,12 +41,17 @@ Bild-Embedding (EmbeddingGemma 2): `vision_prep.rs` (rein, Gemma-4-Bildvorverarb
 getestet in `tests_vision.rs`) + `vision.rs::OrtImageEmbedder` (hinter `onnx`): Bild-Encoder
 → `image_features` in dieselbe Text-Session (`OrtEmbedder::embed_with_features`) → gleicher
 Vektorraum wie Text. Messwerkzeug `core/examples/image_probe.rs` (Seiten-Rendering über
-Feature `pdf-render`). Noch nicht in Chunks/DB/UI verdrahtet.
+Feature `pdf-render`). Bildsuche: `page_select.rs` (rein: Grafikseiten-Regel,
+Seitenanfänge nach Textreparatur, Seite → Chunks; Tests `tests_page_select.rs`),
+`page_render.rs` (Feature `pdf-render`: PDF → JPEG der Grafikseiten; Messtabelle
+`core/examples/page_stats.rs`), `image_list.rs` (dritte Rangliste im Hybrid-Pfad, Tests
+`tests_images.rs` — nur Bildvektoren des Kontext-Modells, Abbildung auf Chunks).
 
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn \|^pub struct \|^pub trait " *.rs`.
 
 **Tests:** `tests.rs` deckt `retrieve`/`retrieve_with` über gemischte Embedding-Räume
 ab (Fake-Embedder, zwei Modelle/Dimensionen — verifiziert, dass nie cross-space
 verglichen wird), dazu `rrf_fuse` (reine Fusions-Math), `hybrid_fanout` und
-`retrieve_hybrid_with`/`_batch` (Hybrid über gemischte Räume, Cross-Space-Isolation).
+`retrieve_hybrid_with`/`_batch` (Hybrid über gemischte Räume, Cross-Space-Isolation);
+Bildliste in `tests_images.rs`.
 Bei Änderungen: `cargo test --lib embedding` laufen lassen.
