@@ -7,6 +7,7 @@ pub mod inference;
 #[cfg(feature = "gguf")]
 pub mod llama_backend;
 pub mod refs;
+pub mod secrets;
 
 pub use db::{models, CoreError, Database, Result};
 

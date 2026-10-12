@@ -16,5 +16,5 @@ Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 **Tests:** `tests.rs` (CRUD-Round-Trips, FK, Vektor-Blob, Cosine, Pool-Invariante, Eval),
 `ontology/tests.rs` + `ontology/tests/*` (Ontologie inkl. Lens-Join, Communities, Merge-Log),
 dazu `*_tests.rs` je Thema (FTS, chunk_refs, chunks, chat_sessions, ref_abbreviations,
-reranker, rename, embedding_kind, page_images, transfer, context_copy). Bei Änderungen `cargo test --lib db` laufen lassen, bei
+reranker, rename, embedding_kind, page_images, transfer, context_copy, secret_fields). Bei Änderungen `cargo test --lib db` laufen lassen, bei
 neuer CRUD-Logik ergänzen.

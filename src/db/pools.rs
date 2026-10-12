@@ -71,7 +71,8 @@ impl Database {
              ORDER BY m.position",
         )?;
         let rows = stmt.query_map([pool_id], super::registries::row_to_llm_endpoint)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|e| self.open_llm_endpoint(e)).collect())
     }
 
     pub fn list_pools_with_members(&self) -> Result<Vec<LlmEndpointPoolWithMembers>> {

@@ -34,6 +34,7 @@ mod grid_profiles;
 mod reasoning_lists;
 mod profiles;
 mod registries;
+pub mod secret_fields;
 mod ref_abbreviations;
 mod pools;
 pub mod settings;
@@ -62,6 +63,8 @@ pub enum CoreError {
     InvalidPoolMembers(String),
     #[error("invalid state: {0}")]
     InvalidState(String),
+    #[error("secrets: {0}")]
+    Secrets(#[from] crate::secrets::SecretError),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -195,6 +198,8 @@ const MIGRATIONS: &[&str] = &[
 /// sibling modules as `impl Database` blocks.
 pub struct Database {
     conn: Connection,
+    /// Key for API keys at rest (`secret_fields.rs`); `None` = plaintext as before.
+    secret_key: Option<crate::secrets::SecretKey>,
 }
 
 impl Database {
@@ -214,7 +219,7 @@ impl Database {
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
         )?;
         Self::migrate(&mut conn)?;
-        Ok(Self { conn })
+        Ok(Self { conn, secret_key: None })
     }
 
     fn migrate(conn: &mut Connection) -> Result<()> {

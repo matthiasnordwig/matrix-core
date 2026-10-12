@@ -10,6 +10,10 @@
 //! `llm_endpoints` capability/tuning columns (`supports_tools`, `tools_advanced`,
 //! `stream_fallback`, `reasoning_list_id` -> `reasoning_effort_lists`, ...) are
 //! described on `LlmEndpoint` in `models.rs`.
+//!
+//! API keys (`llm_endpoints.api_key_ref`, the key inside both `api_config`
+//! JSONs) are sealed on every write and opened on every read through
+//! `secret_fields.rs` — no method here may bind or return those columns raw.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -94,7 +98,7 @@ impl Database {
                 m.kind,
                 m.model_path,
                 m.tokenizer_path,
-                m.api_config,
+                self.seal_embed_config(m.api_config.as_deref()),
                 m.execution_provider,
                 m.is_matryoshka,
                 m.native_dim,
@@ -121,7 +125,8 @@ impl Database {
                 [id],
                 row_to_embedding_model,
             )
-            .optional()?)
+            .optional()?
+            .map(|m| self.open_embedding_model(m)))
     }
 
     pub fn list_embedding_models(&self) -> Result<Vec<EmbeddingModel>> {
@@ -129,7 +134,8 @@ impl Database {
             .conn
             .prepare("SELECT * FROM embedding_models ORDER BY identifier")?;
         let rows = stmt.query_map([], row_to_embedding_model)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|m| self.open_embedding_model(m)).collect())
     }
 
     pub fn update_embedding_model(
@@ -151,7 +157,7 @@ impl Database {
                 m.kind,
                 m.model_path,
                 m.tokenizer_path,
-                m.api_config,
+                self.seal_embed_config(m.api_config.as_deref()),
                 m.execution_provider,
                 m.is_matryoshka,
                 m.native_dim,
@@ -210,7 +216,7 @@ impl Database {
         self.conn.execute(
             "INSERT INTO reranker_models (name, kind, model_dir, api_config, execution_provider)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![m.name, m.kind, m.model_dir, m.api_config, m.execution_provider],
+            params![m.name, m.kind, m.model_dir, self.seal_rerank_config(m.api_config.as_deref()), m.execution_provider],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(self.reranker_model(id)?.expect("row just inserted must exist"))
@@ -224,7 +230,8 @@ impl Database {
                 [id],
                 row_to_reranker_model,
             )
-            .optional()?)
+            .optional()?
+            .map(|m| self.open_reranker_model(m)))
     }
 
     pub fn list_reranker_models(&self) -> Result<Vec<RerankerModel>> {
@@ -232,7 +239,8 @@ impl Database {
             .conn
             .prepare("SELECT * FROM reranker_models ORDER BY name")?;
         let rows = stmt.query_map([], row_to_reranker_model)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|m| self.open_reranker_model(m)).collect())
     }
 
     pub fn update_reranker_model(&self, id: i64, m: &NewRerankerModel) -> Result<RerankerModel> {
@@ -240,7 +248,7 @@ impl Database {
             "UPDATE reranker_models SET
                 name = ?2, kind = ?3, model_dir = ?4, api_config = ?5, execution_provider = ?6
              WHERE id = ?1",
-            params![id, m.name, m.kind, m.model_dir, m.api_config, m.execution_provider],
+            params![id, m.name, m.kind, m.model_dir, self.seal_rerank_config(m.api_config.as_deref()), m.execution_provider],
         )?;
         self.reranker_model(id)?
             .ok_or_else(|| super::CoreError::NotFound(format!("reranker_model {id}")))
@@ -289,7 +297,7 @@ impl Database {
                 e.name,
                 e.base_url,
                 e.model_id,
-                e.api_key_ref,
+                self.seal_value(super::secret_fields::AAD_LLM_KEY, e.api_key_ref.as_deref()),
                 e.timeout_ms,
                 e.max_retries,
                 e.provider,
@@ -323,7 +331,8 @@ impl Database {
                 [id],
                 row_to_llm_endpoint,
             )
-            .optional()?)
+            .optional()?
+            .map(|e| self.open_llm_endpoint(e)))
     }
 
     pub fn list_llm_endpoints(&self) -> Result<Vec<LlmEndpoint>> {
@@ -331,7 +340,8 @@ impl Database {
             .conn
             .prepare("SELECT * FROM llm_endpoints ORDER BY name")?;
         let rows = stmt.query_map([], row_to_llm_endpoint)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|e| self.open_llm_endpoint(e)).collect())
     }
 
     pub fn update_llm_endpoint(&self, id: i64, e: &NewLlmEndpoint) -> Result<LlmEndpoint> {
@@ -348,7 +358,7 @@ impl Database {
                 e.name,
                 e.base_url,
                 e.model_id,
-                e.api_key_ref,
+                self.seal_value(super::secret_fields::AAD_LLM_KEY, e.api_key_ref.as_deref()),
                 e.timeout_ms,
                 e.max_retries,
                 e.provider,
