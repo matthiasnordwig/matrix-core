@@ -7,7 +7,8 @@ SQLite-Repository (rusqlite, bundled/statisch für iOS). Migrationen sind
 `schema_vN.sql`, `mod.rs::migrate()` läuft sie über `PRAGMA user_version`
 sequenziell durch — neue Migration = neue Datei mit nächster Nummer, alte
 niemals nachträglich ändern. `models.rs` bündelt **alle** Domänen-Typen (kein
-Modell in den `*.rs`-Dateien der einzelnen CRUD-Module).
+Modell in den `*.rs`-Dateien der einzelnen CRUD-Module); einzige Auslagerung: Retrieval-Treffer
+(`ScoredChunk`, `HitProvenance`, `ListHit`) in `scored.rs`, von `models.rs` re-exportiert.
 
 `ontology/` ist ein eigenes Ordner-Modul — jede Datei dort hat ein eigenes `impl Database { ... }`.
 

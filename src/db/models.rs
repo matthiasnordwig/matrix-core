@@ -647,16 +647,8 @@ pub struct StoredVector {
     pub vector: Vec<f32>,
 }
 
-/// A scored retrieval hit returned by a cosine scan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScoredChunk {
-    pub chunk_id: i64,
-    pub score: f32,
-    /// Set when the hit got a contribution from the page-image rank list
-    /// (hybrid retrieval): the best-ranked page image mapped onto this chunk.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub page_image_id: Option<i64>,
-}
+// Retrieval hits (`ScoredChunk` + fusion provenance) live in `scored.rs`.
+pub use super::scored::{HitProvenance, ListHit, ScoredChunk};
 
 // --- Page images (schema_v61, image search over graphics pages) --------------
 

@@ -21,6 +21,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension};
 
 pub mod models;
+mod scored;
 
 pub mod chat_sessions;
 pub mod chunks;

@@ -187,11 +187,7 @@ impl Database {
                     got: sv.vector.len(),
                 });
             }
-            scored.push(ScoredChunk {
-                chunk_id: sv.chunk_id,
-                score: cosine(query, &sv.vector),
-                page_image_id: None,
-            });
+            scored.push(ScoredChunk::new(sv.chunk_id, cosine(query, &sv.vector)));
         }
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);

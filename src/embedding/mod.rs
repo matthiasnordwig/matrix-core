@@ -19,6 +19,8 @@ pub mod retrieval;
 /// place `EmbeddingModel::{query,document}_prefix` are applied.
 pub mod prefix;
 pub mod fusion;
+/// Traced RRF (rank + share per list) and the page-image preview rule.
+pub mod provenance;
 
 /// Cross-encoder reranker (AP3). `rank_merge` (pure) is always compiled;
 /// `OrtReranker` is behind the `onnx` feature.
@@ -67,3 +69,5 @@ mod tests_vision;
 mod tests_page_select;
 #[cfg(test)]
 mod tests_images;
+#[cfg(test)]
+mod tests_provenance;

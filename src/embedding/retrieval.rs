@@ -19,15 +19,18 @@
 //!
 //! The hybrid path fuses a third list per context where page-image vectors of
 //! the context's model exist (`image_list.rs`): graphics pages scored in the
-//! same space, each mapped onto a chunk of its page; such hits carry
-//! `ScoredChunk::page_image_id` — but only if the image rank within its
-//! context is below the *visible* `preview_k` (a weak image hit still adds its
-//! RRF share, it just gets no preview). Ranks and scores never depend on
-//! `preview_k`. Without image vectors the result is bit-identical to the
-//! two-list fusion.
+//! same space, each mapped onto a chunk of its page. Every hybrid hit carries
+//! `ScoredChunk::provenance` (rank + RRF share per list, summed over contexts
+//! like the score; fusion in `provenance.rs`). `page_image_id` is set by the
+//! preview rule `provenance::shows_page_preview`: image rank within 30 % of
+//! the *visible* `preview_k` (a weaker image hit still adds its RRF share, it
+//! just gets no preview).
+//! Ranks and scores never depend on the rule. Without image vectors the result
+//! is bit-identical to the two-list fusion.
 
 use std::collections::HashMap;
 
+use super::provenance::{rrf_fuse_traced, shows_page_preview, ListKind};
 use super::QueryEmbedder;
 use crate::db::models::ScoredChunk;
 use crate::{Database, Result};
@@ -59,7 +62,10 @@ pub(crate) fn rrf_fuse(lists: &[Vec<i64>], k: usize, top_k: usize) -> Vec<Scored
 }
 
 /// [`rrf_fuse`] with a weight per list: a chunk's score is
-/// `Σ w_list / (k + rank)`. Weight 1.0 everywhere is plain RRF.
+/// `Σ w_list / (k + rank)`. Weight 1.0 everywhere is plain RRF. Untraced
+/// reference of `provenance::rrf_fuse_traced` (the production fusion), kept
+/// for the fusion-math and bit-identity tests.
+#[cfg(test)]
 pub(crate) fn rrf_fuse_weighted(lists: &[(&[i64], f32)], k: usize, top_k: usize) -> Vec<ScoredChunk> {
     let mut acc: HashMap<i64, f32> = HashMap::new();
     for (list, weight) in lists {
@@ -70,7 +76,7 @@ pub(crate) fn rrf_fuse_weighted(lists: &[(&[i64], f32)], k: usize, top_k: usize)
     }
     let mut fused: Vec<ScoredChunk> = acc
         .into_iter()
-        .map(|(chunk_id, score)| ScoredChunk { chunk_id, score, page_image_id: None })
+        .map(|(chunk_id, score)| ScoredChunk::new(chunk_id, score))
         .collect();
     fused.sort_by(|a, b| {
         b.score
@@ -156,11 +162,10 @@ impl Database {
                             }
                         }
                         if sv.vector.len() == qvec.len() {
-                            row_merged[row_idx].push(ScoredChunk {
-                                chunk_id: sv.chunk_id,
-                                score: crate::db::embeddings::cosine(qvec, &sv.vector),
-                                page_image_id: None,
-                            });
+                            row_merged[row_idx].push(ScoredChunk::new(
+                                sv.chunk_id,
+                                crate::db::embeddings::cosine(qvec, &sv.vector),
+                            ));
                         }
                     }
                 }
@@ -200,9 +205,9 @@ impl Database {
 
     /// [`Self::retrieve_hybrid_with`] with `top_k` = how many hits to return
     /// (a rerank candidate count N) and `preview_k` = the FINAL visible count:
-    /// only chunks reached by a page image whose rank in the image list is
-    /// below `preview_k` carry `page_image_id`. Ranks/scores are the same for
-    /// every `preview_k`.
+    /// only chunks whose image rank is within 30 % of `preview_k` carry
+    /// `page_image_id` (`provenance::shows_page_preview`).
+    /// Ranks/scores are the same for every `preview_k`.
     pub fn retrieve_hybrid_with_preview(
         &self,
         context_ids: &[i64],
@@ -230,10 +235,9 @@ impl Database {
     ) -> Result<Vec<ScoredChunk>> {
         let n = hybrid_fanout(top_k);
         let keyword_query = super::fusion::keyword_query(raw_query, fusion.drop_stopwords);
-        // Accumulate RRF scores globally across contexts/spaces.
-        let mut acc: HashMap<i64, f32> = HashMap::new();
-        // Chunk → best-ranked page image that contributed to it, only among image
-        // ranks < `preview_k` (weaker hits fuse but get no preview).
+        // Accumulate RRF scores and provenance globally across contexts/spaces.
+        let mut acc: HashMap<i64, ScoredChunk> = HashMap::new();
+        // Chunk → best-ranked page image mapped onto it (preview decided below).
         let mut page_image_of: HashMap<i64, i64> = HashMap::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             let Some(qvec) = query_by_model.get(&model_id) else {
@@ -264,24 +268,30 @@ impl Database {
                 // Fuse the rank lists for this context, then fold the
                 // per-context RRF scores into the global accumulator. An empty
                 // image list is left out entirely (bit-identical to before).
-                let mut lists = vec![(vec_ranked.as_slice(), 1.0), (fts_ranked.as_slice(), fusion.fts_weight)];
+                let mut lists = vec![
+                    (Some(ListKind::Vector), vec_ranked.as_slice(), 1.0),
+                    (Some(ListKind::Keyword), fts_ranked.as_slice(), fusion.fts_weight),
+                ];
                 if !img_ids.is_empty() {
-                    lists.push((img_ids.as_slice(), 1.0));
+                    lists.push((Some(ListKind::Image), img_ids.as_slice(), 1.0));
                 }
-                for sc in rrf_fuse_weighted(&lists, fusion.k, n) {
-                    *acc.entry(sc.chunk_id).or_insert(0.0) += sc.score;
+                for sc in rrf_fuse_traced(&lists, fusion.k, n) {
+                    let hit = acc.entry(sc.chunk_id).or_insert_with(|| ScoredChunk::new(sc.chunk_id, 0.0));
+                    hit.score += sc.score;
+                    hit.provenance.absorb(&sc.provenance);
                 }
-                for (chunk_id, page_image_id) in img_ranked.into_iter().take(preview_k) {
+                for (chunk_id, page_image_id) in img_ranked {
                     page_image_of.entry(chunk_id).or_insert(page_image_id);
                 }
             }
         }
         let mut merged: Vec<ScoredChunk> = acc
-            .into_iter()
-            .map(|(chunk_id, score)| ScoredChunk {
-                chunk_id,
-                score,
-                page_image_id: page_image_of.get(&chunk_id).copied(),
+            .into_values()
+            .map(|mut hit| {
+                if shows_page_preview(&hit.provenance, preview_k) {
+                    hit.page_image_id = page_image_of.get(&hit.chunk_id).copied();
+                }
+                hit
             })
             .collect();
         merged.sort_by(|a, b| {
