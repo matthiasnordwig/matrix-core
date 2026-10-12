@@ -13,22 +13,26 @@
 //! XLM-R sequence-pair `<s> query </s> </s> document </s>`, built from the GGUF's
 //! own tokenizer (its bos/eos come from GGUF metadata: `<s>`=0, `</s>`=2).
 //!
-//! ## FFI caveat (the reason this is not `embeddings_seq_ith`)
-//! `llama-cpp-2` 0.1.146's safe `LlamaContext::embeddings_seq_ith(seq)` slices
-//! `model.n_embd()` (=1024) floats over the pointer returned by
-//! `llama_get_embeddings_seq`. But under `LLAMA_POOLING_TYPE_RANK` llama.cpp
-//! resizes that sequence's embedding buffer to `n_cls_out` (=1) float and copies
-//! only 1 float (verified in `llama.cpp/src/llama-context.cpp`, the
-//! `LLAMA_POOLING_TYPE_RANK` arm: `embd_seq_out[seq_id].resize(n_cls_out)`). The
-//! returned buffer is a `std::vector<float>` of length 1, so building a 1024-len
-//! slice over it is an out-of-bounds read (UB / heap overread). We therefore call
-//! `llama_cpp_sys_2::llama_get_embeddings_seq` directly and read **exactly one**
-//! float (see `read_rank_score` below).
+//! ## Reading the rank score (`n_cls_out`, not `n_embd`)
+//! Under `LLAMA_POOLING_TYPE_RANK` llama.cpp resizes the per-sequence output
+//! buffer to `n_cls_out` (=1) floats (`llama-context.cpp`:
+//! `embd_seq_out[seq_id].resize(n_cls_out)`). Upstream `llama-cpp-2` 0.1.146's
+//! `embeddings_seq_ith` slices `n_embd` (=1024) floats over it — an over-long
+//! slice (UB). The app workspace therefore patches `llama-cpp-2` (vendored
+//! 0.1.146 in `app/src-tauri/patches/llama-cpp-2`, backport of upstream
+//! 0.1.154's fix) so the slice is exactly `n_cls_out` long. This module only
+//! reads element 0 through safe indexing — no `unsafe` here. Core-standalone
+//! builds (its own tests/examples) resolve unpatched upstream, where the wrapper
+//! still builds the long slice internally (formally UB in the wrapper, as before
+//! the patch); only element 0 is ever read, which is in-bounds.
 //!
-//! Pitfall: llama.cpp can fail a Metal residency-set assertion at teardown
-//! (`ggml_metal_device_free`) under `cargo run`/examples, *after* all scores were
-//! computed. It is an artifact of the non-bundled run (Metal is only fully stable
-//! in the bundled `.app`) and does not affect the scores.
+//! Pitfall (teardown, not scoring): ggml aborts with
+//! `GGML_ASSERT([rsets->data count] == 0)` when the process exits while a
+//! Metal-backed model is still alive — the Metal device is freed by a C++ static
+//! destructor and asserts that every buffer was released first. Callers that
+//! keep the reranker in a process-lifetime cache (services' session caches, the
+//! eval CLI) therefore exit with 134 *after* all results were written; a scope
+//! that drops the `GgufReranker` before exit ends cleanly. Scores are unaffected.
 
 /// Build the XLM-R reranker pair token id sequence for
 /// `<s> query </s> </s> document </s>` from separately-tokenized query and
@@ -193,37 +197,17 @@ mod imp {
         }
     }
 
-    /// Read the single Rank-pooling score for sequence 0, reading **exactly one**
-    /// float (see the module-level FFI caveat).
-    ///
-    /// `llama-cpp-2` 0.1.146 gives no way to obtain the raw `*mut llama_context`
-    /// (the field is `pub(crate)`, and its `#[repr(Rust)]` struct layout is not
-    /// guaranteed — reading "the first field" as a pointer crashes, the compiler
-    /// reorders fields). The only public accessor is `embeddings_seq_ith(0)`,
-    /// which returns `Ok(&[f32])` where **the data pointer is exactly**
-    /// `llama_get_embeddings_seq(ctx, 0)` — the correct pointer — but whose
-    /// *length* is `model.n_embd()` (=1024). Under Rank pooling llama.cpp only
-    /// wrote `n_cls_out` (=1) float there, so the slice's length is wrong (a
-    /// 1024-len view over a 1-float buffer). We therefore take **only the data
-    /// pointer** from that slice and dereference index 0 — we never read the
-    /// slice at any index ≥ 1, so no out-of-bounds access happens at runtime.
+    /// Read the single Rank-pooling score for sequence 0 (see the module doc:
+    /// with the app's patched `llama-cpp-2` the slice holds exactly `n_cls_out`
+    /// floats; bge-reranker-v2-m3 has `n_cls_out = 1`, the score is element 0).
     fn read_rank_score(ctx: &llama_cpp_2::context::LlamaContext) -> Result<f32> {
-        // `embeddings_seq_ith` returns Err(NonePoolType) if the pooled buffer is
-        // null; propagate that as our own error. Its Ok slice has the correct
-        // data pointer (the raw `llama_get_embeddings_seq` result); its reported
-        // length (n_embd) is not trustworthy under Rank pooling, so we ignore it.
-        let slice = ctx
+        let scores = ctx
             .embeddings_seq_ith(0)
             .map_err(|e| CoreError::Embedding(format!("GGUF rerank rank embedding: {e}")))?;
-        let ptr = slice.as_ptr();
-        // SAFETY: `ptr` is the pointer llama.cpp returned from
-        // `llama_get_embeddings_seq(ctx, 0)` for a Rank-pooling context that just
-        // encoded sequence 0; it points at a live `std::vector<float>` holding
-        // `n_cls_out` (=1) float. Reading index 0 is in-bounds for that buffer.
-        // We deliberately do NOT touch `slice[1..]` (the slice's length is
-        // `n_embd`, which overstates the real 1-float buffer — see doc above).
-        let score = unsafe { *ptr };
-        Ok(score)
+        scores
+            .first()
+            .copied()
+            .ok_or_else(|| CoreError::Embedding("GGUF rerank: empty rank output".into()))
     }
 }
 
