@@ -46,7 +46,9 @@ Feature `pdf-render`). Bildsuche: `page_select.rs` (rein: Grafikseiten-Regel,
 Seitenanfänge nach Textreparatur, Seite → Chunks; Tests `tests_page_select.rs`),
 `page_render.rs` (Feature `pdf-render`: PDF → JPEG der Grafikseiten; Messtabelle
 `core/examples/page_stats.rs`), `image_list.rs` (dritte Rangliste im Hybrid-Pfad, Tests
-`tests_images.rs` — nur Bildvektoren des Kontext-Modells, Abbildung auf Chunks).
+`tests_images.rs` — nur Bildvektoren des Kontext-Modells, Abbildung auf Chunks). Die
+Vorschau-Markierung `page_image_id` setzt `retrieve_hybrid_*` nur bei Bildrang < `preview_k`
+(= finales top_k; `*_preview`-Varianten für Rerank-Kandidaten-N), Ränge/Scores bleiben gleich.
 
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn \|^pub struct \|^pub trait " *.rs`.
 

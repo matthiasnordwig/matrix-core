@@ -20,8 +20,11 @@
 //! The hybrid path fuses a third list per context where page-image vectors of
 //! the context's model exist (`image_list.rs`): graphics pages scored in the
 //! same space, each mapped onto a chunk of its page; such hits carry
-//! `ScoredChunk::page_image_id`. Without image vectors the result is
-//! bit-identical to the two-list fusion.
+//! `ScoredChunk::page_image_id` — but only if the image rank within its
+//! context is below the *visible* `preview_k` (a weak image hit still adds its
+//! RRF share, it just gets no preview). Ranks and scores never depend on
+//! `preview_k`. Without image vectors the result is bit-identical to the
+//! two-list fusion.
 
 use std::collections::HashMap;
 
@@ -181,7 +184,9 @@ impl Database {
     /// cross-space score comparison — then the RRF scores accumulate globally
     /// across all (model, context) pairs before the final top-`k` cut. The RRF
     /// score is placed in `ScoredChunk::score`. Parameters from
-    /// `FusionParams::current()`.
+    /// `FusionParams::current()`. The page-image preview threshold is `top_k`
+    /// (use [`Self::retrieve_hybrid_with_preview`] when `top_k` is a rerank
+    /// candidate count larger than what the user finally sees).
     pub fn retrieve_hybrid_with(
         &self,
         context_ids: &[i64],
@@ -190,17 +195,36 @@ impl Database {
         top_k: usize,
         doc_ids: Option<&[i64]>,
     ) -> Result<Vec<ScoredChunk>> {
-        let fusion = super::fusion::FusionParams::current();
-        self.retrieve_hybrid_with_params(context_ids, query_by_model, raw_query, top_k, doc_ids, &fusion)
+        self.retrieve_hybrid_with_preview(context_ids, query_by_model, raw_query, top_k, top_k, doc_ids)
     }
 
-    /// [`Self::retrieve_hybrid_with`] with explicit fusion parameters.
+    /// [`Self::retrieve_hybrid_with`] with `top_k` = how many hits to return
+    /// (a rerank candidate count N) and `preview_k` = the FINAL visible count:
+    /// only chunks reached by a page image whose rank in the image list is
+    /// below `preview_k` carry `page_image_id`. Ranks/scores are the same for
+    /// every `preview_k`.
+    pub fn retrieve_hybrid_with_preview(
+        &self,
+        context_ids: &[i64],
+        query_by_model: &HashMap<i64, Vec<f32>>,
+        raw_query: &str,
+        top_k: usize,
+        preview_k: usize,
+        doc_ids: Option<&[i64]>,
+    ) -> Result<Vec<ScoredChunk>> {
+        let fusion = super::fusion::FusionParams::current();
+        self.retrieve_hybrid_with_params(context_ids, query_by_model, raw_query, top_k, preview_k, doc_ids, &fusion)
+    }
+
+    /// [`Self::retrieve_hybrid_with_preview`] with explicit fusion parameters.
+    #[allow(clippy::too_many_arguments)]
     pub fn retrieve_hybrid_with_params(
         &self,
         context_ids: &[i64],
         query_by_model: &HashMap<i64, Vec<f32>>,
         raw_query: &str,
         top_k: usize,
+        preview_k: usize,
         doc_ids: Option<&[i64]>,
         fusion: &super::fusion::FusionParams,
     ) -> Result<Vec<ScoredChunk>> {
@@ -208,7 +232,8 @@ impl Database {
         let keyword_query = super::fusion::keyword_query(raw_query, fusion.drop_stopwords);
         // Accumulate RRF scores globally across contexts/spaces.
         let mut acc: HashMap<i64, f32> = HashMap::new();
-        // Chunk → best-ranked page image that contributed to it.
+        // Chunk → best-ranked page image that contributed to it, only among image
+        // ranks < `preview_k` (weaker hits fuse but get no preview).
         let mut page_image_of: HashMap<i64, i64> = HashMap::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             let Some(qvec) = query_by_model.get(&model_id) else {
@@ -246,7 +271,7 @@ impl Database {
                 for sc in rrf_fuse_weighted(&lists, fusion.k, n) {
                     *acc.entry(sc.chunk_id).or_insert(0.0) += sc.score;
                 }
-                for (chunk_id, page_image_id) in img_ranked {
+                for (chunk_id, page_image_id) in img_ranked.into_iter().take(preview_k) {
                     page_image_of.entry(chunk_id).or_insert(page_image_id);
                 }
             }
@@ -281,10 +306,24 @@ impl Database {
         top_k: usize,
         doc_ids: Option<&[i64]>,
     ) -> Result<Vec<Vec<ScoredChunk>>> {
+        self.retrieve_hybrid_batch_preview(context_ids, queries_by_row, raw_queries, top_k, top_k, doc_ids)
+    }
+
+    /// [`Self::retrieve_hybrid_batch`] with a separate visible `preview_k`
+    /// (see [`Self::retrieve_hybrid_with_preview`]).
+    pub fn retrieve_hybrid_batch_preview(
+        &self,
+        context_ids: &[i64],
+        queries_by_row: &[HashMap<i64, Vec<f32>>],
+        raw_queries: &[String],
+        top_k: usize,
+        preview_k: usize,
+        doc_ids: Option<&[i64]>,
+    ) -> Result<Vec<Vec<ScoredChunk>>> {
         let mut out = Vec::with_capacity(queries_by_row.len());
         for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
             let raw = raw_queries.get(row_idx).map(String::as_str).unwrap_or("");
-            out.push(self.retrieve_hybrid_with(context_ids, query_by_model, raw, top_k, doc_ids)?);
+            out.push(self.retrieve_hybrid_with_preview(context_ids, query_by_model, raw, top_k, preview_k, doc_ids)?);
         }
         Ok(out)
     }

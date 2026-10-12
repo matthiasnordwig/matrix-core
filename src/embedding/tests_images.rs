@@ -2,7 +2,8 @@
 //! image vectors bit-identical to the two-list fusion; an image hit lifts the
 //! query-closest chunk of its page (structural `metadata.page` and LLM byte
 //! ranges); never compares image vectors of another model; honours the
-//! `doc_ids` scope, omitted chunks and the `img=0` switch.
+//! `doc_ids` scope, omitted chunks and the `img=0` switch; the preview mark
+//! (`page_image_id`) only for image ranks below the visible `preview_k`.
 
 use std::collections::HashMap;
 
@@ -149,7 +150,7 @@ fn bits(v: &[ScoredChunk]) -> Vec<(i64, u32, Option<i64>)> {
 }
 
 fn run(db: &Database, ctxs: &[i64], q: &HashMap<i64, Vec<f32>>, doc_ids: Option<&[i64]>, f: &FusionParams) -> Vec<ScoredChunk> {
-    db.retrieve_hybrid_with_params(ctxs, q, RAW, 10, doc_ids, f).unwrap()
+    db.retrieve_hybrid_with_params(ctxs, q, RAW, 10, 10, doc_ids, f).unwrap()
 }
 
 /// Structural layout: c0 p1 (best text hit), ca p2, c1 p3, c2 p3, c3 p5.
@@ -188,7 +189,7 @@ fn without_image_vectors_the_result_is_bit_identical() {
     let reference = two_list_reference(&db, &ctxs, &q, "abschnitt chunk", 10, None);
     assert!(!reference.is_empty());
     for f in [on(), off()] {
-        let got = db.retrieve_hybrid_with_params(&ctxs, &q, "abschnitt chunk", 10, None, &f).unwrap();
+        let got = db.retrieve_hybrid_with_params(&ctxs, &q, "abschnitt chunk", 10, 10, None, &f).unwrap();
         assert_eq!(bits(&got), bits(&reference));
     }
 }
@@ -305,4 +306,35 @@ fn omitted_chunks_are_never_chosen_and_best_rank_wins() {
     assert_eq!(get(ids[2]), None, "omitted chunk is never the image target");
     assert_eq!(get(ids[1]), Some(p3), "the better-ranked page image wins");
     assert!(got.iter().all(|s| s.page_image_id != Some(p4)));
+}
+
+#[test]
+fn preview_mark_needs_an_image_rank_below_preview_k_but_ranks_stay_equal() {
+    let db = Database::open_in_memory().unwrap();
+    let (m, ctx, doc, ids) = structural(&db);
+    // Image ranks: page 3 (cos 1.0) → c2, page 5 (cos ~0.71) → c3, page 1 (cos 0) → c0.
+    let p3 = add_page(&db, ctx, doc, 3, None, Some((m, &Q)));
+    let p5 = add_page(&db, ctx, doc, 5, None, Some((m, &[0.5, 0.5, 0.0])));
+    let _p1 = add_page(&db, ctx, doc, 1, None, Some((m, &[0.0, 1.0, 0.0])));
+    let get = |k: usize| db.retrieve_hybrid_with_params(&[ctx], &queries(m), RAW, 10, k, None, &on()).unwrap();
+    let marked = |v: &[ScoredChunk]| -> Vec<(i64, i64)> {
+        let mut x: Vec<_> = v.iter().filter_map(|s| s.page_image_id.map(|p| (s.chunk_id, p))).collect();
+        x.sort();
+        x
+    };
+    let all = get(10);
+    assert_eq!(marked(&all).len(), 3);
+    for (k, expect) in [(1, vec![(ids[3], p3)]), (2, vec![(ids[3], p3), (ids[4], p5)]), (0, vec![])] {
+        let got = get(k);
+        let ranks = |v: &[ScoredChunk]| v.iter().map(|s| (s.chunk_id, s.score.to_bits())).collect::<Vec<_>>();
+        assert_eq!(ranks(&got), ranks(&all), "preview_k={k} must not change ranks or scores");
+        let mut expect = expect;
+        expect.sort();
+        assert_eq!(marked(&got), expect, "preview_k={k}");
+    }
+    // The default entry point uses top_k as the threshold.
+    let few = db.retrieve_hybrid_with(&[ctx], &queries(m), RAW, 1, None).unwrap();
+    assert_eq!(few.len(), 1);
+    let same_as_k1 = get(1).into_iter().next().unwrap();
+    assert_eq!((few[0].chunk_id, few[0].page_image_id), (same_as_k1.chunk_id, same_as_k1.page_image_id));
 }
