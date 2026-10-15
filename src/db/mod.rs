@@ -560,3 +560,5 @@ mod fts_tests;
 mod reranker_tests;
 #[cfg(test)]
 mod embedding_kind_tests;
+#[cfg(test)]
+mod model_paths_tests;

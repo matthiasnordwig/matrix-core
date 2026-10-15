@@ -35,6 +35,13 @@ impl GgufEngine {
         {
             model_params = model_params.with_n_gpu_layers(999);
         }
+        // The iOS Simulator's Metal runs llama.cpp's kernels wrongly (garbage
+        // tokens, no error) — real devices are fine. CPU there; llama.cpp's own
+        // default would otherwise offload everything.
+        #[cfg(all(target_os = "ios", target_abi = "sim"))]
+        {
+            model_params = model_params.with_n_gpu_layers(0);
+        }
         if !std::path::Path::new(model_path).exists() {
             return Err(format!("Model file not found: {}", model_path));
         }

@@ -113,6 +113,11 @@ mod imp {
             {
                 params = params.with_n_gpu_layers(999);
             }
+            // iOS Simulator: Metal runs llama.cpp's kernels wrongly (see inference/gguf.rs).
+            #[cfg(all(target_os = "ios", target_abi = "sim"))]
+            {
+                params = params.with_n_gpu_layers(0);
+            }
             let m = LlamaModel::load_from_file(backend, model_path, &params)
                 .map_err(|e| CoreError::Embedding(format!("GGUF reranker load {model_path}: {e}")))?;
             Ok(Self { model: m, n_ctx: MAX_SEQ_LEN as u32 })

@@ -185,6 +185,23 @@ impl Database {
         Ok(())
     }
 
+    /// Re-point the local file paths after the app's data folder moved (iOS gives
+    /// the app a new container path on reinstall/update). Touches nothing else.
+    pub fn set_embedding_model_file_paths(
+        &self,
+        id: i64,
+        model_path: Option<&str>,
+        tokenizer_path: Option<&str>,
+        vision_model_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE embedding_models SET model_path = ?2, tokenizer_path = ?3, vision_model_path = ?4
+             WHERE id = ?1",
+            params![id, model_path, tokenizer_path, vision_model_path],
+        )?;
+        Ok(())
+    }
+
     /// Self-healing dimension: once a model's true embedding length is known (from
     /// the first produced vector), persist it so the UI never asks for it by hand.
     /// Sets both native and default dim (we do not Matryoshka-truncate by default).
@@ -380,6 +397,16 @@ impl Database {
         )?;
         self.llm_endpoint(id)?
             .ok_or_else(|| super::CoreError::NotFound(format!("llm_endpoint {id}")))
+    }
+
+    /// Re-point a local (GGUF) endpoint's model file after the app's data folder
+    /// moved (see `set_embedding_model_file_paths`). Touches nothing else.
+    pub fn set_llm_endpoint_base_url(&self, id: i64, base_url: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE llm_endpoints SET base_url = ?2 WHERE id = ?1",
+            params![id, base_url],
+        )?;
+        Ok(())
     }
 
     pub fn delete_llm_endpoint(&self, id: i64) -> Result<bool> {
