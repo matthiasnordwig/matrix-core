@@ -9,6 +9,10 @@
 //! [`Database::chunk_spans_with_vectors`] serves the page → chunk mapping of
 //! hybrid retrieval (`embedding/retrieval.rs`): chunk positions plus their
 //! vector, without loading chunk text.
+//! [`Database::replace_image_document_text`] swaps an image document's text and
+//! chunks in one transaction when a generated description arrives (the page-1
+//! picture and its vector stay); `mark_image_description_declined` remembers a
+//! picture the model gave no description for (chunk metadata, not text).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -123,6 +127,57 @@ impl Database {
             return Err(CoreError::NotFound(format!("page_image {page_image_id}")));
         }
         Ok(())
+    }
+
+    /// Replace an image document's text and chunks in one transaction (new
+    /// generated description): `documents.extracted_text`/`byte_size` get
+    /// `text`, the old chunks go (their vectors and graph results with them),
+    /// `chunks` are inserted, and the page-1 picture keeps its row and image
+    /// vector — only its text range becomes the whole new text. Returns the
+    /// number of chunks inserted; an unknown document is `NotFound`.
+    pub fn replace_image_document_text(&self, document_id: i64, text: &str, chunks: &[NewChunk]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE documents SET extracted_text = ?2, byte_size = ?3 WHERE id = ?1",
+            params![document_id, text, text.len() as i64],
+        )?;
+        if n == 0 {
+            return Err(CoreError::NotFound(format!("document {document_id}")));
+        }
+        tx.execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?;
+        for c in chunks {
+            self.create_chunk(c)?;
+        }
+        tx.execute(
+            "UPDATE page_images SET char_start = 0, char_end = ?2 WHERE document_id = ?1 AND page = 1",
+            params![document_id, text.len() as i64],
+        )?;
+        tx.commit()?;
+        Ok(chunks.len())
+    }
+
+    /// Remember on an image document's chunks that its image model gave no
+    /// description (`metadata.image_description = note`), so a later run does
+    /// not send — and bill — the picture again. Hidden from the chunk text; goes
+    /// away with the chunks when a description is stored. Returns chunks marked.
+    pub fn mark_image_description_declined(&self, document_id: i64, note: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE chunks SET metadata = CASE WHEN json_valid(metadata)
+                 THEN json_set(metadata, '$.image_description', ?2)
+                 ELSE json_object('image_description', ?2) END
+             WHERE document_id = ?1",
+            params![document_id, note],
+        )?)
+    }
+
+    /// Documents of a context marked by [`Self::mark_image_description_declined`].
+    pub fn image_description_declined_documents(&self, context_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT document_id FROM chunks WHERE context_id = ?1 AND json_valid(metadata)
+                 AND json_extract(metadata, '$.image_description') IS NOT NULL ORDER BY document_id",
+        )?;
+        let rows = stmt.query_map([context_id], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
     /// Delete every page-image vector of a context (model switch / re-embed).

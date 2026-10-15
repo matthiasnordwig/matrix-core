@@ -231,3 +231,62 @@ fn model_vision_path_and_context_flag_round_trip() {
     db.set_context_embed_images(ctx, true).unwrap();
     assert!(db.context(ctx).unwrap().unwrap().embed_images);
 }
+
+fn chunk(ctx: i64, doc: i64, i: i64, text: &str, start: i64) -> NewChunk {
+    NewChunk {
+        context_id: ctx,
+        document_id: doc,
+        chunk_index: i,
+        char_start: start,
+        char_end: start + text.len() as i64,
+        text: text.into(),
+        signature: None,
+        is_omitted: false,
+        metadata: "{}".into(),
+    }
+}
+
+#[test]
+fn replacing_image_document_text_swaps_chunks_and_keeps_the_picture() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "m");
+    let (ctx, doc) = seed(&db, m);
+    let p = db.insert_page_image(&img(ctx, doc, 1, b"jpeg")).unwrap();
+    db.upsert_page_image_embedding(p.id, m, &[1.0, 0.0, 0.0]).unwrap();
+    db.create_chunk(&chunk(ctx, doc, 0, "old", 0)).unwrap();
+
+    let text = "# a.png\n\n## Generated image description\n\nA cat.\n";
+    let n = db
+        .replace_image_document_text(doc, text, &[chunk(ctx, doc, 0, "# a.png", 0), chunk(ctx, doc, 1, "A cat.", 40)])
+        .unwrap();
+    assert_eq!(n, 2);
+    let d = db.document(doc).unwrap().unwrap();
+    assert_eq!((d.extracted_text.as_deref(), d.byte_size), (Some(text), Some(text.len() as i64)));
+    let texts: Vec<String> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| c.text).collect();
+    assert_eq!(texts, vec!["# a.png".to_string(), "A cat.".to_string()]);
+    let page = db.page_image(p.id).unwrap().expect("same picture row");
+    assert_eq!((page.char_start, page.char_end), (Some(0), Some(text.len() as i64)));
+    assert_eq!(db.scan_page_image_vectors(ctx, m).unwrap().len(), 1, "image vector kept");
+    assert!(db.replace_image_document_text(9999, "x", &[]).is_err(), "unknown document");
+}
+
+#[test]
+fn declined_image_descriptions_are_remembered_on_the_chunks() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "m");
+    let (ctx, doc) = seed(&db, m);
+    db.create_chunk(&chunk(ctx, doc, 0, "# a.png", 0)).unwrap();
+    let mut broken = chunk(ctx, doc, 1, "Image: a.png", 9);
+    broken.metadata = "not json".into();
+    db.create_chunk(&broken).unwrap();
+    assert!(db.image_description_declined_documents(ctx).unwrap().is_empty());
+
+    assert_eq!(db.mark_image_description_declined(doc, "declined by m").unwrap(), 2);
+    assert_eq!(db.image_description_declined_documents(ctx).unwrap(), vec![doc]);
+    let texts: Vec<String> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| c.text).collect();
+    assert_eq!(texts, vec!["# a.png".to_string(), "Image: a.png".to_string()], "text untouched");
+
+    // A stored description replaces the chunks, and the mark goes with them.
+    db.replace_image_document_text(doc, "# a.png\n", &[chunk(ctx, doc, 0, "# a.png", 0)]).unwrap();
+    assert!(db.image_description_declined_documents(ctx).unwrap().is_empty());
+}
