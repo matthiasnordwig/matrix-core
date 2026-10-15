@@ -221,6 +221,10 @@ pub struct LlmEndpoint {
     /// first search) — default false preserves today's ("basic") behaviour.
     #[serde(default)]
     pub tools_advanced: bool,
+    /// Endpoint capability flag (schema_v62): the model accepts images in a chat
+    /// request; only such endpoints can be a context's `image_llm_id`.
+    #[serde(default)]
+    pub supports_vision: bool,
     /// Adaptive streaming fallback under provider throttling (schema_v45);
     /// on by default.
     pub stream_fallback: bool,
@@ -268,6 +272,9 @@ pub struct NewLlmEndpoint {
     /// behaviour, unchanged from before this flag existed).
     #[serde(default)]
     pub tools_advanced: bool,
+    /// schema_v62; default false so older JSON bodies still deserialize.
+    #[serde(default)]
+    pub supports_vision: bool,
     #[serde(default = "default_true")]
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,
@@ -515,11 +522,15 @@ pub struct Context {
     /// (`schema_v61`). Retrieval uses existing image vectors regardless.
     #[serde(default)]
     pub embed_images: bool,
+    /// Endpoint (with `supports_vision`) that writes generated image
+    /// descriptions (schema_v62, FK SET NULL); `None` = no descriptions.
+    #[serde(default)]
+    pub image_llm_id: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NewContext {
     pub name: String,
     pub description: Option<String>,
@@ -538,6 +549,9 @@ pub struct NewContext {
     pub ontology_extract_reasoning_effort: Option<String>,
     pub extract_title_llm: bool,
     pub auto_merge_ontology: bool,
+    /// schema_v62; `#[serde(default)]` = older bodies/bundles write `None`.
+    #[serde(default)]
+    pub image_llm_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

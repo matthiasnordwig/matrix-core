@@ -36,21 +36,10 @@ fn seed(db: &Database) -> (i64, i64) {
     let ctx = db
         .create_context(&NewContext {
             name: "Ctx".into(),
-            description: None,
-            chunking_profile_id: None,
             embedding_model_id: Some(model.id),
             embedding_dim: Some(4),
-            llm_id: None,
-            fallback_llm_id: None,
-            ontology_profile_id: None,
-            ontology_pool_id: None,
-            ontology_extract_llm_id: None,
-            ontology_extract_pool_id: None,
-            ontology_extract_reasoning_effort: None,
-            extract_title_llm: false,
-            auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
-            structural_profile_id: None,
+            ..Default::default()
         })
         .unwrap();
     let doc = db
@@ -143,21 +132,8 @@ fn delete_chunk_refs_for_context_only_touches_its_own_context() {
     let ctx_b = db
         .create_context(&NewContext {
             name: "Ctx B".into(),
-            description: None,
-            chunking_profile_id: None,
-            embedding_model_id: None,
-            embedding_dim: None,
-            llm_id: None,
-            fallback_llm_id: None,
-            ontology_profile_id: None,
-            ontology_pool_id: None,
-            ontology_extract_llm_id: None,
-            ontology_extract_pool_id: None,
-            ontology_extract_reasoning_effort: None,
-            extract_title_llm: false,
-            auto_merge_ontology: false,
             chunking_strategy: "Semantic".into(),
-            structural_profile_id: None,
+            ..Default::default()
         })
         .unwrap()
         .id;

@@ -47,6 +47,7 @@ fn seed(db: &Database) -> (i64, i64) {
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
+            image_llm_id: None,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })

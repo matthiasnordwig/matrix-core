@@ -14,8 +14,10 @@ Modell in den `*.rs`-Dateien der einzelnen CRUD-Module); einzige Auslagerung: Re
 
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 
-**Tests:** `tests.rs` (CRUD-Round-Trips, FK, Vektor-Blob, Cosine, Pool-Invariante, Eval),
+**Tests:** `tests.rs` (CRUD-Round-Trips, FK, Vektor-Blob, Cosine, Eval),
 `ontology/tests.rs` + `ontology/tests/*` (Ontologie inkl. Lens-Join, Communities, Merge-Log),
 dazu `*_tests.rs` je Thema (FTS, chunk_refs, chunks, chat_sessions, ref_abbreviations,
-reranker, rename, embedding_kind, page_images, transfer, context_copy, secret_fields). Bei Änderungen `cargo test --lib db` laufen lassen, bei
+reranker, rename, embedding_kind, page_images, transfer, context_copy, secret_fields,
+llm_endpoint = Endpunkt-Flags/Pool-Invariante/Reasoning-Listen, vision = schema_v62).
+Test-`NewContext` am besten als `NewContext { …, ..Default::default() }`. Bei Änderungen `cargo test --lib db` laufen lassen, bei
 neuer CRUD-Logik ergänzen.

@@ -30,6 +30,7 @@ fn endpoint(key: Option<&str>) -> NewLlmEndpoint {
         is_reasoning: false,
         supports_structured_output: false,
         supports_tools: false,
+        supports_vision: false,
         tools_advanced: false,
         stream_fallback: true,
         kv_quantization: None,

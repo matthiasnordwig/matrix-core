@@ -59,6 +59,7 @@ pub(super) fn context_with_vectors(
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
+            image_llm_id: None,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })
@@ -281,6 +282,7 @@ fn doc_scope_restricts_vector_and_hybrid_lists() {
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
+            image_llm_id: None,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })
@@ -437,6 +439,7 @@ fn score_chunks_by_ids_missing_vector_scores_zero() {
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
+            image_llm_id: None,
             chunking_strategy: "Semantic".into(),
             structural_profile_id: None,
         })

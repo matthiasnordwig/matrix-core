@@ -46,6 +46,7 @@ fn ctx_doc(db: &Database, model_id: i64) -> (i64, i64) {
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
             auto_merge_ontology: false,
+            image_llm_id: None,
         })
         .unwrap();
     (ctx.id, add_doc(db, ctx.id))

@@ -23,6 +23,7 @@ fn ctx(db: &Database, name: &str) -> i64 {
         ontology_extract_reasoning_effort: None,
         extract_title_llm: false,
         auto_merge_ontology: false,
+        image_llm_id: None,
     })
     .unwrap()
     .id
