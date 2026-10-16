@@ -367,4 +367,4 @@ impl Database {
 
 #[cfg(test)]
 #[path = "chunks_tests.rs"]
-mod chunks_tests;
+pub(crate) mod chunks_tests;

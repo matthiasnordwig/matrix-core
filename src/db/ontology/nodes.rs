@@ -176,14 +176,18 @@ impl Database {
         Ok(set)
     }
 
-    /// Non-omitted chunks of a context that are not yet marked extracted —
+    /// Non-omitted chunks of a context that are not yet marked extracted and that
+    /// the extraction reads (no `sheet_profile`, see `chunk_kinds.rs`) —
     /// the count behind `get_unextracted_chunks`, without loading chunk texts.
     pub fn count_unextracted_chunks(&self, context_id: i64) -> Result<i64> {
         Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM chunks c
-             WHERE c.context_id = ?1 AND c.is_omitted = 0
-               AND NOT EXISTS (SELECT 1 FROM ontology_extracted_chunks e
-                               WHERE e.context_id = ?1 AND e.chunk_id = c.id)",
+            &format!(
+                "SELECT COUNT(*) FROM chunks c
+                 WHERE c.context_id = ?1 AND c.is_omitted = 0 AND {}
+                   AND NOT EXISTS (SELECT 1 FROM ontology_extracted_chunks e
+                                   WHERE e.context_id = ?1 AND e.chunk_id = c.id)",
+                crate::db::chunk_kinds::EXTRACTABLE_SQL
+            ),
             [context_id],
             |row| row.get(0),
         )?)

@@ -11,7 +11,7 @@ fn db() -> Database {
 }
 
 /// Minimal model→context→document chain (mirrors `chunk_refs_tests.rs::seed`).
-fn seed(db: &Database) -> (i64, i64) {
+pub(crate) fn seed(db: &Database) -> (i64, i64) {
     let model = db
         .create_embedding_model(&NewEmbeddingModel {
             identifier: "test-embed".into(),
