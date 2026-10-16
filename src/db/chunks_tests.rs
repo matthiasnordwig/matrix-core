@@ -222,7 +222,7 @@ fn chunks_go_in_at_their_place_and_the_order_is_renumbered() {
         metadata: meta.to_string(),
     };
     let x = new("between", serde_json::json!({ "described_page": 2 }));
-    let y = new("declined", serde_json::json!({ "described_page": 5, "page_description": "declined by m" }));
+    let y = new("declined", serde_json::json!({ "described_page": 5 }));
     let inserted = db
         .insert_chunks_in_order(doc, &[ChunkSlot::Existing(a), ChunkSlot::New(&x), ChunkSlot::Existing(b), ChunkSlot::New(&y)])
         .unwrap();
@@ -234,11 +234,12 @@ fn chunks_go_in_at_their_place_and_the_order_is_renumbered() {
     );
     let spans: Vec<i64> = db.chunk_spans(doc).unwrap().into_iter().map(|s| s.chunk_id).collect();
     assert_eq!(spans, vec![a, inserted[0].id, b, inserted[1].id], "spans in the new order");
-    let marks = db.page_description_marks(ctx).unwrap();
+    let marks = db.page_description_marks(ctx, None).unwrap();
     assert_eq!(marks.len(), 2);
-    assert_eq!((marks[0].document_id, marks[0].page, marks[0].declined.as_deref()), (doc, 2, None));
-    assert_eq!((marks[1].page, marks[1].declined.as_deref()), (5, Some("declined by m")));
-    assert_eq!(marks[1].chunk_id, inserted[1].id);
+    assert_eq!((marks[0].document_id, marks[0].page), (doc, 2));
+    assert_eq!((marks[1].page, marks[1].chunk_id), (5, inserted[1].id));
+    assert_eq!(db.page_description_marks(ctx, Some(doc)).unwrap(), marks);
+    assert!(db.page_description_marks(ctx, Some(doc + 1)).unwrap().is_empty());
 }
 
 #[test]

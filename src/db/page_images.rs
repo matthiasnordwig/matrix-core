@@ -13,6 +13,8 @@
 //! chunks in one transaction when a generated description arrives (the page-1
 //! picture and its vector stay); `mark_image_description_declined` remembers a
 //! picture the model gave no description for (chunk metadata, not text).
+//! A PDF graphics page keeps its describe state on its own row
+//! (`set_page_description_state`, schema_v64), so re-chunking cannot reset it.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -21,8 +23,8 @@ use super::models::*;
 use super::{CoreError, Database, Result};
 use crate::embedding::page_select::ChunkSpan;
 
-const PAGE_IMAGE_COLS: &str =
-    "id, context_id, document_id, page, char_start, char_end, width, height, created_at";
+const PAGE_IMAGE_COLS: &str = "id, context_id, document_id, page, char_start, char_end, width, height, created_at, \
+     description_state, description_model";
 
 fn row_to_page_image(row: &Row<'_>) -> rusqlite::Result<PageImage> {
     Ok(PageImage {
@@ -35,6 +37,8 @@ fn row_to_page_image(row: &Row<'_>) -> rusqlite::Result<PageImage> {
         width: row.get("width")?,
         height: row.get("height")?,
         created_at: row.get("created_at")?,
+        description_state: row.get("description_state")?,
+        description_model: row.get("description_model")?,
     })
 }
 
@@ -180,6 +184,19 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
+    /// Record the describe job's outcome for a page image (`described` /
+    /// `declined`, see schema_v64) and the model that answered.
+    pub fn set_page_description_state(&self, page_image_id: i64, state: &str, model: &str) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE page_images SET description_state = ?2, description_model = ?3 WHERE id = ?1",
+            params![page_image_id, state, model],
+        )?;
+        if n == 0 {
+            return Err(CoreError::NotFound(format!("page_image {page_image_id}")));
+        }
+        Ok(())
+    }
+
     /// Delete every page-image vector of a context (model switch / re-embed).
     pub fn delete_page_image_embeddings_for_context(&self, context_id: i64) -> Result<usize> {
         Ok(self
@@ -193,7 +210,7 @@ impl Database {
     pub fn page_images_needing_embedding(&self, context_id: i64) -> Result<Vec<PageImage>> {
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.context_id, p.document_id, p.page, p.char_start, p.char_end,
-                    p.width, p.height, p.created_at
+                    p.width, p.height, p.created_at, p.description_state, p.description_model
                FROM page_images p
                JOIN contexts c ON c.id = p.context_id
                LEFT JOIN page_image_embeddings e

@@ -301,8 +301,10 @@ impl Database {
             )?;
             tx.execute(
                 "INSERT INTO page_images
-                    (context_id, document_id, page, char_start, char_end, width, height, image, created_at)
-                 SELECT ?2, ?3, page, char_start, char_end, width, height, image, created_at
+                    (context_id, document_id, page, char_start, char_end, width, height, image, created_at,
+                     description_state, description_model)
+                 SELECT ?2, ?3, page, char_start, char_end, width, height, image, created_at,
+                        description_state, description_model
                  FROM page_images WHERE document_id = ?1 ORDER BY page",
                 params![doc_id, dst, new_doc],
             )?;

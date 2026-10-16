@@ -290,3 +290,43 @@ fn declined_image_descriptions_are_remembered_on_the_chunks() {
     db.replace_image_document_text(doc, "# a.png\n", &[chunk(ctx, doc, 0, "# a.png", 0)]).unwrap();
     assert!(db.image_description_declined_documents(ctx).unwrap().is_empty());
 }
+
+#[test]
+fn describe_state_lives_on_the_page_and_resets_with_a_new_render() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "m-state");
+    let (ctx, doc) = seed(&db, m);
+    let p = db.insert_page_image(&img(ctx, doc, 2, b"a")).unwrap();
+    assert_eq!((p.description_state.as_deref(), p.description_model.as_deref()), (None, None));
+    db.set_page_description_state(p.id, "declined", "vlm").unwrap();
+    let got = db.page_image(p.id).unwrap().unwrap();
+    assert_eq!((got.description_state.as_deref(), got.description_model.as_deref()), (Some("declined"), Some("vlm")));
+    assert_eq!(db.list_page_images_for_context(ctx).unwrap()[0].description_state.as_deref(), Some("declined"));
+    // Chunk churn does not touch it.
+    db.delete_chunks_for_document(doc).unwrap();
+    assert_eq!(db.page_image(p.id).unwrap().unwrap().description_state.as_deref(), Some("declined"));
+    assert!(db.set_page_description_state(p.id, "maybe", "vlm").is_err(), "CHECK constraint");
+    assert!(db.set_page_description_state(p.id + 99, "described", "vlm").is_err());
+    let again = db.insert_page_image(&img(ctx, doc, 2, b"b")).unwrap();
+    assert_eq!(again.description_state, None, "a new render starts fresh");
+}
+
+#[test]
+fn renumbering_chunks_keeps_keyword_search_and_text_updates_reindex() {
+    let db = Database::open_in_memory().unwrap();
+    let m = model(&db, "m-fts");
+    let (ctx, doc) = seed(&db, m);
+    let a = db.create_chunk(&chunk(ctx, doc, 0, "alpha zebra", 0)).unwrap();
+    let new = chunk(ctx, doc, 0, "gamma", 0);
+    db.insert_chunks_in_order(doc, &[super::super::chunks::ChunkSlot::New(&new), super::super::chunks::ChunkSlot::Existing(a.id)]).unwrap();
+    assert_eq!(db.chunk(a.id).unwrap().unwrap().chunk_index, 1);
+    assert_eq!(db.keyword_search_context(ctx, "zebra", 5, None).unwrap().len(), 1);
+    db.update_chunk_text(a.id, "alpha yak").unwrap();
+    assert!(db.keyword_search_context(ctx, "zebra", 5, None).unwrap().is_empty());
+    assert_eq!(db.keyword_search_context(ctx, "yak", 5, None).unwrap().len(), 1);
+    let sql: String = db
+        .conn
+        .query_row("SELECT sql FROM sqlite_master WHERE name = 'chunks_fts_au'", [], |r| r.get(0))
+        .unwrap();
+    assert!(sql.contains("UPDATE OF text"), "{sql}");
+}

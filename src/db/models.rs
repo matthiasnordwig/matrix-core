@@ -680,6 +680,9 @@ pub struct PageImage {
     pub width: i64,
     pub height: i64,
     pub created_at: i64,
+    /// Describe state of a PDF graphics page (v64: `described`|`declined`) and the model that answered.
+    pub description_state: Option<String>,
+    pub description_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,8 +2,9 @@
 //! (the physical STAGING TABLE written after assembly). Chunks added to a
 //! finished document later (OCR text of scanned PDF pages, generated page
 //! descriptions) go in at their page's place: [`Database::insert_chunks_in_order`]
-//! renumbers `chunk_index`; [`Database::page_description_marks`] lists the
-//! page-description chunks (`metadata.described_page`).
+//! renumbers `chunk_index` (only the chunks whose index changes);
+//! [`Database::page_description_marks`] lists the page-description chunks
+//! (`metadata.described_page`).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -378,31 +379,31 @@ pub enum ChunkSlot<'a> {
     New(&'a NewChunk),
 }
 
-/// A chunk that stands for a generated description of one PDF page (or the
-/// note that the model declined it), see [`Database::page_description_marks`].
+/// A chunk that holds a generated description of one PDF page, see
+/// [`Database::page_description_marks`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageDescriptionMark {
     pub chunk_id: i64,
     pub document_id: i64,
     /// 1-based page number (`metadata.described_page`).
     pub page: i64,
-    /// `metadata.page_description` of a "declined" marker chunk; `None` for a description.
-    pub declined: Option<String>,
 }
 
 impl Database {
     /// Insert chunks between a document's existing ones in one transaction:
     /// `order` lists EVERY existing chunk of the document (by id) and the new
-    /// ones in the wanted order; `chunk_index` is renumbered 0.. along it (the
-    /// existing chunks keep their ids, vectors and graph results). Returns the
-    /// inserted chunks. An `order` that misses an existing chunk or names a
-    /// foreign one is `InvalidState` and changes nothing.
+    /// ones in the wanted order; `chunk_index` becomes the position 0.. along
+    /// it (the existing chunks keep their ids, vectors and graph results; only
+    /// those whose index changes are written — from the first insertion point
+    /// on). Returns the inserted chunks. An `order` that misses an existing
+    /// chunk or names a foreign one is `InvalidState` and changes nothing.
     pub fn insert_chunks_in_order(&self, document_id: i64, order: &[ChunkSlot]) -> Result<Vec<Chunk>> {
-        let existing: Vec<i64> = {
-            let mut stmt = self.conn.prepare("SELECT id FROM chunks WHERE document_id = ?1")?;
-            let rows = stmt.query_map([document_id], |r| r.get(0))?;
-            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        let current: std::collections::HashMap<i64, i64> = {
+            let mut stmt = self.conn.prepare("SELECT id, chunk_index FROM chunks WHERE document_id = ?1")?;
+            let rows = stmt.query_map([document_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
         };
+        let existing: Vec<i64> = current.keys().copied().collect();
         let mut named: Vec<i64> =
             order.iter().filter_map(|s| if let ChunkSlot::Existing(id) = s { Some(*id) } else { None }).collect();
         named.sort_unstable();
@@ -414,15 +415,26 @@ impl Database {
                 existing.len()
             )));
         }
+        let moved: Vec<(i64, i64)> = order
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| match s {
+                ChunkSlot::Existing(id) if current.get(id) != Some(&(i as i64)) => Some((*id, i as i64)),
+                _ => None,
+            })
+            .collect();
         let tx = self.conn.unchecked_transaction()?;
         // Out of the way first: (context, document, chunk_index) is unique.
-        tx.execute("UPDATE chunks SET chunk_index = -1 - chunk_index WHERE document_id = ?1", [document_id])?;
+        for (id, _) in &moved {
+            tx.execute("UPDATE chunks SET chunk_index = -1 - chunk_index WHERE id = ?1", [id])?;
+        }
+        for (id, i) in &moved {
+            tx.execute("UPDATE chunks SET chunk_index = ?2 WHERE id = ?1", params![id, i])?;
+        }
         let mut inserted = Vec::new();
         for (i, slot) in order.iter().enumerate() {
             match slot {
-                ChunkSlot::Existing(id) => {
-                    tx.execute("UPDATE chunks SET chunk_index = ?2 WHERE id = ?1", params![id, i as i64])?;
-                }
+                ChunkSlot::Existing(_) => {}
                 ChunkSlot::New(c) => {
                     let c = NewChunk { document_id, chunk_index: i as i64, ..(*c).clone() };
                     inserted.push(self.create_chunk(&c)?);
@@ -453,20 +465,21 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// The page-description chunks of a context (generated descriptions of PDF
-    /// graphics pages and "declined" markers): every chunk whose metadata has
-    /// `described_page`, by document and page.
-    pub fn page_description_marks(&self, context_id: i64) -> Result<Vec<PageDescriptionMark>> {
+    /// The page-description chunks (generated descriptions of PDF graphics
+    /// pages: metadata `described_page`) of a context, or of one document of it,
+    /// by document and page. The describe state itself lives on `page_images`
+    /// (schema_v64); these chunks also count as "described" after a context
+    /// copy/import from a bundle without that state.
+    pub fn page_description_marks(&self, context_id: i64, document_id: Option<i64>) -> Result<Vec<PageDescriptionMark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, document_id, CAST(json_extract(metadata, '$.described_page') AS INTEGER),
-                    json_extract(metadata, '$.page_description')
+            "SELECT id, document_id, CAST(json_extract(metadata, '$.described_page') AS INTEGER)
                FROM chunks
-              WHERE context_id = ?1 AND json_valid(metadata)
+              WHERE context_id = ?1 AND (?2 IS NULL OR document_id = ?2) AND json_valid(metadata)
                 AND json_extract(metadata, '$.described_page') IS NOT NULL
               ORDER BY document_id, 3, id",
         )?;
-        let rows = stmt.query_map([context_id], |r| {
-            Ok(PageDescriptionMark { chunk_id: r.get(0)?, document_id: r.get(1)?, page: r.get(2)?, declined: r.get(3)? })
+        let rows = stmt.query_map(params![context_id, document_id], |r| {
+            Ok(PageDescriptionMark { chunk_id: r.get(0)?, document_id: r.get(1)?, page: r.get(2)? })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }

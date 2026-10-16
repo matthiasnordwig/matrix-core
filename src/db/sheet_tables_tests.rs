@@ -180,7 +180,7 @@ fn migration_v63_applies_on_a_v62_database() {
         .unwrap();
     }
     let db = Database::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 63);
+    assert_eq!(db.schema_version().unwrap(), super::super::MIGRATIONS.len() as i64);
     assert_eq!(db.document(1).unwrap().unwrap().name, "old.xlsx");
     assert!(db.sheet_tables_for_scope(&[1], None).unwrap().is_empty());
     let info = db.create_sheet_table(&sales_table(1, 1)).unwrap();
