@@ -31,6 +31,7 @@ fn endpoint(key: Option<&str>) -> NewLlmEndpoint {
         supports_structured_output: false,
         supports_tools: false,
         supports_vision: false,
+        mmproj_path: None,
         tools_advanced: false,
         stream_fallback: true,
         kv_quantization: None,

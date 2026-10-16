@@ -22,7 +22,10 @@ onnx-download = ["onnx", "ort/download-binaries", "ort/tls-rustls"]
 # selection + JPEG page images (`embedding/page_render.rs`), used by the app's
 # ingest and `examples/{image_probe,page_stats}.rs`.
 pdf-render = ["pdf_oxide/rendering"]
-gguf = ["dep:llama-cpp-2"]
+# `gguf` also builds llama.cpp's multimodal library (mtmd: image input for
+# local vision models, `inference/gguf_vlm.rs`) — it builds on every target
+# that builds llama.cpp (macOS, iOS device, iOS simulator), so no extra feature.
+gguf = ["dep:llama-cpp-2", "llama-cpp-2/mtmd"]
 gguf-metal = ["gguf", "llama-cpp-2/metal"]
 gguf-cuda = ["gguf", "llama-cpp-2/cuda"]
 

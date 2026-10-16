@@ -69,6 +69,7 @@ fn llm_endpoint_base_url_is_rewritten_alone() {
             supports_structured_output: true,
             supports_tools: false,
             supports_vision: false,
+            mmproj_path: None,
             tools_advanced: false,
             stream_fallback: true,
             kv_quantization: None,

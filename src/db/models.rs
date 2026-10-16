@@ -208,23 +208,22 @@ pub struct LlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
-    /// Endpoint capability flag (schema_v54, AP8): the model behind this endpoint
-    /// speaks tool-calling reliably. Only endpoints with this set get a `tools`
-    /// manifest + the recursive agentic loop; without it, chat falls back to
-    /// classic single-shot RAG. Analogous to `is_reasoning`.
+    /// Capability flag (schema_v54): the model speaks tool-calling reliably. Only
+    /// such endpoints get a `tools` manifest + the agentic loop; else single-shot RAG.
     #[serde(default)]
     pub supports_tools: bool,
-    /// Endpoint capability flag (schema_v55, TOOL_TIER_PLAN AP1): the model
-    /// behind this endpoint handles a larger/richer tool surface reliably
-    /// ("advanced tool use"). Only meaningful when `supports_tools`. Gates the
-    /// richer tool-loop mechanics (extra tools, larger text cap, no forced
-    /// first search) — default false preserves today's ("basic") behaviour.
+    /// Capability flag (schema_v55): richer tool surface ("advanced tool use": extra
+    /// tools, larger text cap, no forced first search); only with `supports_tools`.
     #[serde(default)]
     pub tools_advanced: bool,
-    /// Endpoint capability flag (schema_v62): the model accepts images in a chat
+    /// Capability flag (schema_v62): the model accepts images in a chat
     /// request; only such endpoints can be a context's `image_llm_id`.
     #[serde(default)]
     pub supports_vision: bool,
+    /// Image projector (`mmproj-*.gguf`, schema_v65) of a local `gguf` model; NULL =
+    /// text only. A `gguf` endpoint reads pictures only with it.
+    #[serde(default)]
+    pub mmproj_path: Option<String>,
     /// Adaptive streaming fallback under provider throttling (schema_v45);
     /// on by default.
     pub stream_fallback: bool,
@@ -262,19 +261,16 @@ pub struct NewLlmEndpoint {
     pub max_concurrency: i64,
     pub is_reasoning: bool,
     pub supports_structured_output: bool,
-    /// schema_v54 (AP8). `#[serde(default)]` so JSON bodies predating the column
-    /// (web adapter / stored context bundles) still deserialize (= false = no
-    /// tool loop, classic single-shot RAG).
+    /// schema_v54/v55/v62/v65: `serde(default)` so JSON bodies predating a column
+    /// (web adapter / stored context bundles) still deserialize (= off / none).
     #[serde(default)]
     pub supports_tools: bool,
-    /// schema_v55 (TOOL_TIER_PLAN AP1). `#[serde(default)]` so JSON bodies
-    /// predating the column still deserialize (= false = "basic" tool-loop
-    /// behaviour, unchanged from before this flag existed).
     #[serde(default)]
     pub tools_advanced: bool,
-    /// schema_v62; default false so older JSON bodies still deserialize.
     #[serde(default)]
     pub supports_vision: bool,
+    #[serde(default)]
+    pub mmproj_path: Option<String>,
     #[serde(default = "default_true")]
     pub stream_fallback: bool,
     pub kv_quantization: Option<String>,

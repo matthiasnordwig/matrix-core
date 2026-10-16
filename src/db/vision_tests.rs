@@ -81,13 +81,13 @@ fn json_predating_v62_deserializes_with_defaults() {
     assert_eq!(serde_json::from_value::<NewContext>(v).unwrap().image_llm_id, None);
 }
 
-/// Bring a fresh connection to v61 exactly like `Database::migrate` would
-/// (including the Rust hooks of v9/v50/v51/v52), then seed rows the v62
-/// migration must keep.
-fn migrate_to_61_then_seed() -> Connection {
+/// A fresh connection brought to `version` exactly like `Database::migrate`
+/// would (including the Rust hooks of v9/v50/v51/v52); also used by later
+/// migration tests (`mmproj_tests.rs`).
+pub(super) fn migrate_to(version: usize) -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    for (i, sql) in super::MIGRATIONS[..61].iter().enumerate() {
+    for (i, sql) in super::MIGRATIONS[..version].iter().enumerate() {
         let target = (i + 1) as i64;
         if target == 51 {
             super::migrate_v50_to_v51_embedding_kind(&mut conn).unwrap();
@@ -109,7 +109,13 @@ fn migrate_to_61_then_seed() -> Connection {
         tx.commit().unwrap();
     }
     let v: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(v, 61);
+    assert_eq!(v, version as i64);
+    conn
+}
+
+/// v61 database with rows the v62 migration must keep.
+fn migrate_to_61_then_seed() -> Connection {
+    let conn = migrate_to(61);
     conn.execute_batch(
         "INSERT INTO llm_endpoints (id, name, base_url, model_id, provider, supports_tools)
              VALUES (1, 'old', 'http://x.invalid', 'm', 'openai', 1);
