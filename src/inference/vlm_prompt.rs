@@ -19,6 +19,15 @@ pub fn user_turn_with_image(prompt: &str, marker: &str) -> String {
     format!("{marker}\n{}", instruction.trim())
 }
 
+/// Context size for one call: prompt + answer rounded up to a multiple of 256,
+/// never more than the endpoint's `n_ctx` (a full-size context would reserve
+/// KV memory the single picture never uses — costly on the iPhone).
+pub fn context_for(prompt_tokens: usize, max_tokens: u32, n_ctx: u32) -> u32 {
+    let need = (prompt_tokens as u64).saturating_add(max_tokens as u64);
+    let rounded = need.div_ceil(256).saturating_mul(256).max(256);
+    rounded.min(n_ctx as u64) as u32
+}
+
 /// Whether a prompt of `prompt_tokens` (text + image tokens) leaves room for
 /// `max_tokens` of answer in a context of `n_ctx` tokens.
 pub fn fits_context(prompt_tokens: usize, max_tokens: u32, n_ctx: u32) -> bool {

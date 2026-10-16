@@ -1,5 +1,5 @@
 //! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`).
-use super::vlm_prompt::{fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
+use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
 
 #[test]
 fn picture_marker_comes_before_the_instruction() {
@@ -21,4 +21,12 @@ fn context_fit_counts_prompt_and_answer() {
     assert!(fits_context(3072, 1024, 4096));
     assert!(!fits_context(3073, 1024, 4096));
     assert!(!fits_context(usize::MAX, u32::MAX, u32::MAX));
+}
+
+#[test]
+fn context_is_sized_to_the_call_not_the_endpoint() {
+    assert_eq!(context_for(300, 512, 8192), 1024, "812 rounded up to 1024");
+    assert_eq!(context_for(256, 256, 8192), 512, "exact multiple stays");
+    assert_eq!(context_for(0, 0, 8192), 256, "never zero");
+    assert_eq!(context_for(7000, 2048, 8192), 8192, "capped at the endpoint's context");
 }

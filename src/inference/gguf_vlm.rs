@@ -7,7 +7,8 @@
 //! `MtmdBitmap::from_buffer` → user turn "marker + instruction"
 //! (`vlm_prompt::user_turn_with_image`) wrapped by the model's own chat
 //! template → `MtmdContext::tokenize` (text and image chunks) →
-//! `eval_chunks` (image encoder + decode) → greedy generation up to
+//! a context sized to prompt + answer (`vlm_prompt::context_for`, KV cache
+//! type from the endpoint's `kv_quantization`) → `eval_chunks` (image encoder + decode) → greedy generation up to
 //! `max_tokens` (the endpoint's Output Reserve). The answer reports whether it
 //! hit that limit; the caller turns a cut-off answer into an error.
 //!
@@ -24,14 +25,14 @@ use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::Mutex;
 
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText};
 use llama_cpp_2::sampling::LlamaSampler;
 
-use super::vlm_prompt::{fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
+use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
 use crate::llama_backend::backend as get_backend;
 
 /// Prompt + image chunks are decoded in batches of at most this many tokens.
@@ -97,26 +98,19 @@ impl GgufVisionEngine {
     }
 
     /// Describe the picture `image` (encoded JPEG/PNG bytes) following `prompt`;
-    /// at most `max_tokens` of answer.
-    pub fn describe(&self, image: &[u8], prompt: &str, max_tokens: u32, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
+    /// at most `max_tokens` of answer. `kv_quantization` as for the chat engine
+    /// (`Q8_0` / `Q4_0`, else F16). The context is sized to this call
+    /// (`vlm_prompt::context_for`), not to the endpoint's full window.
+    pub fn describe(&self, image: &[u8], prompt: &str, max_tokens: u32, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
         let _guard = self.busy.lock().unwrap_or_else(|p| p.into_inner());
         let backend = get_backend()?;
-        let batch = MAX_BATCH.min(self.n_ctx);
-        let mut ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(self.n_ctx))
-            .with_n_batch(batch)
-            .with_n_ubatch(batch);
-        if let Some(t) = cpu_threads {
-            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
-        }
-        let mut ctx = self.model.new_context(backend, ctx_params).map_err(|e| format!("context create: {e}"))?;
 
+        // Tokenize first (needs no llama context) to size the context.
         let bitmap = MtmdBitmap::from_buffer(&self.mtmd, image).map_err(|e| format!("picture could not be read by the local model: {e}"))?;
         let tmpl = self.model.chat_template(None).map_err(|e| format!("model has no default chat template or invalid: {e}"))?;
         let user = LlamaChatMessage::new("user".to_string(), user_turn_with_image(prompt, DEFAULT_MEDIA_MARKER))
             .map_err(|e| format!("invalid chat message: {e}"))?;
         let text = self.model.apply_chat_template(&tmpl, &[user], true).map_err(|e| format!("failed to apply chat template: {e}"))?;
-
         let chunks = self
             .mtmd
             .tokenize(MtmdInputText { text, add_special: true, parse_special: true }, &[&bitmap])
@@ -128,6 +122,25 @@ impl GgufVisionEngine {
                 self.n_ctx
             ));
         }
+
+        let n_ctx = context_for(prompt_tokens, max_tokens, self.n_ctx);
+        let batch = MAX_BATCH.min(n_ctx);
+        let mut ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(n_ctx))
+            .with_n_batch(batch)
+            .with_n_ubatch(batch);
+        if let Some(q) = kv_quantization {
+            let kv = match q {
+                "Q8_0" => KvCacheType::Q8_0,
+                "Q4_0" => KvCacheType::Q4_0,
+                _ => KvCacheType::F16,
+            };
+            ctx_params = ctx_params.with_type_k(kv).with_type_v(kv);
+        }
+        if let Some(t) = cpu_threads {
+            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
+        }
+        let mut ctx = self.model.new_context(backend, ctx_params).map_err(|e| format!("context create: {e}"))?;
         let mut n_past = chunks
             .eval_chunks(&self.mtmd, &ctx, 0, 0, batch as i32, true)
             .map_err(|e| format!("image evaluation: {e}"))?;
