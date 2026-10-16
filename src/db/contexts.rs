@@ -161,17 +161,17 @@ impl Database {
             .ok_or_else(|| super::CoreError::NotFound(format!("context {id}")))
     }
 
+    /// Delete a context; its sheet tables (`sheet_tables.rs`) are dropped in the same savepoint.
     pub fn delete_context(&self, id: i64) -> Result<bool> {
-        self.conn.execute(
-            "DELETE FROM grid_chat_results 
-             WHERE row_ref_type = 'chunk' 
-               AND row_ref_id IN (SELECT id FROM chunks WHERE context_id = ?1)",
-            [id],
-        )?;
-        Ok(self
-            .conn
-            .execute("DELETE FROM contexts WHERE id = ?1", [id])?
-            > 0)
+        self.with_sheet_drop("context_id = ?1", id, || {
+            self.conn.execute(
+                "DELETE FROM grid_chat_results 
+                 WHERE row_ref_type = 'chunk' 
+                   AND row_ref_id IN (SELECT id FROM chunks WHERE context_id = ?1)",
+                [id],
+            )?;
+            Ok(self.conn.execute("DELETE FROM contexts WHERE id = ?1", [id])? > 0)
+        })
     }
 
     // --- documents ---------------------------------------------------------
@@ -249,11 +249,9 @@ impl Database {
         Ok(true)
     }
 
+    /// Delete a document; its sheet tables are dropped in the same savepoint.
     pub fn delete_document(&self, id: i64) -> Result<bool> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM documents WHERE id = ?1", [id])?
-            > 0)
+        self.with_sheet_drop("document_id = ?1", id, || Ok(self.conn.execute("DELETE FROM documents WHERE id = ?1", [id])? > 0))
     }
 
     /// Copy all documents of context `src` with their chunks (text, offsets,

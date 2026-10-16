@@ -661,8 +661,8 @@ pub struct StoredVector {
     pub vector: Vec<f32>,
 }
 
-// Retrieval hits (`ScoredChunk` + fusion provenance) live in `scored.rs`.
-pub use super::scored::{HitProvenance, ListHit, ScoredChunk};
+// Retrieval hits live in `scored.rs`, spreadsheet-table rows in `sheet_models.rs`.
+pub use super::{scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*};
 
 // --- Page images (schema_v61, image search over graphics pages) --------------
 

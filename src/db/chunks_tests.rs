@@ -2,7 +2,7 @@
 //! chunk fragmentation (multi-part §§/Artikel split across staging chunks by
 //! the structural chunker). Mirrors `chunk_refs_tests.rs`'s seed pattern.
 
-use super::SectionContinuation;
+use super::{ChunkSlot, SectionContinuation};
 use crate::db::models::*;
 use crate::db::Database;
 
@@ -202,4 +202,53 @@ fn chunk_counts_per_document_and_active() {
     let per_doc = db.count_chunks_per_document(ctx).unwrap();
     assert_eq!(per_doc.len(), 1);
     assert_eq!(per_doc[&doc], 3, "per-document count includes omitted chunks");
+}
+
+#[test]
+fn chunks_go_in_at_their_place_and_the_order_is_renumbered() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let a = mk_section_chunk(&db, ctx, doc, 0, None, false);
+    let b = mk_section_chunk(&db, ctx, doc, 1, None, false);
+    let new = |text: &str, meta: serde_json::Value| NewChunk {
+        context_id: ctx,
+        document_id: 0, // set by the insert
+        chunk_index: 99,
+        char_start: 0,
+        char_end: 0,
+        text: text.into(),
+        signature: None,
+        is_omitted: false,
+        metadata: meta.to_string(),
+    };
+    let x = new("between", serde_json::json!({ "described_page": 2 }));
+    let y = new("declined", serde_json::json!({ "described_page": 5, "page_description": "declined by m" }));
+    let inserted = db
+        .insert_chunks_in_order(doc, &[ChunkSlot::Existing(a), ChunkSlot::New(&x), ChunkSlot::Existing(b), ChunkSlot::New(&y)])
+        .unwrap();
+    assert_eq!(inserted.len(), 2);
+    let order: Vec<(String, i64)> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| (c.text, c.chunk_index)).collect();
+    assert_eq!(
+        order,
+        vec![("chunk 0".into(), 0), ("between".into(), 1), ("chunk 1".into(), 2), ("declined".into(), 3)]
+    );
+    let spans: Vec<i64> = db.chunk_spans(doc).unwrap().into_iter().map(|s| s.chunk_id).collect();
+    assert_eq!(spans, vec![a, inserted[0].id, b, inserted[1].id], "spans in the new order");
+    let marks = db.page_description_marks(ctx).unwrap();
+    assert_eq!(marks.len(), 2);
+    assert_eq!((marks[0].document_id, marks[0].page, marks[0].declined.as_deref()), (doc, 2, None));
+    assert_eq!((marks[1].page, marks[1].declined.as_deref()), (5, Some("declined by m")));
+    assert_eq!(marks[1].chunk_id, inserted[1].id);
+}
+
+#[test]
+fn an_order_that_misses_or_invents_a_chunk_changes_nothing() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let a = mk_section_chunk(&db, ctx, doc, 0, None, false);
+    let b = mk_section_chunk(&db, ctx, doc, 1, None, false);
+    assert!(db.insert_chunks_in_order(doc, &[ChunkSlot::Existing(a)]).is_err(), "b missing");
+    assert!(db.insert_chunks_in_order(doc, &[ChunkSlot::Existing(a), ChunkSlot::Existing(b), ChunkSlot::Existing(b + 100)]).is_err());
+    let idx: Vec<i64> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| c.chunk_index).collect();
+    assert_eq!(idx, vec![0, 1]);
 }

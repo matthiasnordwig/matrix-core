@@ -1,5 +1,9 @@
 //! Staging tables: `prechunks` (resumable LLM orchestration) and `chunks`
-//! (the physical STAGING TABLE written after assembly).
+//! (the physical STAGING TABLE written after assembly). Chunks added to a
+//! finished document later (OCR text of scanned PDF pages, generated page
+//! descriptions) go in at their page's place: [`Database::insert_chunks_in_order`]
+//! renumbers `chunk_index`; [`Database::page_description_marks`] lists the
+//! page-description chunks (`metadata.described_page`).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -361,6 +365,109 @@ impl Database {
             Some(cid) => stmt.query_map(rusqlite::params![cid, page_number], row_to_chunk)?,
             None => stmt.query_map(rusqlite::params![page_number], row_to_chunk)?,
         };
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+/// One place in a document's new chunk order, see [`Database::insert_chunks_in_order`].
+#[derive(Debug, Clone, Copy)]
+pub enum ChunkSlot<'a> {
+    /// An existing chunk of the document, by id.
+    Existing(i64),
+    /// A chunk to insert here.
+    New(&'a NewChunk),
+}
+
+/// A chunk that stands for a generated description of one PDF page (or the
+/// note that the model declined it), see [`Database::page_description_marks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageDescriptionMark {
+    pub chunk_id: i64,
+    pub document_id: i64,
+    /// 1-based page number (`metadata.described_page`).
+    pub page: i64,
+    /// `metadata.page_description` of a "declined" marker chunk; `None` for a description.
+    pub declined: Option<String>,
+}
+
+impl Database {
+    /// Insert chunks between a document's existing ones in one transaction:
+    /// `order` lists EVERY existing chunk of the document (by id) and the new
+    /// ones in the wanted order; `chunk_index` is renumbered 0.. along it (the
+    /// existing chunks keep their ids, vectors and graph results). Returns the
+    /// inserted chunks. An `order` that misses an existing chunk or names a
+    /// foreign one is `InvalidState` and changes nothing.
+    pub fn insert_chunks_in_order(&self, document_id: i64, order: &[ChunkSlot]) -> Result<Vec<Chunk>> {
+        let existing: Vec<i64> = {
+            let mut stmt = self.conn.prepare("SELECT id FROM chunks WHERE document_id = ?1")?;
+            let rows = stmt.query_map([document_id], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        let mut named: Vec<i64> =
+            order.iter().filter_map(|s| if let ChunkSlot::Existing(id) = s { Some(*id) } else { None }).collect();
+        named.sort_unstable();
+        let mut have = existing.clone();
+        have.sort_unstable();
+        if named != have {
+            return Err(super::CoreError::InvalidState(format!(
+                "chunk order of document {document_id} must name each of its {} chunks exactly once",
+                existing.len()
+            )));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        // Out of the way first: (context, document, chunk_index) is unique.
+        tx.execute("UPDATE chunks SET chunk_index = -1 - chunk_index WHERE document_id = ?1", [document_id])?;
+        let mut inserted = Vec::new();
+        for (i, slot) in order.iter().enumerate() {
+            match slot {
+                ChunkSlot::Existing(id) => {
+                    tx.execute("UPDATE chunks SET chunk_index = ?2 WHERE id = ?1", params![id, i as i64])?;
+                }
+                ChunkSlot::New(c) => {
+                    let c = NewChunk { document_id, chunk_index: i as i64, ..(*c).clone() };
+                    inserted.push(self.create_chunk(&c)?);
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    /// Every chunk of a document in `chunk_index` order with its position
+    /// (byte range, `metadata.page`), without text — where later chunks go in.
+    pub fn chunk_spans(&self, document_id: i64) -> Result<Vec<crate::embedding::page_select::ChunkSpan>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, char_start, char_end,
+                    CASE WHEN json_valid(metadata) THEN CAST(json_extract(metadata, '$.page') AS INTEGER) END
+               FROM chunks WHERE document_id = ?1 ORDER BY chunk_index",
+        )?;
+        let rows = stmt.query_map([document_id], |r| {
+            let page: Option<i64> = r.get(3)?;
+            Ok(crate::embedding::page_select::ChunkSpan {
+                chunk_id: r.get(0)?,
+                char_start: r.get(1)?,
+                char_end: r.get(2)?,
+                page: page.filter(|p| *p > 0),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The page-description chunks of a context (generated descriptions of PDF
+    /// graphics pages and "declined" markers): every chunk whose metadata has
+    /// `described_page`, by document and page.
+    pub fn page_description_marks(&self, context_id: i64) -> Result<Vec<PageDescriptionMark>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, document_id, CAST(json_extract(metadata, '$.described_page') AS INTEGER),
+                    json_extract(metadata, '$.page_description')
+               FROM chunks
+              WHERE context_id = ?1 AND json_valid(metadata)
+                AND json_extract(metadata, '$.described_page') IS NOT NULL
+              ORDER BY document_id, 3, id",
+        )?;
+        let rows = stmt.query_map([context_id], |r| {
+            Ok(PageDescriptionMark { chunk_id: r.get(0)?, document_id: r.get(1)?, page: r.get(2)?, declined: r.get(3)? })
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }

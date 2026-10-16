@@ -6,6 +6,8 @@
 //! graphics page is then rendered again at [`IMAGE_DPI`] as JPEG
 //! ([`JPEG_QUALITY`]). A page that fails (render error, even a panic inside
 //! the PDF library) is skipped — one broken page never fails the whole PDF.
+//! [`PageRenderer`] renders single pages on demand at any resolution (OCR of
+//! scanned pages in the app's ingest).
 //! `examples/page_stats.rs` prints the same measurements as a table.
 
 use pdf_oxide::elements::PathOperation;
@@ -106,12 +108,40 @@ pub fn graphics_pages(pdf: &[u8]) -> Result<Vec<RenderedPage>> {
 /// [`graphics_pages`] plus the page count pdf_oxide sees — the ingest only
 /// trusts page offsets from `pdf_extract` when both libraries agree on it.
 pub fn graphics_pages_counted(pdf: &[u8]) -> Result<(usize, Vec<RenderedPage>)> {
-    let doc = guarded(|| Some(PdfDocument::from_bytes(pdf.to_vec())))
-        .ok_or_else(|| CoreError::Embedding("PDF parser panicked".into()))?
-        .map_err(|e| CoreError::Embedding(format!("open PDF: {e}")))?;
-    let count = guarded(|| doc.page_count().ok()).unwrap_or(0);
-    let pages = graphics_page_numbers(&doc).into_iter().filter_map(|p| render_page_jpeg(&doc, p - 1)).collect();
-    Ok((count, pages))
+    let r = PageRenderer::open(pdf)?;
+    let pages = graphics_page_numbers(&r.doc).into_iter().filter_map(|p| render_page_jpeg(&r.doc, p - 1)).collect();
+    Ok((r.page_count(), pages))
+}
+
+/// An opened PDF whose single pages are rendered on demand (OCR of scanned
+/// pages, a page stored outside the graphics rule). Not `Send`-bound by
+/// contract: keep it on the thread that opened it.
+pub struct PageRenderer {
+    doc: PdfDocument,
+}
+
+impl PageRenderer {
+    /// Open `pdf`; fails when it cannot be parsed (a panic inside the PDF library included).
+    pub fn open(pdf: &[u8]) -> Result<Self> {
+        let doc = guarded(|| Some(PdfDocument::from_bytes(pdf.to_vec())))
+            .ok_or_else(|| CoreError::Embedding("PDF parser panicked".into()))?
+            .map_err(|e| CoreError::Embedding(format!("open PDF: {e}")))?;
+        Ok(Self { doc })
+    }
+
+    /// The page count pdf_oxide sees (0 when it cannot tell).
+    pub fn page_count(&self) -> usize {
+        guarded(|| self.doc.page_count().ok()).unwrap_or(0)
+    }
+
+    /// JPEG of the 1-based `page` at `dpi`; `None` when that page cannot be rendered.
+    pub fn render_jpeg(&self, page: usize, dpi: u32, quality: u8) -> Option<RenderedPage> {
+        let idx = page.checked_sub(1)?;
+        guarded(|| {
+            let img = render_page(&self.doc, idx, &RenderOptions::with_dpi(dpi).as_jpeg(quality)).ok()?;
+            Some(RenderedPage { page, width: img.width, height: img.height, jpeg: img.data })
+        })
+    }
 }
 
 #[cfg(test)]

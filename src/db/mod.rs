@@ -42,6 +42,9 @@ mod pools;
 pub mod settings;
 mod eval;
 pub(crate) mod page_images;
+mod sheet_models;
+pub mod sheet_tables;
+pub mod sheet_query;
 mod transfer;
 pub use transfer::TableSchema;
 pub mod ontology;
@@ -195,6 +198,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v60.sql"),
     include_str!("schema_v61.sql"),
     include_str!("schema_v62.sql"),
+    include_str!("schema_v63.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -222,7 +226,10 @@ impl Database {
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
         )?;
         Self::migrate(&mut conn)?;
-        Ok(Self { conn, secret_key: None })
+        let db = Self { conn, secret_key: None };
+        // Safety net for physical sheet tables whose registry row is gone (sheet_tables.rs).
+        db.drop_orphan_sheet_tables()?;
+        Ok(db)
     }
 
     fn migrate(conn: &mut Connection) -> Result<()> {
@@ -568,3 +575,5 @@ mod model_paths_tests;
 mod llm_endpoint_tests;
 #[cfg(test)]
 mod vision_tests;
+#[cfg(test)]
+mod sheet_query_tests;

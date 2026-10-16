@@ -27,7 +27,9 @@ gguf-metal = ["gguf", "llama-cpp-2/metal"]
 gguf-cuda = ["gguf", "llama-cpp-2/cuda"]
 
 [dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
+# hooks + limits: the read-only sheet-table query connection (db/sheet_query.rs)
+# installs an authorizer, a progress handler (time limit) and a value-length limit.
+rusqlite = { version = "0.32", features = ["bundled", "hooks", "limits"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
