@@ -657,8 +657,9 @@ pub struct StoredVector {
     pub vector: Vec<f32>,
 }
 
-// Retrieval hits live in `scored.rs`, spreadsheet-table rows in `sheet_models.rs`.
-pub use super::{scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*};
+// Retrieval hits live in `scored.rs`, spreadsheet-table rows in `sheet_models.rs`,
+// grid-run history types in `grid_run_models.rs`.
+pub use super::{grid_run_models::*, scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*};
 
 // --- Page images (schema_v61, image search over graphics pages) --------------
 
@@ -892,23 +893,6 @@ pub struct GridChatUpsert {
     pub error: Option<String>,
     pub prompt_snapshot: Option<String>,
     pub row_source_text: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GridRun {
-    pub run_id: String,
-    pub prompt: String,
-    pub updated_at: i64,
-}
-
-/// Per-run metadata stored once (not per row): the system prompt and the
-/// grid-profile JSON schema the run was created with (`{mode,fields}` string,
-/// `None` for plain-text profiles). Lets history loading gate row explosion on
-/// the run's own mode instead of the currently selected profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GridRunMeta {
-    pub system_prompt: String,
-    pub json_schema: Option<String>,
 }
 
 // --- Ontology (GraphRAG) ---------------------------------------------------

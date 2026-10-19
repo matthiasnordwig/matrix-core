@@ -43,6 +43,7 @@ pub mod settings;
 mod eval;
 pub(crate) mod page_images;
 mod sheet_models;
+mod grid_run_models;
 pub mod sheet_tables;
 pub mod sheet_query;
 mod transfer;
@@ -201,6 +202,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v63.sql"),
     include_str!("schema_v64.sql"),
     include_str!("schema_v65.sql"),
+    include_str!("schema_v66.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -565,6 +567,8 @@ fn migrate_v51_to_v52_reranker_kind(conn: &mut Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod grid_run_info_tests;
 #[cfg(test)]
 mod fts_tests;
 #[cfg(test)]

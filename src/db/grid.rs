@@ -7,12 +7,27 @@
 //! `prompt_snapshot`). `json_schema` semantics: a real schema string = JSON
 //! profile, NULL = plain-text profile (never explodes), `''` = legacy run
 //! (pre-schema_v41, mode unknown, so history loading falls back to lenient
-//! shape-based explosion).
+//! shape-based explosion). Since schema_v66 it also records how the run was
+//! started (`GridRunInfo`: model, agentic budget, template, context mode),
+//! which `list_grid_runs` joins into every history entry.
 
 use rusqlite::{params, OptionalExtension, Row};
 
 use super::models::*;
 use super::{Database, Result};
+
+/// The schema_v66 start-settings columns of `grid_run_meta` (NULL when the run
+/// has no meta row or predates v66).
+fn row_to_run_info(row: &Row<'_>) -> rusqlite::Result<GridRunInfo> {
+    Ok(GridRunInfo {
+        llm_endpoint_id: row.get("llm_endpoint_id")?,
+        pool_id: row.get("pool_id")?,
+        model_label: row.get("model_label")?,
+        tool_call_budget: row.get("tool_call_budget")?,
+        template_name: row.get("template_name")?,
+        context_mode: row.get("context_mode")?,
+    })
+}
 
 fn row_to_sheet(row: &Row<'_>) -> rusqlite::Result<GridSheet> {
     Ok(GridSheet {
@@ -152,18 +167,23 @@ impl Database {
         )?)
     }
 
+    /// History entries, newest first, each with the start settings from
+    /// `grid_run_meta` (all `None` for runs without meta or from before v66).
     pub fn list_grid_runs(&self) -> Result<Vec<GridRun>> {
         let mut stmt = self.conn.prepare(
-            "SELECT run_id, MIN(prompt) as prompt, MAX(updated_at) as updated_at 
-             FROM grid_chat_results 
-             GROUP BY run_id 
-             ORDER BY updated_at DESC",
+            "SELECT r.run_id, r.prompt, r.updated_at, m.llm_endpoint_id, m.pool_id, m.model_label,
+                    m.tool_call_budget, m.template_name, m.context_mode
+             FROM (SELECT run_id, MIN(prompt) AS prompt, MAX(updated_at) AS updated_at
+                   FROM grid_chat_results GROUP BY run_id) r
+             LEFT JOIN grid_run_meta m ON m.run_id = r.run_id
+             ORDER BY r.updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(GridRun {
                 run_id: row.get("run_id")?,
                 prompt: row.get("prompt")?,
                 updated_at: row.get("updated_at")?,
+                info: row_to_run_info(row)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -236,10 +256,39 @@ impl Database {
         Ok(self
             .conn
             .query_row(
-                "SELECT system_prompt, json_schema FROM grid_run_meta WHERE run_id = ?1",
+                "SELECT system_prompt, json_schema, llm_endpoint_id, pool_id, model_label,
+                        tool_call_budget, template_name, context_mode
+                 FROM grid_run_meta WHERE run_id = ?1",
                 [run_id],
-                |row| Ok(GridRunMeta { system_prompt: row.get(0)?, json_schema: row.get(1)? }),
+                |row| {
+                    Ok(GridRunMeta {
+                        system_prompt: row.get("system_prompt")?,
+                        json_schema: row.get("json_schema")?,
+                        info: row_to_run_info(row)?,
+                    })
+                },
             )
             .optional()?)
+    }
+
+    /// Records how the run was started (model, agentic budget, template,
+    /// context mode). Call after `upsert_grid_run_meta`; a re-run under the
+    /// same `run_id` overwrites the previous values.
+    pub fn set_grid_run_info(&self, run_id: &str, info: &GridRunInfo) -> Result<()> {
+        self.conn.execute(
+            "UPDATE grid_run_meta SET llm_endpoint_id = ?2, pool_id = ?3, model_label = ?4,
+                    tool_call_budget = ?5, template_name = ?6, context_mode = ?7
+             WHERE run_id = ?1",
+            params![
+                run_id,
+                info.llm_endpoint_id,
+                info.pool_id,
+                info.model_label,
+                info.tool_call_budget,
+                info.template_name,
+                info.context_mode
+            ],
+        )?;
+        Ok(())
     }
 }
