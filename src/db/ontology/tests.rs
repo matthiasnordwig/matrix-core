@@ -9,3 +9,4 @@ mod retrieval;
 mod misc_state;
 mod lenses_reviews;
 mod type_vector_cache;
+mod collection_summary;

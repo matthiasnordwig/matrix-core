@@ -27,6 +27,7 @@ pub mod chat_sessions;
 pub mod chunks;
 pub mod chunk_refs;
 pub mod chunk_kinds;
+pub mod collection_summary;
 mod contexts;
 pub mod embeddings;
 mod fts;
