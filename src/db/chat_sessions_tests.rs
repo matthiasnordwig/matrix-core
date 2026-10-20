@@ -113,6 +113,9 @@ fn list_orders_most_recently_updated_first() {
     let c = db.create_chat_session("C").unwrap();
     // Distinct updated_at so ordering is deterministic (create timestamps can
     // collide within the same second).
+    for id in [a.id, b.id, c.id] {
+        db.append_chat_message(id, "user", "q").unwrap();
+    }
     for (id, ts) in [(a.id, 100), (b.id, 300), (c.id, 200)] {
         db.conn
             .execute(
@@ -167,4 +170,18 @@ fn turn_meta_round_trip() {
     assert!(msgs[0].model.is_none());
     assert_eq!(msgs[1].model.as_deref(), Some("gpt-5"));
     assert_eq!(msgs[1].reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn list_leaves_out_sessions_without_messages() {
+    // A first question that failed never writes a turn; such a session must not
+    // show up under "Recent chats".
+    let db = db();
+    let empty = db.create_chat_session("failed question").unwrap();
+    let used = db.create_chat_session("answered").unwrap();
+    db.append_chat_message(used.id, "user", "q").unwrap();
+    let listed: Vec<i64> = db.list_chat_sessions().unwrap().iter().map(|s| s.id).collect();
+    assert_eq!(listed, vec![used.id]);
+    // Still reachable directly (the UI deletes it after the failure).
+    assert!(db.chat_session(empty.id).unwrap().is_some());
 }

@@ -70,10 +70,16 @@ impl Database {
     }
 
     /// Most-recently-updated first (matches the UI session list ordering).
+    /// Sessions without any message are left out: turns are only written once an
+    /// answer succeeded, so an empty session is a first question that failed, was
+    /// cancelled or is still running — nothing to reopen (the UI keeps its own
+    /// in-flight session visible and deletes it again on failure).
     pub fn list_chat_sessions(&self) -> Result<Vec<ChatSession>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM chat_sessions ORDER BY updated_at DESC, id DESC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM chat_sessions s \
+             WHERE EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id) \
+             ORDER BY updated_at DESC, id DESC",
+        )?;
         let rows = stmt.query_map([], row_to_session)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
