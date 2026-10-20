@@ -138,7 +138,10 @@ impl GgufEngine {
         }
 
         // 4. Sampling loop
-        let mut output = String::new();
+        // Raw bytes, decoded once at the end: a multi-byte UTF-8 character (e.g. the narrow
+        // no-break space in "z. B.") can be split across two tokens, and decoding each
+        // piece on its own turned it into U+FFFD pairs.
+        let mut output: Vec<u8> = Vec::new();
         for _ in 0..max_tokens {
             let next_token = chain.sample(&ctx, batch.n_tokens() - 1);
             
@@ -150,8 +153,7 @@ impl GgufEngine {
             chain.accept(next_token);
 
             if let Ok(token_bytes) = self.model.token_to_piece_bytes(next_token, 128, true, None) {
-                let token_str = String::from_utf8_lossy(&token_bytes);
-                output.push_str(&token_str);
+                output.extend_from_slice(&token_bytes);
             }
 
             batch.clear();
@@ -161,6 +163,6 @@ impl GgufEngine {
             ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
         }
 
-        Ok(output)
+        Ok(String::from_utf8_lossy(&output).into_owned())
     }
 }
