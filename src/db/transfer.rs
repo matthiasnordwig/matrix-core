@@ -105,11 +105,13 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// `(community_id, vector BLOB)` of a context's communities that have one.
+    /// `(community_id, vector BLOB)` of a context's communities that have a
+    /// vector of the context's current model (schema_v67; others are left out).
     pub fn community_vector_blobs(&self, context_id: i64) -> Result<Vec<(i64, Vec<u8>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, vector_blob FROM ontology_communities
-              WHERE context_id = ?1 AND vector_blob IS NOT NULL ORDER BY id",
+            "SELECT co.id, co.vector_blob FROM ontology_communities co JOIN contexts c ON c.id = co.context_id
+              WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL
+                AND co.vector_model_id = c.embedding_model_id ORDER BY co.id",
         )?;
         let rows = stmt.query_map([context_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

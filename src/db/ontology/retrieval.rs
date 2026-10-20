@@ -9,6 +9,8 @@
 //! display, `reversed` only swaps the displayed source/target (via `CASE`), not
 //! the stored edge. The community cosine scan is per-lens too: only communities
 //! of the active lens or with `lens_id IS NULL` (raw view/legacy) may match.
+//! Both scans only read vectors written by the context's model
+//! (`vector_model_id`, schema_v67) — never a vector of another space.
 //!
 //! `retrieve_graph_with` and `retrieve_graph_batch` implement the same
 //! algorithm; the batch variant caches the node/community embedding scan
@@ -34,8 +36,8 @@ impl Database {
             let Some(qvec) = query_by_model.get(&model_id) else { continue; };
             for cid in ctxs {
                 // Brute force cosine on ontology_nodes
-                let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
-                let iter = stmt.query_map([cid], |row| {
+                let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL AND vector_model_id = ?2")?;
+                let iter = stmt.query_map(rusqlite::params![cid, model_id], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -64,9 +66,9 @@ impl Database {
                 let mut stmt_comm = self.conn.prepare(
                     "SELECT co.id, co.vector_blob FROM ontology_communities co
                      JOIN contexts c ON c.id = co.context_id
-                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL
+                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL AND co.vector_model_id = ?2
                        AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)")?;
-                let iter_comm = stmt_comm.query_map([cid], |row| {
+                let iter_comm = stmt_comm.query_map(rusqlite::params![cid, model_id], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -220,8 +222,8 @@ impl Database {
 
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             for cid in ctxs {
-                let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
-                let iter = stmt.query_map([cid], |row| {
+                let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL AND vector_model_id = ?2")?;
+                let iter = stmt.query_map(rusqlite::params![cid, model_id], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -233,9 +235,9 @@ impl Database {
                 let mut stmt_comm = self.conn.prepare(
                     "SELECT co.id, co.vector_blob FROM ontology_communities co
                      JOIN contexts c ON c.id = co.context_id
-                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL
+                     WHERE co.context_id = ?1 AND co.vector_blob IS NOT NULL AND co.vector_model_id = ?2
                        AND (co.lens_id = c.active_lens_id OR co.lens_id IS NULL)")?;
-                let iter_comm = stmt_comm.query_map([cid], |row| {
+                let iter_comm = stmt_comm.query_map(rusqlite::params![cid, model_id], |row| {
                     let id: i64 = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();

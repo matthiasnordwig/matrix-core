@@ -1,6 +1,6 @@
 use crate::db::models::*;
 use crate::db::embeddings::vector_to_blob;
-use super::fixtures::{db, edge, node, seed_context_with_chunk};
+use super::fixtures::{db, edge, node, seed_context_with_chunk, model_of};
 
 // --- retrieval (recursive-CTE hop expansion) --------------------------------
 
@@ -14,9 +14,9 @@ fn retrieve_graph_with_expands_hops_and_stops_at_limit() {
     let c = node(&db, ctx, "C", "CONCEPT");
     // Only A points at the query direction — B/C are orthogonal, so with
     // top_k_nodes=1 only A seeds the recursive-CTE hop expansion below.
-    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
-    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
-    db.update_ontology_node_vector(c.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
+    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(c.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
     edge(&db, ctx, chunk_id, a.id, b.id, "RELATED_TO");
     edge(&db, ctx, chunk_id, b.id, c.id, "RELATED_TO");
 
@@ -61,9 +61,9 @@ fn retrieve_graph_with_applies_active_lens_type_reversal_and_deletion() {
     let a = node(&db, ctx, "A", "CONCEPT");
     let b = node(&db, ctx, "B", "CONCEPT");
     let c = node(&db, ctx, "C", "CONCEPT");
-    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
-    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
-    db.update_ontology_node_vector(c.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
+    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(c.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
     let ab = edge(&db, ctx, chunk_id, a.id, b.id, "RAW_REL");
     let bc = edge(&db, ctx, chunk_id, b.id, c.id, "RAW_REL");
 
@@ -88,8 +88,8 @@ fn retrieve_graph_batch_matches_single_query_result() {
     let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx9");
     let a = node(&db, ctx, "A", "CONCEPT");
     let b = node(&db, ctx, "B", "CONCEPT");
-    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
-    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
+    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
     edge(&db, ctx, chunk_id, a.id, b.id, "RELATED_TO");
 
     let model_id = 1i64;
@@ -143,7 +143,7 @@ fn retrieval_matches_only_active_lens_and_raw_communities() {
     let cb = db.create_ontology_community(ctx, "CommB", 2, "summary under lens B", Some(lens_b.id), Some("1,2")).unwrap();
     let cr = db.create_ontology_community(ctx, "CommRaw", 2, "raw/legacy summary", None, None).unwrap();
     for id in [ca, cb, cr] {
-        db.update_community_vector(id, &vector_to_blob(&[1.0, 0.0])).unwrap();
+        db.update_community_vector(id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
     }
 
     let model_id = 1i64;

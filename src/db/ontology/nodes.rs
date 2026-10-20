@@ -6,7 +6,9 @@
 //! list variant shows the active lens's type instead (for the Ontology tab);
 //! the plain list stays for pipeline/export. `get_ontology_node(s_with_types)`
 //! return the real `entity_type`, unlike `get_ontology_nodes_with_descriptions`
-//! (label + description, for display/prompts only).
+//! (label + description, for display/prompts only). Vectors carry the model
+//! that wrote them (schema_v67, `graph_vectors.rs`); every vector read keeps
+//! only those of the context's current model.
 use crate::db::{Database, Result};
 use crate::db::models::{OntologyNode, NewOntologyNode, MergeLogEntry};
 use rusqlite::OptionalExtension;
@@ -151,10 +153,13 @@ impl Database {
         }
     }
 
-    pub fn update_ontology_node_vector(&self, node_id: i64, vector_blob: &[u8]) -> Result<()> {
+    /// Stores a node vector together with the model that produced it
+    /// (`model_id`, schema_v67 — readers use it only while that model is the
+    /// context's current one, see `graph_vectors.rs`).
+    pub fn update_ontology_node_vector(&self, node_id: i64, vector_blob: &[u8], model_id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE ontology_nodes SET vector_blob = ?1 WHERE id = ?2",
-            rusqlite::params![vector_blob, node_id],
+            "UPDATE ontology_nodes SET vector_blob = ?1, vector_model_id = ?3 WHERE id = ?2",
+            rusqlite::params![vector_blob, node_id, model_id],
         )?;
         Ok(())
     }
@@ -249,8 +254,13 @@ impl Database {
         Ok(map)
     }
 
+    /// Nodes without a vector of the context's current model — no vector at
+    /// all, or one from another space (schema_v67 provenance).
     pub fn get_ontology_nodes_missing_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT id, label, description FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NULL")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, o.label, o.description FROM ontology_nodes o JOIN contexts c ON c.id = o.context_id
+              WHERE o.context_id = ?1 AND (o.vector_blob IS NULL OR o.vector_model_id IS NOT c.embedding_model_id)",
+        )?;
         let iter = stmt.query_map([context_id], |row| {
             let id: i64 = row.get(0)?;
             let label: String = row.get(1)?;
@@ -265,19 +275,26 @@ impl Database {
         Ok(list)
     }
 
-    /// Count nodes with a vector without decoding them — used for export
-    /// size estimates (`get_ontology_nodes_with_embeddings` would decode
-    /// every BLOB).
+    /// Count nodes with a vector of the current model without decoding them —
+    /// used for export size estimates (`get_ontology_nodes_with_embeddings`
+    /// would decode every BLOB).
     pub fn count_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<i64> {
         Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL",
+            "SELECT COUNT(*) FROM ontology_nodes o JOIN contexts c ON c.id = o.context_id
+              WHERE o.context_id = ?1 AND o.vector_blob IS NOT NULL AND o.vector_model_id = c.embedding_model_id",
             [context_id],
             |row| row.get(0),
         )?)
     }
 
+    /// Nodes with a vector of the context's current model (export); vectors
+    /// of another space are left out.
     pub fn get_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
-        let mut stmt = self.conn.prepare("SELECT id, entity_type, label, description, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT o.id, o.entity_type, o.label, o.description, o.vector_blob
+               FROM ontology_nodes o JOIN contexts c ON c.id = o.context_id
+              WHERE o.context_id = ?1 AND o.vector_blob IS NOT NULL AND o.vector_model_id = c.embedding_model_id",
+        )?;
         let iter = stmt.query_map([context_id], |row| {
             let blob: Vec<u8> = row.get(4)?;
             let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -309,7 +326,7 @@ impl Database {
              FROM ontology_nodes o
              JOIN contexts c ON c.id = o.context_id
              LEFT JOIN ontology_lens_node_types lnt ON lnt.node_id = o.id AND lnt.lens_id = c.active_lens_id
-             WHERE o.context_id = ?1 AND o.vector_blob IS NOT NULL"
+             WHERE o.context_id = ?1 AND o.vector_blob IS NOT NULL AND o.vector_model_id = c.embedding_model_id"
         )?;
         let iter = stmt.query_map([context_id], |row| {
             let blob: Vec<u8> = row.get(4)?;
@@ -472,6 +489,8 @@ impl Database {
         Ok(rows)
     }
 
+    /// Test/legacy insert: the vector gets no model (`vector_model_id` NULL),
+    /// so readers ignore it until it is re-embedded.
     pub fn insert_ontology_node(&self, context_id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
         self.conn.execute(
             "INSERT INTO ontology_nodes (context_id, label, entity_type, raw_entity_type, description, vector_blob) VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
@@ -484,10 +503,11 @@ impl Database {
     /// `raw_entity_type` is updated alongside `entity_type` (lens
     /// materialization never touches these columns, see
     /// `ontology_lens_node_types`).
-    pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8]) -> Result<()> {
+    /// `vector_model_id` = the model that produced `vector_blob`.
+    pub fn update_ontology_node(&self, id: i64, label: &str, entity_type: &str, description: &str, vector_blob: &[u8], vector_model_id: Option<i64>) -> Result<()> {
         self.conn.execute(
-            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, raw_entity_type = ?2, description = ?3, vector_blob = ?4 WHERE id = ?5",
-            rusqlite::params![label, entity_type, description, vector_blob, id],
+            "UPDATE ontology_nodes SET label = ?1, entity_type = ?2, raw_entity_type = ?2, description = ?3, vector_blob = ?4, vector_model_id = ?6 WHERE id = ?5",
+            rusqlite::params![label, entity_type, description, vector_blob, id, vector_model_id],
         )?;
         Ok(())
     }
@@ -501,9 +521,15 @@ impl Database {
         Ok(self.conn.query_row("SELECT context_id FROM ontology_nodes WHERE id = ?1", [id], |row| row.get(0))?)
     }
 
-    pub fn search_ontology_nodes_semantic(&self, context_id: i64, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
-        let mut stmt = self.conn.prepare("SELECT id, vector_blob FROM ontology_nodes WHERE context_id = ?1 AND vector_blob IS NOT NULL")?;
-        let rows = stmt.query_map([context_id], |row| {
+    /// Cosine search over the node vectors written by `model_id` (the model the
+    /// query was embedded with) — vectors of another space never take part, an
+    /// empty space gives an empty result.
+    pub fn search_ontology_nodes_semantic(&self, context_id: i64, model_id: i64, query_vec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, vector_blob FROM ontology_nodes
+              WHERE context_id = ?1 AND vector_blob IS NOT NULL AND vector_model_id = ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![context_id, model_id], |row| {
             let id: i64 = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
             let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
@@ -513,6 +539,9 @@ impl Database {
         let mut results = Vec::new();
         for r in rows {
             let (id, v) = r?;
+            if v.len() != query_vec.len() {
+                continue;
+            }
             let score = crate::db::embeddings::cosine(query_vec, &v);
             results.push((id, score));
         }

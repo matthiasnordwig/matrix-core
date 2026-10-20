@@ -67,8 +67,12 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_community_vector(&self, community_id: i64, vector_blob: &[u8]) -> Result<()> {
-        self.conn.execute("UPDATE ontology_communities SET vector_blob = ?1 WHERE id = ?2", rusqlite::params![vector_blob, community_id])?;
+    /// Stores a community vector with the model that produced it (schema_v67).
+    pub fn update_community_vector(&self, community_id: i64, vector_blob: &[u8], model_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ontology_communities SET vector_blob = ?1, vector_model_id = ?3 WHERE id = ?2",
+            rusqlite::params![vector_blob, community_id, model_id],
+        )?;
         Ok(())
     }
 
@@ -124,26 +128,34 @@ impl Database {
         Ok(out)
     }
 
-    /// Summary-cache lookup: returns `(summary_text, vector_blob)` of an
+    /// Summary-cache lookup: returns `(summary_text, (vector_blob, model))` of an
     /// existing community with the same member set **under the same lens**
     /// (cache key is `(lens_id, members_key)`, not `members_key` alone — the
     /// same node set can deserve different summaries under different lenses;
     /// architecture-review 2026-07-06). Rows with an empty summary (created
-    /// by a cache-miss recompute) never count as hits.
+    /// by a cache-miss recompute) never count as hits. The vector comes along
+    /// only if it belongs to the context's current model — a vector of another
+    /// space is not carried over, the copy then counts as missing and gets
+    /// re-embedded.
     pub fn find_community_by_members_key(
         &self,
         context_id: i64,
         lens_id: Option<i64>,
         members_key: &str,
-    ) -> Result<Option<(String, Option<Vec<u8>>)>> {
+    ) -> Result<Option<(String, Option<(Vec<u8>, i64)>)>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT summary_text, vector_blob FROM ontology_communities
-             WHERE context_id = ?1 AND lens_id IS ?2 AND members_key = ?3 AND summary_text != ''
+            "SELECT co.summary_text,
+                    CASE WHEN co.vector_model_id = c.embedding_model_id THEN co.vector_blob END,
+                    CASE WHEN co.vector_model_id = c.embedding_model_id THEN co.vector_model_id END
+               FROM ontology_communities co JOIN contexts c ON c.id = co.context_id
+             WHERE co.context_id = ?1 AND co.lens_id IS ?2 AND co.members_key = ?3 AND co.summary_text != ''
              LIMIT 1",
         )?;
         let mut rows = stmt.query(rusqlite::params![context_id, lens_id, members_key])?;
         if let Some(row) = rows.next()? {
-            Ok(Some((row.get(0)?, row.get(1)?)))
+            let blob: Option<Vec<u8>> = row.get(1)?;
+            let model: Option<i64> = row.get(2)?;
+            Ok(Some((row.get(0)?, blob.zip(model))))
         } else {
             Ok(None)
         }
@@ -168,14 +180,17 @@ impl Database {
         Ok(())
     }
 
-    /// Communities still lacking an embedding vector — after a pipeline run,
+    /// Communities still lacking a vector of the context's current model (none,
+    /// or one of another space) — after a pipeline run,
     /// cache-hit communities already carry their copied vector and other
     /// lenses' rows must not be re-embedded, so `embed_communities` embeds
     /// only these.
     pub fn list_communities_missing_vector(&self, context_id: i64) -> Result<Vec<OntologyCommunity>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COMMUNITY_COLS} FROM ontology_communities
-             WHERE context_id = ?1 AND vector_blob IS NULL AND summary_text != ''"
+             WHERE context_id = ?1 AND summary_text != ''
+               AND (vector_blob IS NULL OR vector_model_id IS NOT
+                    (SELECT embedding_model_id FROM contexts WHERE id = ?1))"
         ))?;
         let rows = stmt.query_map([context_id], row_to_community)?
             .filter_map(|r| r.ok()).collect();

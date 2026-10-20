@@ -106,3 +106,9 @@ pub(super) fn edge(db: &Database, ctx: i64, chunk_id: i64, source: i64, target: 
     })
     .unwrap()
 }
+
+/// The embedding model a seeded context is bound to (graph vectors are
+/// written with it, schema_v67 provenance).
+pub(super) fn model_of(db: &Database, ctx: i64) -> i64 {
+    db.context(ctx).unwrap().unwrap().embedding_model_id.unwrap()
+}

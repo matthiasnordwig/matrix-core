@@ -1,6 +1,6 @@
 use crate::db::models::*;
 use crate::db::embeddings::vector_to_blob;
-use super::fixtures::{db, edge, node, seed_context_with_chunk};
+use super::fixtures::{db, edge, node, seed_context_with_chunk, model_of};
 
 // --- profiles -----------------------------------------------------------
 
@@ -58,7 +58,7 @@ fn node_crud_and_lookups() {
 
     assert!(db.get_ontology_nodes_missing_embeddings(ctx).unwrap().iter().any(|(id, _, _)| *id == n.id));
     assert_eq!(db.count_ontology_nodes_with_embeddings(ctx).unwrap(), 0);
-    db.update_ontology_node_vector(n.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
+    db.update_ontology_node_vector(n.id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
     assert!(db.get_ontology_nodes_missing_embeddings(ctx).unwrap().is_empty());
     assert_eq!(db.get_ontology_nodes_with_embeddings(ctx).unwrap().len(), 1);
     assert_eq!(db.count_ontology_nodes_with_embeddings(ctx).unwrap(), 1);
@@ -76,10 +76,10 @@ fn semantic_search_ranks_nearest_node() {
     let (ctx, _chunk) = seed_context_with_chunk(&db, "Ctx2");
     let a = node(&db, ctx, "A", "CONCEPT");
     let b = node(&db, ctx, "B", "CONCEPT");
-    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0])).unwrap();
-    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0])).unwrap();
+    db.update_ontology_node_vector(a.id, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
+    db.update_ontology_node_vector(b.id, &vector_to_blob(&[0.0, 1.0]), model_of(&db, ctx)).unwrap();
 
-    let hits = db.search_ontology_nodes_semantic(ctx, &[0.9, 0.1], 1).unwrap();
+    let hits = db.search_ontology_nodes_semantic(ctx, model_of(&db, ctx), &[0.9, 0.1], 1).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].0, a.id);
 }

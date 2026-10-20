@@ -10,6 +10,10 @@
 //! read that shows types to a user or LLM joins `contexts.active_lens_id`
 //! (`COALESCE(lens value, raw)`). The un-lensed reads remain for the pipeline
 //! and export.
+//!
+//! Graph vectors carry their embedding model (`vector_model_id`, schema_v67):
+//! every reader compares only vectors of the context's current model
+//! (`graph_vectors.rs`).
 mod profiles;
 mod nodes;
 mod edges;
@@ -24,6 +28,7 @@ mod edge_reviews;
 mod lenses;
 mod schema_suggestions;
 mod type_vector_cache;
+mod graph_vectors;
 
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,7 @@
 //! `ontology_community_members`. See `communities.rs`.
 use crate::db::embeddings::vector_to_blob;
 use crate::db::models::*;
-use super::fixtures::{db, node, seed_context_with_chunk};
+use super::fixtures::{db, node, seed_context_with_chunk, model_of};
 
 fn lens(db: &crate::db::Database, ctx: i64, name: &str) -> i64 {
     let profile = db
@@ -82,7 +82,7 @@ fn members_key_cache_is_per_lens_and_skips_empty_summaries() {
     let lens_b = lens(&db, ctx, "lens-b");
 
     let ca = db.create_ontology_community(ctx, "Comm A", 2, "cached summary", Some(lens_a), Some("1,2")).unwrap();
-    db.update_community_vector(ca, &vector_to_blob(&[0.5, 0.5])).unwrap();
+    db.update_community_vector(ca, &vector_to_blob(&[0.5, 0.5]), model_of(&db, ctx)).unwrap();
     // Same member set under lens B, but with an EMPTY summary (recompute miss).
     db.create_ontology_community(ctx, "Comm B", 2, "", Some(lens_b), Some("1,2")).unwrap();
 
@@ -153,7 +153,7 @@ fn list_communities_missing_vector_skips_vectored_and_empty_summary_rows() {
     let db = db();
     let (ctx, _chunk) = seed_context_with_chunk(&db, "CtxComm6");
     let with_vec = db.create_ontology_community(ctx, "HasVec", 2, "s1", None, Some("1,2")).unwrap();
-    db.update_community_vector(with_vec, &vector_to_blob(&[1.0, 0.0])).unwrap();
+    db.update_community_vector(with_vec, &vector_to_blob(&[1.0, 0.0]), model_of(&db, ctx)).unwrap();
     let missing = db.create_ontology_community(ctx, "NoVec", 2, "s2", None, Some("3,4")).unwrap();
     db.create_ontology_community(ctx, "EmptySummary", 2, "", None, Some("5,6")).unwrap();
 
