@@ -50,6 +50,7 @@ pub mod sheet_query;
 mod transfer;
 pub use transfer::TableSchema;
 pub mod ontology;
+mod savepoint;
 
 /// Errors surfaced by the persistence layer.
 #[derive(Debug, thiserror::Error)]
@@ -205,6 +206,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v65.sql"),
     include_str!("schema_v66.sql"),
     include_str!("schema_v67.sql"),
+    include_str!("schema_v68.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -235,6 +237,8 @@ impl Database {
         let db = Self { conn, secret_key: None };
         // Safety net for physical sheet tables whose registry row is gone (sheet_tables.rs).
         db.drop_orphan_sheet_tables()?;
+        // Parked evidence of deleted documents expires (ontology/evidence_parking.rs).
+        db.purge_expired_parked_evidence()?;
         Ok(db)
     }
 

@@ -8,5 +8,6 @@ pub mod inference;
 pub mod llama_backend;
 pub mod refs;
 pub mod secrets;
+pub mod text_match;
 
 pub use db::{models, CoreError, Database, Result};

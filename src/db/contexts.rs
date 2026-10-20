@@ -249,9 +249,11 @@ impl Database {
         Ok(true)
     }
 
-    /// Delete a document; its sheet tables are dropped in the same savepoint.
+    /// Delete a document; its sheet tables are dropped and its graph evidence
+    /// parked in the same savepoint (`ontology/evidence_parking.rs`, which also
+    /// has `delete_document_parking` with the counts).
     pub fn delete_document(&self, id: i64) -> Result<bool> {
-        self.with_sheet_drop("document_id = ?1", id, || Ok(self.conn.execute("DELETE FROM documents WHERE id = ?1", [id])? > 0))
+        Ok(self.delete_document_parking(id)?.deleted)
     }
 
     /// Copy all documents of context `src` with their chunks (text, offsets,

@@ -1,7 +1,8 @@
 //! Whole-context ontology teardown (used when a context's documents are
-//! re-processed or deleted). Deletes edges, nodes and the extracted-chunk
-//! markers; dependent rows (edge evidence, lens types/verdicts, edge reviews,
-//! community members) go via FK cascade. Communities (`communities.rs`),
+//! re-processed or deleted). Deletes edges, nodes, the extracted-chunk markers
+//! and the parked evidence of deleted documents (`evidence_parking.rs`);
+//! dependent rows (edge evidence, lens types/verdicts, edge reviews, community
+//! members) go via FK cascade. Communities (`communities.rs`),
 //! quarantine/chunk states and lenses are separate and not touched here.
 use crate::db::{Database, Result};
 
@@ -11,6 +12,7 @@ impl Database {
         tx.execute("DELETE FROM ontology_edges WHERE context_id = ?1", [context_id])?;
         tx.execute("DELETE FROM ontology_nodes WHERE context_id = ?1", [context_id])?;
         tx.execute("DELETE FROM ontology_extracted_chunks WHERE context_id = ?1", [context_id])?;
+        tx.execute("DELETE FROM ontology_parked_documents WHERE context_id = ?1", [context_id])?;
         tx.commit()?;
         Ok(())
     }

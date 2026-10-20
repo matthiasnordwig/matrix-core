@@ -283,7 +283,9 @@ impl Database {
             > 0)
     }
 
-    /// Remove all chunks of a document (used before re-staging on a re-run).
+    /// Remove all chunks of a document — their graph evidence and extracted
+    /// marks go with them. To make a document's chunks anew, use
+    /// `replace_document_chunks` (`ontology/evidence_carry_db.rs`) instead.
     pub fn delete_chunks_for_document(&self, document_id: i64) -> Result<usize> {
         Ok(self
             .conn
@@ -423,26 +425,27 @@ impl Database {
                 _ => None,
             })
             .collect();
-        let tx = self.conn.unchecked_transaction()?;
-        // Out of the way first: (context, document, chunk_index) is unique.
-        for (id, _) in &moved {
-            tx.execute("UPDATE chunks SET chunk_index = -1 - chunk_index WHERE id = ?1", [id])?;
-        }
-        for (id, i) in &moved {
-            tx.execute("UPDATE chunks SET chunk_index = ?2 WHERE id = ?1", params![id, i])?;
-        }
-        let mut inserted = Vec::new();
-        for (i, slot) in order.iter().enumerate() {
-            match slot {
-                ChunkSlot::Existing(_) => {}
-                ChunkSlot::New(c) => {
-                    let c = NewChunk { document_id, chunk_index: i as i64, ..(*c).clone() };
-                    inserted.push(self.create_chunk(&c)?);
+        // A savepoint, so this also runs inside `replace_document_chunks`.
+        self.in_savepoint("insert_chunks", || {
+            // Out of the way first: (context, document, chunk_index) is unique.
+            for (id, _) in &moved {
+                self.conn.execute("UPDATE chunks SET chunk_index = -1 - chunk_index WHERE id = ?1", [id])?;
+            }
+            for (id, i) in &moved {
+                self.conn.execute("UPDATE chunks SET chunk_index = ?2 WHERE id = ?1", params![id, i])?;
+            }
+            let mut inserted = Vec::new();
+            for (i, slot) in order.iter().enumerate() {
+                match slot {
+                    ChunkSlot::Existing(_) => {}
+                    ChunkSlot::New(c) => {
+                        let c = NewChunk { document_id, chunk_index: i as i64, ..(*c).clone() };
+                        inserted.push(self.create_chunk(&c)?);
+                    }
                 }
             }
-        }
-        tx.commit()?;
-        Ok(inserted)
+            Ok(inserted)
+        })
     }
 
     /// Every chunk of a document in `chunk_index` order with its position

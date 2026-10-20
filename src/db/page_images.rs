@@ -133,31 +133,37 @@ impl Database {
         Ok(())
     }
 
-    /// Replace an image document's text and chunks in one transaction (new
+    /// Replace an image document's text and chunks in one savepoint (new
     /// generated description): `documents.extracted_text`/`byte_size` get
-    /// `text`, the old chunks go (their vectors and graph results with them),
-    /// `chunks` are inserted, and the page-1 picture keeps its row and image
+    /// `text`, the old chunks are replaced by `chunks` with the graph's
+    /// evidence carried over by text (`replace_document_chunks`; vectors go
+    /// with the old chunks), and the page-1 picture keeps its row and image
     /// vector — only its text range becomes the whole new text. Returns the
-    /// number of chunks inserted; an unknown document is `NotFound`.
-    pub fn replace_image_document_text(&self, document_id: i64, text: &str, chunks: &[NewChunk]) -> Result<usize> {
-        let tx = self.conn.unchecked_transaction()?;
-        let n = tx.execute(
-            "UPDATE documents SET extracted_text = ?2, byte_size = ?3 WHERE id = ?1",
-            params![document_id, text, text.len() as i64],
-        )?;
-        if n == 0 {
-            return Err(CoreError::NotFound(format!("document {document_id}")));
-        }
-        tx.execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?;
-        for c in chunks {
-            self.create_chunk(c)?;
-        }
-        tx.execute(
-            "UPDATE page_images SET char_start = 0, char_end = ?2 WHERE document_id = ?1 AND page = 1",
-            params![document_id, text.len() as i64],
-        )?;
-        tx.commit()?;
-        Ok(chunks.len())
+    /// number of chunks inserted and the carry-over counts; an unknown
+    /// document is `NotFound`.
+    pub fn replace_image_document_text(
+        &self,
+        document_id: i64,
+        text: &str,
+        chunks: &[NewChunk],
+    ) -> Result<(usize, crate::db::ontology::evidence_carry::EvidenceCarryReport)> {
+        self.replace_document_chunks(document_id, || {
+            let n = self.conn.execute(
+                "UPDATE documents SET extracted_text = ?2, byte_size = ?3 WHERE id = ?1",
+                params![document_id, text, text.len() as i64],
+            )?;
+            if n == 0 {
+                return Err(CoreError::NotFound(format!("document {document_id}")));
+            }
+            for c in chunks {
+                self.create_chunk(c)?;
+            }
+            self.conn.execute(
+                "UPDATE page_images SET char_start = 0, char_end = ?2 WHERE document_id = ?1 AND page = 1",
+                params![document_id, text.len() as i64],
+            )?;
+            Ok(chunks.len())
+        })
     }
 
     /// Remember on an image document's chunks that its image model gave no

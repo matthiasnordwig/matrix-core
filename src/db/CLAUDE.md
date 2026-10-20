@@ -15,11 +15,13 @@ fremdes SQL ausführt (eigene Nur-Lese-Verbindung + Authorizer) — Sperren dort
 `sheet_query_tests.rs` zu erweitern.
 
 `ontology/` ist ein eigenes Ordner-Modul — jede Datei dort hat ein eigenes `impl Database { ... }`.
+Chunks eines Dokuments neu anlegen nur über `replace_document_chunks` (`ontology/evidence_carry_db.rs`), sonst gehen
+die Belege des Graphen verloren; Transaktionen, die darin laufen können, als Savepoint (`savepoint.rs`).
 
 Vor dem Lesen ganzer Dateien: `grep -n "pub fn " *.rs ontology/*.rs`.
 
 **Tests:** `tests.rs` (CRUD-Round-Trips, FK, Vektor-Blob, Cosine, Eval),
-`ontology/tests.rs` + `ontology/tests/*` (Ontologie inkl. Lens-Join, Communities, Merge-Log),
+`ontology/tests.rs` + `ontology/tests/*` (Ontologie inkl. Lens-Join, Communities, Merge-Log, Belege umhängen/parken = `evidence_carry{,_db}.rs`),
 dazu `*_tests.rs` je Thema (FTS, chunk_refs, chunks, chat_sessions, ref_abbreviations,
 reranker, rename, embedding_kind, page_images, transfer, context_copy, secret_fields,
 llm_endpoint = Endpunkt-Flags/Pool-Invariante/Reasoning-Listen, vision = schema_v62, mmproj = schema_v65, grid_run_info = schema_v66, graph_vector_migration = schema_v67 (Herkunft der Graph-Vektoren; Leser-Filter in `ontology/tests/graph_vectors.rs`),

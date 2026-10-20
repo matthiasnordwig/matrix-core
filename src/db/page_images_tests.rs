@@ -259,7 +259,7 @@ fn replacing_image_document_text_swaps_chunks_and_keeps_the_picture() {
     let n = db
         .replace_image_document_text(doc, text, &[chunk(ctx, doc, 0, "# a.png", 0), chunk(ctx, doc, 1, "A cat.", 40)])
         .unwrap();
-    assert_eq!(n, 2);
+    assert_eq!(n.0, 2);
     let d = db.document(doc).unwrap().unwrap();
     assert_eq!((d.extracted_text.as_deref(), d.byte_size), (Some(text), Some(text.len() as i64)));
     let texts: Vec<String> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| c.text).collect();
