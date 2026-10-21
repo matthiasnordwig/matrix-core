@@ -1,6 +1,10 @@
 //! On-device generation through llama.cpp: `gguf` (chat), `gguf_vlm` (picture
-//! + instruction via mtmd) — both behind the `gguf` feature — and the
-//! llama.cpp-free text helpers of the vision engine (`vlm_prompt`).
+//! + instruction via mtmd) and their shared prompt builder `chat_template` —
+//! behind the `gguf` feature — plus the llama.cpp-free text helpers
+//! (`chat_text`: template route + Harmony answer, `vlm_prompt`).
+#[cfg(feature = "gguf")]
+mod chat_template;
+pub mod chat_text;
 #[cfg(feature = "gguf")]
 pub mod gguf;
 #[cfg(feature = "gguf")]

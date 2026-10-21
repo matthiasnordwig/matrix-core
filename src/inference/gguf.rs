@@ -1,3 +1,7 @@
+//! Local chat engine: one GGUF chat model through llama.cpp, messages in, answer
+//! text out. The prompt comes from the model's chat template (`chat_template.rs`),
+//! sampling is temperature 0.7 with a mild repetition penalty, and a gpt-oss
+//! Harmony reply is cut to its `final` channel (`chat_text::harmony_final`).
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
@@ -80,21 +84,16 @@ impl GgufEngine {
         let mut ctx = self.model.new_context(backend, ctx_params)
             .map_err(|e| format!("context create: {e}"))?;
 
-        // 1. Template (read native from GGUF)
-        let tmpl = self.model.chat_template(None)
-            .map_err(|e| format!("model has no default chat template or invalid: {e}"))?;
-            
-        let mut chat_msgs = Vec::new();
-        for (role, content) in messages {
-            chat_msgs.push(llama_cpp_2::model::LlamaChatMessage::new(role.to_string(), content.to_string())
-                .map_err(|e| format!("invalid chat message: {e}"))?);
-        }
-        
-        let formatted_prompt = self.model.apply_chat_template(&tmpl, &chat_msgs, true)
-            .map_err(|e| format!("failed to apply chat template: {e}"))?;
+        // 1. Template: built-in list or the model's Jinja template (`chat_template.rs`).
+        let formatted_prompt = super::chat_template::render(&self.model, messages)?;
 
-        // 2. Tokenize
-        let tokens = self.model.str_to_token(&formatted_prompt, llama_cpp_2::model::AddBos::Always)
+        // 2. Tokenize (no second BOS when the template wrote one itself)
+        let add_bos = if super::chat_template::starts_with_bos(&self.model, &formatted_prompt) {
+            llama_cpp_2::model::AddBos::Never
+        } else {
+            llama_cpp_2::model::AddBos::Always
+        };
+        let tokens = self.model.str_to_token(&formatted_prompt, add_bos)
             .map_err(|e| format!("tokenize: {e}"))?;
 
         // Check if prompt fits in context window
@@ -175,6 +174,7 @@ impl GgufEngine {
             ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
         }
 
-        Ok(String::from_utf8_lossy(&output).into_owned())
+        // gpt-oss: only the Harmony `final` channel is the answer.
+        super::chat_text::harmony_final(&String::from_utf8_lossy(&output))
     }
 }

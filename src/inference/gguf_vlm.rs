@@ -6,7 +6,8 @@
 //! Flow per call: picture bytes (JPEG/PNG, decoded by mtmd's own stb_image) →
 //! `MtmdBitmap::from_buffer` → user turn "marker + instruction"
 //! (`vlm_prompt::user_turn_with_image`) wrapped by the model's own chat
-//! template (llama.cpp's built-in list, else the model's Jinja template with thinking off) → `MtmdContext::tokenize` (text and image chunks) →
+//! template (`chat_template.rs`: llama.cpp's built-in list or the model's Jinja
+//! template with thinking off) → `MtmdContext::tokenize` (text and image chunks) →
 //! a context sized to prompt + answer (`vlm_prompt::context_for`, KV cache
 //! type from the endpoint's `kv_quantization`) → `eval_chunks` (image encoder + decode) → greedy generation up to
 //! `max_tokens` (the endpoint's Output Reserve). The answer reports whether it
@@ -28,9 +29,8 @@ use std::sync::Mutex;
 use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText};
-use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use llama_cpp_2::sampling::LlamaSampler;
 
 use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
@@ -108,38 +108,12 @@ impl GgufVisionEngine {
 
         // Tokenize first (needs no llama context) to size the context.
         let bitmap = MtmdBitmap::from_buffer(&self.mtmd, image).map_err(|e| format!("picture could not be read by the local model: {e}"))?;
-        let tmpl = self.model.chat_template(None).map_err(|e| format!("model has no default chat template or invalid: {e}"))?;
-        // llama.cpp's built-in template list first; a template it does not know
-        // (Gemma 4's new turn tokens) is rendered from the model's Jinja
-        // template, with thinking off (a thinking block would eat the answer budget).
         let user_text = user_turn_with_image(prompt, DEFAULT_MEDIA_MARKER);
-        let user = LlamaChatMessage::new("user".to_string(), user_text.clone()).map_err(|e| format!("invalid chat message: {e}"))?;
-        let text = match self.model.apply_chat_template(&tmpl, &[user], true) {
-            Ok(t) => t,
-            Err(_) => {
-                let messages = serde_json::json!([{ "role": "user", "content": user_text }]).to_string();
-                let params = OpenAIChatTemplateParams {
-                    messages_json: &messages,
-                    tools_json: None,
-                    tool_choice: None,
-                    json_schema: None,
-                    grammar: None,
-                    reasoning_format: None,
-                    chat_template_kwargs: None,
-                    add_generation_prompt: true,
-                    use_jinja: true,
-                    parallel_tool_calls: false,
-                    enable_thinking: false,
-                    add_bos: false,
-                    add_eos: false,
-                    parse_tool_calls: false,
-                };
-                self.model.apply_chat_template_oaicompat(&tmpl, &params).map(|r| r.prompt).map_err(|e| format!("failed to apply chat template: {e}"))?
-            }
-        };
+        let text = super::chat_template::render(&self.model, &[("user", &user_text)])?;
+        let add_special = !super::chat_template::starts_with_bos(&self.model, &text);
         let chunks = self
             .mtmd
-            .tokenize(MtmdInputText { text, add_special: true, parse_special: true }, &[&bitmap])
+            .tokenize(MtmdInputText { text, add_special, parse_special: true }, &[&bitmap])
             .map_err(|e| format!("image tokenize: {e}"))?;
         let prompt_tokens = chunks.total_tokens();
         if !fits_context(prompt_tokens, max_tokens, self.n_ctx) {
