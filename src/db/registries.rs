@@ -416,6 +416,17 @@ impl Database {
         Ok(())
     }
 
+    /// Set an endpoint's context window and the split derived from it (prompt window, answer
+    /// reserve) — for models whose window the platform reports (Apple Intelligence: the OS
+    /// decides it). Touches nothing else.
+    pub fn set_llm_endpoint_context(&self, id: i64, context_window: i64, window_tokens: i64, output_reserve_tokens: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE llm_endpoints SET context_window = ?2, window_tokens = ?3, output_reserve_tokens = ?4 WHERE id = ?1",
+            params![id, context_window, window_tokens, output_reserve_tokens],
+        )?;
+        Ok(())
+    }
+
     /// Re-point a local endpoint's image projector (`mmproj_path`) after the
     /// app's folders moved, like `set_llm_endpoint_base_url`.
     pub fn set_llm_endpoint_mmproj_path(&self, id: i64, mmproj_path: &str) -> Result<()> {

@@ -1,4 +1,4 @@
-//! `llm_endpoints` CRUD (capability flags `stream_fallback`, `tools_advanced`,
+//! `llm_endpoints` CRUD (context-window setter, capability flags `stream_fallback`, `tools_advanced`,
 //! `supports_vision` round-trips + defaults), endpoint pools (gguf-per-pool
 //! rule, ordering, cascades) and reasoning-effort lists (FK SET NULL). All
 //! against an in-memory database.
@@ -40,6 +40,16 @@ pub(super) fn seed_endpoint(db: &Database, name: &str, provider: &str) -> i64 {
     })
     .unwrap()
     .id
+}
+
+#[test]
+fn set_llm_endpoint_context_changes_only_the_window_fields() {
+    let db = db();
+    let id = seed_endpoint(&db, "apple", "apple");
+    db.set_llm_endpoint_context(id, 16384, 14336, 2048).unwrap();
+    let e = db.llm_endpoint(id).unwrap().unwrap();
+    assert_eq!((e.context_window, e.window_tokens, e.output_reserve_tokens), (16384, 14336, 2048));
+    assert_eq!((e.name.as_str(), e.provider.as_str(), e.max_concurrency), ("apple", "apple", 2));
 }
 
 #[test]
