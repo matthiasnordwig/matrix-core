@@ -86,7 +86,10 @@ fn harmony_reply_cut_off_while_reasoning_is_an_error() {
 
 // --- prefix_reuse -------------------------------------------------------------
 
-use super::prefix_reuse::{checkpoints_for, plan, retain, Reuse, CHECKPOINT_BACK, CHECKPOINT_EVERY, MAX_CHECKPOINTS};
+use super::prefix_reuse::{
+    best_snapshot, checkpoints_for, plan, retain, shared_len, snapshot_at, snapshots_to_drop, Reuse, CHECKPOINT_BACK,
+    CHECKPOINT_EVERY, MAX_CHECKPOINTS, MAX_SNAPSHOTS, SNAPSHOT_BYTES, SNAPSHOT_MIN_GAIN,
+};
 
 #[test]
 fn attention_memory_is_cut_at_the_shared_prefix() {
@@ -118,17 +121,70 @@ fn partial_memory_continues_or_restores_the_latest_shared_checkpoint() {
 #[test]
 fn checkpoints_every_few_thousand_tokens_and_just_before_the_end() {
     let e = CHECKPOINT_EVERY;
-    assert_eq!(checkpoints_for(0, 10_000), vec![e, 2 * e, 10_000 - CHECKPOINT_BACK]);
+    assert_eq!(checkpoints_for(0, 10_000, None), vec![e, 2 * e, 10_000 - CHECKPOINT_BACK]);
     // Only beyond what was kept; nothing for a prompt too short to matter.
-    assert_eq!(checkpoints_for(e, 10_000), vec![2 * e, 10_000 - CHECKPOINT_BACK]);
-    assert_eq!(checkpoints_for(9_950, 10_000), Vec::<usize>::new());
-    assert_eq!(checkpoints_for(0, CHECKPOINT_BACK), Vec::<usize>::new());
+    assert_eq!(checkpoints_for(e, 10_000, None), vec![2 * e, 10_000 - CHECKPOINT_BACK]);
+    assert_eq!(checkpoints_for(9_950, 10_000, None), Vec::<usize>::new());
+    assert_eq!(checkpoints_for(0, CHECKPOINT_BACK, None), Vec::<usize>::new());
+}
+
+#[test]
+fn a_chat_turn_also_saves_where_its_question_begins() {
+    let e = CHECKPOINT_EVERY;
+    // System prompt + earlier turns end at 700; this turn's sources and question follow.
+    assert_eq!(checkpoints_for(0, 5_000, Some(700)), vec![700, e, 5_000 - CHECKPOINT_BACK]);
+    // Already kept, or no earlier message: nothing extra; also for a prompt too short otherwise.
+    assert_eq!(checkpoints_for(700, 5_000, Some(700)), vec![e, 5_000 - CHECKPOINT_BACK]);
+    assert_eq!(checkpoints_for(0, 100, Some(40)), vec![40]);
+    assert_eq!(checkpoints_for(0, 100, Some(100)), Vec::<usize>::new());
 }
 
 #[test]
 fn retained_checkpoints_keep_the_earliest_and_the_latest() {
-    let kept = retain(vec![9, 1, 5, 3, 7, 11]);
+    let kept = retain(vec![9, 1, 5, 3, 7, 11], None);
     assert_eq!(kept.len(), MAX_CHECKPOINTS);
     assert_eq!(kept.first(), Some(&1));
     assert_eq!(kept.last(), Some(&11));
+    // The turn start survives even where an unpinned one would go first.
+    let kept = retain(vec![9, 1, 5, 3, 7, 11], Some(3));
+    assert_eq!(kept.len(), MAX_CHECKPOINTS);
+    assert!(kept.contains(&3) && kept.contains(&1) && kept.contains(&11));
+}
+
+#[test]
+fn a_snapshot_is_saved_where_the_prompt_stops_sharing_the_last_call() {
+    let g = SNAPSHOT_MIN_GAIN;
+    // Grid row 2 after row 1: nothing kept (recurrent model), the instructions are shared.
+    assert_eq!(snapshot_at(2 * g, 0, 4 * g), Some(2 * g));
+    // Row 3 restored the snapshot and shares only a few tokens more: no second one.
+    assert_eq!(snapshot_at(2 * g + 10, 2 * g, 4 * g), None);
+    // Too little shared, or the whole prompt (a repeated call): nothing to save.
+    assert_eq!(snapshot_at(g - 1, 0, 4 * g), None);
+    assert_eq!(snapshot_at(4 * g, 0, 4 * g), None);
+    assert_eq!(shared_len(&[1, 2, 3, 4], &[1, 2, 9]), 2);
+}
+
+#[test]
+fn the_longest_snapshot_the_prompt_starts_with_is_restored() {
+    let grid: &[i32] = &[1, 2, 3];
+    let grid_longer: &[i32] = &[1, 2, 3, 4, 5];
+    let chat: &[i32] = &[7, 8];
+    let snaps = [grid, chat, grid_longer];
+    assert_eq!(best_snapshot(&snaps, &[1, 2, 3, 4, 5, 6], 0), Some(2));
+    assert_eq!(best_snapshot(&snaps, &[1, 2, 3, 9], 0), Some(0));
+    assert_eq!(best_snapshot(&snaps, &[7, 8, 1], 0), Some(1));
+    // Not longer than what the context keeps anyway, or nothing left to read: no restore.
+    assert_eq!(best_snapshot(&snaps, &[1, 2, 3, 9], 3), None);
+    assert_eq!(best_snapshot(&snaps, &[7, 8], 0), None);
+    assert_eq!(best_snapshot(&snaps, &[9], 0), None);
+}
+
+#[test]
+fn snapshots_are_bounded_by_count_and_bytes_oldest_first() {
+    assert_eq!(snapshots_to_drop(&[]), 0);
+    assert_eq!(snapshots_to_drop(&[1; MAX_SNAPSHOTS]), 0);
+    assert_eq!(snapshots_to_drop(&[1; MAX_SNAPSHOTS + 2]), 2);
+    let half = SNAPSHOT_BYTES / 2;
+    assert_eq!(snapshots_to_drop(&[half, half, 1]), 1, "the oldest goes first");
+    assert_eq!(snapshots_to_drop(&[1, SNAPSHOT_BYTES + 1]), 2, "one that alone is too big is not kept");
 }
