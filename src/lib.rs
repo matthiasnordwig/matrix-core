@@ -9,5 +9,6 @@ pub mod llama_backend;
 pub mod refs;
 pub mod secrets;
 pub mod text_match;
+pub mod token_estimate;
 
 pub use db::{models, CoreError, Database, Result};

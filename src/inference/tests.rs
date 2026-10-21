@@ -1,4 +1,4 @@
-//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`).
+//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse`).
 use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
 
 #[test]
@@ -82,4 +82,53 @@ fn harmony_reply_cut_off_while_reasoning_is_an_error() {
     // A commentary (tool) channel is no answer either.
     let raw = "<|channel|>commentary to=functions.search<|message|>{\"q\":1}<|call|>";
     assert!(harmony_final(raw).is_err());
+}
+
+// --- prefix_reuse -------------------------------------------------------------
+
+use super::prefix_reuse::{checkpoints_for, plan, retain, Reuse, CHECKPOINT_BACK, CHECKPOINT_EVERY, MAX_CHECKPOINTS};
+
+#[test]
+fn attention_memory_is_cut_at_the_shared_prefix() {
+    // Last call: prompt 1..=6 + answer 7, 8. Next round re-renders the answer differently.
+    let cached = [1, 2, 3, 4, 5, 6, 7, 8];
+    assert_eq!(plan(&cached, &[1, 2, 3, 4, 5, 6, 9, 10], false, &[]), Reuse::Truncate { keep: 6 });
+    assert_eq!(plan(&cached, &[9, 1, 2], false, &[]), Reuse::Fresh);
+    assert_eq!(plan::<i32>(&[], &[1, 2], false, &[]), Reuse::Fresh);
+}
+
+#[test]
+fn one_prompt_token_is_always_read_again() {
+    assert_eq!(plan(&[1, 2, 3], &[1, 2, 3], false, &[]), Reuse::Truncate { keep: 2 });
+    assert_eq!(plan(&[1], &[1], false, &[]), Reuse::Fresh);
+}
+
+#[test]
+fn partial_memory_continues_or_restores_the_latest_shared_checkpoint() {
+    let cached = [1, 2, 3, 4, 5, 6, 7, 8];
+    // The new prompt continues everything in memory: nothing to cut back.
+    assert_eq!(plan(&cached, &[1, 2, 3, 4, 5, 6, 7, 8, 9], true, &[]), Reuse::Truncate { keep: 8 });
+    // Diverges at 6: the latest state saved inside the shared part wins.
+    assert_eq!(plan(&cached, &[1, 2, 3, 4, 5, 6, 0], true, &[2, 4, 7]), Reuse::Restore { keep: 4 });
+    // Saved only after the divergence, or never: start over.
+    assert_eq!(plan(&cached, &[1, 2, 3, 0], true, &[4]), Reuse::Fresh);
+    assert_eq!(plan(&cached, &[1, 2, 3, 4, 5, 6, 0], true, &[]), Reuse::Fresh);
+}
+
+#[test]
+fn checkpoints_every_few_thousand_tokens_and_just_before_the_end() {
+    let e = CHECKPOINT_EVERY;
+    assert_eq!(checkpoints_for(0, 10_000), vec![e, 2 * e, 10_000 - CHECKPOINT_BACK]);
+    // Only beyond what was kept; nothing for a prompt too short to matter.
+    assert_eq!(checkpoints_for(e, 10_000), vec![2 * e, 10_000 - CHECKPOINT_BACK]);
+    assert_eq!(checkpoints_for(9_950, 10_000), Vec::<usize>::new());
+    assert_eq!(checkpoints_for(0, CHECKPOINT_BACK), Vec::<usize>::new());
+}
+
+#[test]
+fn retained_checkpoints_keep_the_earliest_and_the_latest() {
+    let kept = retain(vec![9, 1, 5, 3, 7, 11]);
+    assert_eq!(kept.len(), MAX_CHECKPOINTS);
+    assert_eq!(kept.first(), Some(&1));
+    assert_eq!(kept.last(), Some(&11));
 }

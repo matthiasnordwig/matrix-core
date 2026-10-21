@@ -2,20 +2,76 @@
 //! text out. The prompt comes from the model's chat template (`chat_template.rs`),
 //! sampling is temperature 0.7 with a mild repetition penalty, and a gpt-oss
 //! Harmony reply is cut to its `final` channel (`chat_text::harmony_final`).
+//!
+//! The engine keeps one llama.cpp context with the tokens of its last call in memory
+//! (`Session`): the next call reads only what its prompt does not share with them
+//! (`prefix_reuse.rs` decides; models with a recurrent part restore a saved state), so
+//! the rounds of a tool loop no longer read the whole conversation again. A call that
+//! finds the session busy (another generation on the same engine) gets a context of its
+//! own and keeps nothing; a failed or stopped call starts the next one fresh. The kept
+//! context holds its memory (KV, recurrent state, compute buffers) between calls.
+use llama_cpp_2::context::session::LlamaStateSeqFlags;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
+use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, TryLockError};
+
+use super::prefix_reuse::{self, Reuse};
 
 // Process-global backend shared with the GGUF embedder/reranker — a
 // module-local singleton here caused `BackendAlreadyInitialized` for
 // whichever GGUF consumer initialized second (see `crate::llama_backend`).
 use crate::llama_backend::backend as get_backend;
 
+/// Tokens read per decode call.
+const CHUNK: usize = 512;
+
 pub struct GgufEngine {
-    model: LlamaModel,
+    // Declared before `model`: fields drop in order, and the session's context borrows it.
+    session: Mutex<Option<Session>>,
+    model: Box<LlamaModel>,
     n_ctx: u32,
+    /// Memory that cannot be cut back to any position (recurrent part, sliding window).
+    partial_memory: bool,
+}
+
+/// Context settings a session was made with; another call with other settings starts a new one.
+#[derive(Clone, PartialEq, Eq)]
+struct SessionKey {
+    kv_quantization: Option<String>,
+    cpu_threads: Option<i64>,
+}
+
+/// What the context's memory holds.
+#[derive(Default)]
+struct Memory {
+    tokens: Vec<LlamaToken>,
+    /// Saved partial states (`LlamaStateSeqFlags::PARTIAL_ONLY`) by the position they were
+    /// taken at, ascending (`prefix_reuse::retain`).
+    checkpoints: Vec<(usize, Vec<u8>)>,
+}
+
+struct Session {
+    // SAFETY: borrows the engine's boxed model, which never moves and outlives the session
+    // (`GgufEngine` field order).
+    ctx: LlamaContext<'static>,
+    key: SessionKey,
+    memory: Memory,
+}
+
+// SAFETY: a llama.cpp context may move between threads; it is only ever used by the one
+// thread holding the engine's session lock.
+unsafe impl Send for Session {}
+
+/// Whether the model's attention uses a sliding window (its metadata names one).
+fn has_sliding_window(model: &LlamaModel) -> bool {
+    model
+        .meta_val_str("general.architecture")
+        .is_ok_and(|arch| model.meta_val_str(&format!("{arch}.attention.sliding_window")).is_ok())
 }
 
 impl GgufEngine {
@@ -54,7 +110,18 @@ impl GgufEngine {
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| format!("model load {model_path}: {e}"))?;
             
-        Ok(Self { model, n_ctx })
+        let partial_memory = model.is_recurrent() || model.is_hybrid() || has_sliding_window(&model);
+        Ok(Self { session: Mutex::new(None), model: Box::new(model), n_ctx, partial_memory })
+    }
+
+    /// Tokens of `text` in this model's vocabulary (no BOS, no chat template) — the exact
+    /// count an app can budget with instead of an estimate. Needs only the loaded weights'
+    /// vocabulary, no context, so it is cheap and safe next to a running generation.
+    pub fn count_tokens(&self, text: &str) -> Result<usize, String> {
+        self.model
+            .str_to_token(text, llama_cpp_2::model::AddBos::Never)
+            .map(|t| t.len())
+            .map_err(|e| format!("tokenize: {e}"))
     }
 
     /// One chat completion. `stop` is checked before every prompt chunk and every generated
@@ -62,28 +129,6 @@ impl GgufEngine {
     /// `Err("cancelled")` instead of running to the end of the answer.
     #[allow(clippy::too_many_arguments)]
     pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>, stop: &AtomicBool) -> Result<String, String> {
-        let stopped = || stop.load(Ordering::Relaxed);
-        let backend = get_backend()?;
-        let mut ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(self.n_ctx))
-            .with_n_batch(512);
-
-        if let Some(q) = kv_quantization {
-            let kv_type = match q {
-                "Q8_0" => KvCacheType::Q8_0,
-                "Q4_0" => KvCacheType::Q4_0,
-                _ => KvCacheType::F16,
-            };
-            ctx_params = ctx_params.with_type_k(kv_type).with_type_v(kv_type);
-        }
-        
-        if let Some(t) = cpu_threads {
-            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
-        }
-
-        let mut ctx = self.model.new_context(backend, ctx_params)
-            .map_err(|e| format!("context create: {e}"))?;
-
         // 1. Template: built-in list or the model's Jinja template (`chat_template.rs`).
         let formatted_prompt = super::chat_template::render(&self.model, messages)?;
 
@@ -103,32 +148,6 @@ impl GgufEngine {
                 tokens.len(), self.n_ctx, max_tokens, available_ctx));
         }
 
-        // 3. Eval prompt in chunks
-        let chunk_size = 512;
-        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(chunk_size, 1);
-        let mut n_past = 0;
-        
-        for chunk in tokens.chunks(chunk_size) {
-            if stopped() {
-                return Err("cancelled".to_string());
-            }
-            batch.clear();
-            for (i, &tok) in chunk.iter().enumerate() {
-                let is_last = (n_past as usize + i) == (tokens.len() - 1);
-                batch.add(tok, n_past + i as i32, &[0], is_last).unwrap();
-            }
-            ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
-            n_past += chunk.len() as i32;
-        }
-
-        let samplers = vec![
-            llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
-            llama_cpp_2::sampling::LlamaSampler::top_k(40),
-            llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
-            llama_cpp_2::sampling::LlamaSampler::temp(0.7),
-            llama_cpp_2::sampling::LlamaSampler::dist(1337),
-        ];
-
         // WARNING: We are ignoring `json_schema` for GGUF models here.
         // llama.cpp's `LlamaSampler::grammar` has a known issue where it aborts/segfaults 
         // the entire process when initializing the state machine for complex, deeply nested 
@@ -138,10 +157,126 @@ impl GgufEngine {
             println!("WARN: json_schema was passed to GGUF but is ignored to prevent llama.cpp C++ parser crash.");
         }
 
+        let key = SessionKey { kv_quantization: kv_quantization.map(str::to_string), cpu_threads };
+        let mut slot = match self.session.try_lock() {
+            Ok(slot) => slot,
+            Err(TryLockError::Poisoned(p)) => {
+                let mut slot = p.into_inner();
+                *slot = None;
+                slot
+            }
+            Err(TryLockError::WouldBlock) => {
+                // Busy: a context of its own for this call, nothing kept.
+                let mut ctx = self.new_context(&key)?;
+                return self.complete(&mut ctx, &mut Memory::default(), &tokens, max_tokens, stop);
+            }
+        };
+        if slot.as_ref().is_some_and(|s| s.key != key) {
+            *slot = None;
+        }
+        if slot.is_none() {
+            let ctx = self.new_context(&key)?;
+            // SAFETY: see `Session::ctx`.
+            let ctx = unsafe { std::mem::transmute::<LlamaContext<'_>, LlamaContext<'static>>(ctx) };
+            *slot = Some(Session { ctx, key, memory: Memory::default() });
+        }
+        let session = slot.as_mut().expect("set above");
+        let res = self.complete(&mut session.ctx, &mut session.memory, &tokens, max_tokens, stop);
+        if res.is_err() {
+            *slot = None; // memory state unknown: the next call starts fresh
+        }
+        res
+    }
+
+    fn new_context(&self, key: &SessionKey) -> Result<LlamaContext<'_>, String> {
+        let mut ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(self.n_ctx))
+            .with_n_batch(CHUNK as u32);
+        if let Some(q) = key.kv_quantization.as_deref() {
+            let kv_type = match q {
+                "Q8_0" => KvCacheType::Q8_0,
+                "Q4_0" => KvCacheType::Q4_0,
+                _ => KvCacheType::F16,
+            };
+            ctx_params = ctx_params.with_type_k(kv_type).with_type_v(kv_type);
+        }
+        if let Some(t) = key.cpu_threads {
+            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
+        }
+        self.model.new_context(get_backend()?, ctx_params).map_err(|e| format!("context create: {e}"))
+    }
+
+    /// Prepares `ctx` for `tokens` along `prefix_reuse::plan`; returns how many are kept.
+    fn reuse(&self, ctx: &mut LlamaContext<'_>, memory: &mut Memory, tokens: &[LlamaToken]) -> usize {
+        let at: Vec<usize> = memory.checkpoints.iter().map(|c| c.0).collect();
+        let keep = match prefix_reuse::plan(&memory.tokens, tokens, self.partial_memory, &at) {
+            Reuse::Fresh => 0,
+            Reuse::Truncate { keep } => {
+                if ctx.clear_kv_cache_seq(Some(0), Some(keep as u32), None).unwrap_or(false) { keep } else { 0 }
+            }
+            Reuse::Restore { keep } => {
+                let state = memory.checkpoints.iter().find(|c| c.0 == keep).map(|c| c.1.as_slice()).unwrap_or_default();
+                // SAFETY: the bytes were written by `state_seq_get_data_ext` of this context.
+                let restored = unsafe { ctx.state_seq_set_data_ext(state, 0, LlamaStateSeqFlags::PARTIAL_ONLY) };
+                if restored && ctx.clear_kv_cache_seq(Some(0), Some(keep as u32), None).unwrap_or(false) { keep } else { 0 }
+            }
+        };
+        if keep == 0 {
+            ctx.clear_kv_cache();
+        }
+        memory.tokens.truncate(keep);
+        memory.checkpoints.retain(|c| c.0 <= keep);
+        keep
+    }
+
+    /// Reads the prompt (from what `reuse` kept on) and samples the answer into `ctx`.
+    fn complete(&self, ctx: &mut LlamaContext<'_>, memory: &mut Memory, tokens: &[LlamaToken], max_tokens: u32, stop: &AtomicBool) -> Result<String, String> {
+        let stopped = || stop.load(Ordering::Relaxed);
+        let keep = self.reuse(ctx, memory, tokens);
+        eprintln!("gguf: prompt {} tokens, {keep} kept from the last call", tokens.len());
+
+        // 3. Eval the rest of the prompt in chunks; save the partial state at the checkpoints.
+        let checkpoints = if self.partial_memory { prefix_reuse::checkpoints_for(keep, tokens.len()) } else { Vec::new() };
+        let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(CHUNK, 1);
+        let mut pos = keep;
+        while pos < tokens.len() {
+            if stopped() {
+                return Err("cancelled".to_string());
+            }
+            let next_checkpoint = checkpoints.iter().copied().find(|&c| c > pos).unwrap_or(usize::MAX);
+            let end = (pos + CHUNK).min(tokens.len()).min(next_checkpoint);
+            batch.clear();
+            for (i, &tok) in tokens[pos..end].iter().enumerate() {
+                let p = pos + i;
+                batch.add(tok, p as i32, &[0], p == tokens.len() - 1).map_err(|e| format!("batch: {e}"))?;
+            }
+            ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+            memory.tokens.extend_from_slice(&tokens[pos..end]);
+            pos = end;
+            if pos == next_checkpoint {
+                let size = ctx.state_seq_get_size_ext(0, LlamaStateSeqFlags::PARTIAL_ONLY);
+                let mut state = vec![0u8; size];
+                // SAFETY: `state` holds the size llama.cpp asked for.
+                let written = unsafe { ctx.state_seq_get_data_ext(state.as_mut_ptr(), 0, LlamaStateSeqFlags::PARTIAL_ONLY) };
+                state.truncate(written);
+                memory.checkpoints.push((pos, state));
+                let keep: Vec<usize> = prefix_reuse::retain(memory.checkpoints.iter().map(|c| c.0).collect());
+                memory.checkpoints.retain(|c| keep.contains(&c.0));
+            }
+        }
+        let mut n_past = tokens.len() as i32;
+
+        let samplers = vec![
+            llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
+            llama_cpp_2::sampling::LlamaSampler::top_k(40),
+            llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
+            llama_cpp_2::sampling::LlamaSampler::temp(0.7),
+            llama_cpp_2::sampling::LlamaSampler::dist(1337),
+        ];
         let mut chain = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
 
         // Accept prompt tokens into the chain to avoid repeating the prompt
-        for &t in &tokens {
+        for &t in tokens {
             chain.accept(t);
         }
 
@@ -154,7 +289,7 @@ impl GgufEngine {
             if stopped() {
                 return Err("cancelled".to_string());
             }
-            let next_token = chain.sample(&ctx, batch.n_tokens() - 1);
+            let next_token = chain.sample(ctx, batch.n_tokens() - 1);
             
             // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
             if self.model.is_eog_token(next_token) {
@@ -168,10 +303,11 @@ impl GgufEngine {
             }
 
             batch.clear();
-            batch.add(next_token, n_past, &[0], true).unwrap();
+            batch.add(next_token, n_past, &[0], true).map_err(|e| format!("batch: {e}"))?;
             n_past += 1;
 
             ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
+            memory.tokens.push(next_token);
         }
 
         // gpt-oss: only the Harmony `final` channel is the answer.

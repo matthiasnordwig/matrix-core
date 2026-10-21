@@ -17,7 +17,7 @@ pub mod text_repair;
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};
 pub use signatures::{assemble, LlmChunkResponse, StartItem};
-pub use window::{build_windows, estimate_tokens, Window};
+pub use window::{build_windows, Window};
 
 /// Pre-chunking stage: split into segments (line- or sentence-fine) and build
 /// token-budgeted overlapping windows whose text is the indexed render.

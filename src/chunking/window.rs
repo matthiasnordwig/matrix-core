@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::segments::Segment;
+use crate::token_estimate::estimate_tokens;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Window {
@@ -17,12 +18,6 @@ pub struct Window {
     pub text: String, // indexed render shown to the LLM
 }
 
-/// Rough, offline token estimate (~4 chars/token). Deliberately approximate —
-/// leave headroom in `window_tokens` for the prompt template + model output.
-pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(4).max(1)
-}
-
 fn render(segments: &[Segment], start: usize, end: usize) -> String {
     (start..end)
         .map(|i| format!("[{}] {}", segments[i].index, segments[i].text))
@@ -30,8 +25,8 @@ fn render(segments: &[Segment], start: usize, end: usize) -> String {
         .join("\n")
 }
 
-/// Build overlapping windows whose estimated token count stays within
-/// `window_tokens` (a single oversized segment still forms its own window).
+/// Build overlapping windows whose estimated token count (`token_estimate`, script-aware)
+/// stays within `window_tokens` (a single oversized segment still forms its own window).
 pub fn build_windows(
     segments: &[Segment],
     window_tokens: usize,
