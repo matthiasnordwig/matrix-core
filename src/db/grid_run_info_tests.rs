@@ -106,3 +106,20 @@ fn run_info_serializes_flat_for_the_frontend() {
     let old: GridRunMeta = serde_json::from_str(r#"{"system_prompt":"s","json_schema":null}"#).unwrap();
     assert_eq!(old.info, GridRunInfo::default());
 }
+
+/// schema_v70 drops the dead `grid_sheets`/`grid_rows` tables, on a fresh and
+/// on an existing v69 database; the history table `grid_chat_results` stays.
+#[test]
+fn v70_drops_the_dead_grid_sheet_tables() {
+    let tables = |conn: &rusqlite::Connection| -> Vec<String> {
+        let mut st = conn.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'grid_%' OR name = 'idx_grid_rows_sheet'").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    };
+    let old = super::vision_tests::migrate_to(69);
+    assert!(tables(&old).iter().any(|t| t == "grid_rows"), "v69 still has the table");
+    let db = Database::init(old).unwrap();
+    assert_eq!(db.schema_version().unwrap(), super::MIGRATIONS.len() as i64);
+    let fresh = tables(&db.conn);
+    assert!(fresh.iter().all(|t| t != "grid_rows" && t != "grid_sheets" && t != "idx_grid_rows_sheet"), "{fresh:?}");
+    assert!(fresh.iter().any(|t| t == "grid_chat_results"));
+}

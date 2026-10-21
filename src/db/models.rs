@@ -84,10 +84,9 @@ pub enum ChatStatus {
 }
 
 /// `Chunk` = row is backed by a real `chunks` row (`row_ref_id` = chunk id).
-/// `GridRow` = repurposed for Excel/CSV upload rows (the `grid_sheets`/
-/// `grid_rows` tables this variant was originally named for are dead code —
-/// no command creates them): `row_ref_id` is a synthetic, per-run-stable id
-/// the frontend assigns (negative index), and `row_source_text` on
+/// `GridRow` = Excel/CSV upload rows (the name is historical; the tables it
+/// once referred to were dropped in schema_v70): `row_ref_id` is a synthetic,
+/// per-run-stable id the frontend assigns (negative index), and `row_source_text` on
 /// `GridChatResult`/`GridChatUpsert` carries the row's source text since
 /// there's no `chunks` row to reconstruct it from on history load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -827,38 +826,6 @@ pub struct NewEvalRunResult {
 }
 
 // --- Grid & async matrix-chat ----------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GridSheet {
-    pub id: i64,
-    pub name: String,
-    pub columns: String,
-    pub row_count: i64,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewGridSheet {
-    pub name: String,
-    pub columns: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GridRow {
-    pub id: i64,
-    pub sheet_id: Option<i64>,
-    pub source_chunk_id: Option<i64>,
-    pub row_index: i64,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewGridRow {
-    pub sheet_id: Option<i64>,
-    pub source_chunk_id: Option<i64>,
-    pub row_index: i64,
-    pub data: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridChatResult {

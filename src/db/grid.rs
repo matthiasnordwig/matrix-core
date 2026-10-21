@@ -1,5 +1,4 @@
-//! Grid surface: `grid_sheets`, `grid_rows`, and the async matrix-chat
-//! results (`grid_chat_results`). Chat is not history-aware, so a cell upsert
+//! Grid surface: the async matrix-chat results (`grid_chat_results`). Chat is not history-aware, so a cell upsert
 //! overwrites the row's prior result for the same run.
 //!
 //! `grid_run_meta` stores, once per run, the system prompt and the grid
@@ -29,26 +28,6 @@ fn row_to_run_info(row: &Row<'_>) -> rusqlite::Result<GridRunInfo> {
     })
 }
 
-fn row_to_sheet(row: &Row<'_>) -> rusqlite::Result<GridSheet> {
-    Ok(GridSheet {
-        id: row.get("id")?,
-        name: row.get("name")?,
-        columns: row.get("columns")?,
-        row_count: row.get("row_count")?,
-        created_at: row.get("created_at")?,
-    })
-}
-
-fn row_to_grid_row(row: &Row<'_>) -> rusqlite::Result<GridRow> {
-    Ok(GridRow {
-        id: row.get("id")?,
-        sheet_id: row.get("sheet_id")?,
-        source_chunk_id: row.get("source_chunk_id")?,
-        row_index: row.get("row_index")?,
-        data: row.get("data")?,
-    })
-}
-
 fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
     Ok(GridChatResult {
         id: row.get("id")?,
@@ -69,41 +48,6 @@ fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
 }
 
 impl Database {
-    // --- sheets & rows -----------------------------------------------------
-
-    pub fn create_grid_sheet(&self, s: &NewGridSheet) -> Result<GridSheet> {
-        self.conn.execute(
-            "INSERT INTO grid_sheets (name, columns) VALUES (?1, ?2)",
-            params![s.name, s.columns],
-        )?;
-        let id = self.conn.last_insert_rowid();
-        Ok(self
-            .conn
-            .query_row("SELECT * FROM grid_sheets WHERE id = ?1", [id], row_to_sheet)?)
-    }
-
-    pub fn create_grid_row(&self, r: &NewGridRow) -> Result<GridRow> {
-        self.conn.execute(
-            "INSERT INTO grid_rows (sheet_id, source_chunk_id, row_index, data)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![r.sheet_id, r.source_chunk_id, r.row_index, r.data],
-        )?;
-        if let Some(sheet_id) = r.sheet_id {
-            self.conn.execute(
-                "UPDATE grid_sheets SET row_count = row_count + 1 WHERE id = ?1",
-                [sheet_id],
-            )?;
-        }
-        let id = self.conn.last_insert_rowid();
-        Ok(self
-            .conn
-            .query_row("SELECT * FROM grid_rows WHERE id = ?1", [id], row_to_grid_row)?)
-    }
-
-    pub fn delete_grid_row(&self, id: i64) -> Result<bool> {
-        Ok(self.conn.execute("DELETE FROM grid_rows WHERE id = ?1", [id])? > 0)
-    }
-
     // --- chat results ------------------------------------------------------
 
     /// Insert or overwrite the chat cell for `(run_id, row)`.
