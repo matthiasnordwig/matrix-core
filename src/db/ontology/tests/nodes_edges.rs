@@ -439,3 +439,40 @@ fn delete_ontology_for_context_only_touches_that_context() {
     assert_eq!(db.list_ontology_edges(ctx_b).unwrap().len(), 1);
     assert!(db.get_chunks_with_ontology(ctx_b).unwrap().contains(&chunk_b));
 }
+
+#[test]
+fn evidence_locations_name_document_page_and_section_of_this_context_only() {
+    let db = db();
+    let (ctx, chunk_plain) = seed_context_with_chunk(&db, "CtxLoc");
+    let (other, chunk_other) = seed_context_with_chunk(&db, "CtxLocOther");
+    let doc = db.chunk(chunk_plain).unwrap().unwrap().document_id;
+    let chunk_with = |index: i64, metadata: &str| {
+        db.create_chunk(&NewChunk {
+            context_id: ctx,
+            document_id: doc,
+            chunk_index: index,
+            char_start: 0,
+            char_end: 1,
+            text: "chunk".into(),
+            signature: None,
+            is_omitted: false,
+            metadata: metadata.into(),
+        })
+        .unwrap()
+        .id
+    };
+    let paged = chunk_with(1, r#"{"page": 12}"#);
+    let sectioned = chunk_with(2, r#"{"Seite": "iv", "section": "Termination"}"#);
+    let (a, b) = (node(&db, ctx, "A", "ORG"), node(&db, ctx, "B", "ORG"));
+    let e = edge(&db, ctx, chunk_plain, a.id, b.id, "OWNS");
+    db.add_ontology_edge_chunk(e.id, paged).unwrap();
+    db.add_ontology_edge_chunk(e.id, sectioned).unwrap();
+    let (x, y) = (node(&db, other, "X", "ORG"), node(&db, other, "Y", "ORG"));
+    edge(&db, other, chunk_other, x.id, y.id, "OWNS");
+
+    let locs = db.ontology_evidence_locations(ctx).unwrap();
+    assert_eq!(locs.len(), 3, "only this context's evidence chunks");
+    assert_eq!(locs[&chunk_plain], ("doc.pdf".to_string(), None, None));
+    assert_eq!(locs[&paged], ("doc.pdf".to_string(), Some("12".to_string()), None));
+    assert_eq!(locs[&sectioned], ("doc.pdf".to_string(), Some("iv".to_string()), Some("Termination".to_string())));
+}

@@ -193,10 +193,7 @@ impl Database {
             rusqlite::params![new.context_id, new.source_id, new.target_id, new.relation_type],
             |row| row.get(0)
         )?;
-        self.conn.execute(
-            "INSERT OR IGNORE INTO ontology_edge_chunks (edge_id, chunk_id) VALUES (?1, ?2)",
-            rusqlite::params![edge_id, new.chunk_id],
-        )?;
+        self.add_ontology_edge_chunk_with_evidence(edge_id, new.chunk_id, new.evidence.as_deref())?;
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.context_id, e.source_id, e.target_id, e.relation_type, e.raw_relation_type, json_group_array(json_object('chunk_id', c.chunk_id, 'evidence', c.evidence)) as chunk_data, e.created_at
              FROM ontology_edges e
@@ -395,5 +392,39 @@ impl Database {
             rusqlite::params![edge_id, chunk_id],
         )?;
         Ok(())
+    }
+
+    /// Where each evidence chunk of the context's edges sits: chunk id →
+    /// (document name, page, section heading). Page is read from the same
+    /// metadata keys as `list_chunks_by_page` (number or text, kept as text);
+    /// section from `metadata.section`. One query for the whole graph — the
+    /// GraphML export needs it for every edge.
+    pub fn ontology_evidence_locations(&self, context_id: i64) -> Result<std::collections::HashMap<i64, (String, Option<String>, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT c.id, d.name,
+                    CASE WHEN json_valid(c.metadata) THEN COALESCE(json_extract(c.metadata, '$.page'), json_extract(c.metadata, '$.Page'),
+                                                                   json_extract(c.metadata, '$.seite'), json_extract(c.metadata, '$.Seite')) END,
+                    CASE WHEN json_valid(c.metadata) THEN json_extract(c.metadata, '$.section') END
+             FROM ontology_edge_chunks ec
+             JOIN ontology_edges e ON e.id = ec.edge_id
+             JOIN chunks c ON c.id = ec.chunk_id
+             JOIN documents d ON d.id = c.document_id
+             WHERE e.context_id = ?1",
+        )?;
+        let as_text = |v: rusqlite::types::Value| match v {
+            rusqlite::types::Value::Integer(i) => Some(i.to_string()),
+            rusqlite::types::Value::Real(f) => Some(f.to_string()),
+            rusqlite::types::Value::Text(s) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
+            _ => None,
+        };
+        let rows = stmt.query_map([context_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, rusqlite::types::Value>(2)?, r.get::<_, rusqlite::types::Value>(3)?))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (chunk_id, document, page, section) = row?;
+            out.insert(chunk_id, (document, as_text(page), as_text(section)));
+        }
+        Ok(out)
     }
 }
