@@ -522,6 +522,9 @@ pub struct Context {
     /// descriptions (schema_v62, FK SET NULL); `None` = no descriptions.
     #[serde(default)]
     pub image_llm_id: Option<i64>,
+    /// Bundled sample this context came from (schema_v69, `set_context_sample_key`); `None` = user's own.
+    #[serde(default)]
+    pub sample_key: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

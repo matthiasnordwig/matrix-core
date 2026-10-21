@@ -207,6 +207,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v66.sql"),
     include_str!("schema_v67.sql"),
     include_str!("schema_v68.sql"),
+    include_str!("schema_v69.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -591,5 +592,7 @@ mod llm_endpoint_tests;
 mod vision_tests;
 #[cfg(test)]
 mod mmproj_tests;
+#[cfg(test)]
+mod sample_key_tests;
 #[cfg(test)]
 mod sheet_query_tests;

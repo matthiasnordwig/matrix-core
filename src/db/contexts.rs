@@ -34,6 +34,7 @@ fn row_to_context(row: &Row<'_>) -> rusqlite::Result<Context> {
         status: row.get("status")?,
         embed_images: row.get("embed_images")?,
         image_llm_id: row.get("image_llm_id")?,
+        sample_key: row.get("sample_key")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -126,6 +127,17 @@ impl Database {
         self.conn.execute(
             "UPDATE contexts SET embed_images = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id, on],
+        )?;
+        Ok(())
+    }
+
+    /// Mark the context as the bundled sample `key` (schema_v69; `None` =
+    /// the user's own). Not part of `NewContext`: set by the import of a sample
+    /// bundle and the sample-contract setup only.
+    pub fn set_context_sample_key(&self, id: i64, key: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE contexts SET sample_key = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id, key],
         )?;
         Ok(())
     }
