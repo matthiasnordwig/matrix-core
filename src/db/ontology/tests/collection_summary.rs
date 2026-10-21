@@ -1,6 +1,7 @@
-//! Library-card numbers computed in SQL (`collection_summary.rs`): per-context
-//! counts, top-by-degree concepts and the links among them, lens-aware.
+//! Library-card numbers (`collection_summary.rs`): per-context counts,
+//! concepts by degree, links and the connected miniature selection, lens-aware.
 use super::fixtures::{db, edge, node, seed_context_with_chunk};
+use crate::db::collection_summary::{grow_preview_selection, PreviewNode};
 use crate::db::models::NewOntologyProfile;
 
 #[test]
@@ -19,7 +20,7 @@ fn counts_are_per_context() {
 }
 
 #[test]
-fn top_nodes_by_degree_and_links_among() {
+fn top_nodes_by_degree_and_links() {
     let db = db();
     let (ctx, chunk) = seed_context_with_chunk(&db, "A");
     let hub = node(&db, ctx, "hub", "T");
@@ -37,15 +38,13 @@ fn top_nodes_by_degree_and_links_among() {
     assert_eq!(all.last().map(|n| (n.id, n.degree)), Some((lone.id, 0)));
 
     // Opposite-direction duplicates collapse to one undirected link.
-    let ids = [hub.id, a.id, b.id];
-    let mut links = db.ontology_links_among(ctx, &ids).unwrap();
-    links.sort();
     let mut want = vec![(hub.id.min(a.id), hub.id.max(a.id)), (hub.id.min(b.id), hub.id.max(b.id))];
     want.sort();
+    assert_eq!(db.ontology_links(ctx).unwrap(), want);
+    // The miniature: `lone` has no link and is left out; links only among the picked.
+    let (nodes, links) = db.preview_graph(ctx, 10).unwrap();
+    assert_eq!(nodes.iter().map(|n| n.id).collect::<Vec<_>>(), vec![hub.id, a.id, b.id]);
     assert_eq!(links, want);
-    // Only links between the given nodes; fewer than two ids → none.
-    assert_eq!(db.ontology_links_among(ctx, &[hub.id, lone.id]).unwrap(), vec![]);
-    assert!(db.ontology_links_among(ctx, &[hub.id]).unwrap().is_empty());
 }
 
 #[test]
@@ -77,5 +76,58 @@ fn active_lens_deleted_edges_do_not_count() {
     let top = db.top_ontology_nodes_by_degree(ctx, 5).unwrap();
     let deg = |id: i64| top.iter().find(|n| n.id == id).unwrap().degree;
     assert_eq!((deg(a.id), deg(b.id), deg(c.id)), (1, 0, 1));
-    assert_eq!(db.ontology_links_among(ctx, &[a.id, b.id, c.id]).unwrap().len(), 1);
+    assert_eq!(db.ontology_links(ctx).unwrap().len(), 1);
+}
+
+#[test]
+fn community_slot_follows_the_active_lens_order() {
+    let db = db();
+    let (ctx, _) = seed_context_with_chunk(&db, "A");
+    let a = node(&db, ctx, "a", "T");
+    let b = node(&db, ctx, "b", "T");
+    let lone = node(&db, ctx, "lone", "T");
+    // Raw-view communities (lens NULL, the context has no active lens): slots by id.
+    let c0 = db.create_ontology_community(ctx, "first", 1, "", None, None).unwrap();
+    let c1 = db.create_ontology_community(ctx, "second", 1, "", None, None).unwrap();
+    db.set_community_members(c0, &[b.id]).unwrap();
+    db.set_community_members(c1, &[a.id]).unwrap();
+    let top = db.top_ontology_nodes_by_degree(ctx, 10).unwrap();
+    let slot = |id: i64| top.iter().find(|n| n.id == id).unwrap().community;
+    assert_eq!((slot(b.id), slot(a.id), slot(lone.id)), (Some(0), Some(1), None));
+    // In two communities → the later one's slot, like the graph view's map.
+    db.set_community_members(c0, &[a.id, b.id]).unwrap();
+    let top = db.top_ontology_nodes_by_degree(ctx, 10).unwrap();
+    assert_eq!(top.iter().find(|n| n.id == a.id).unwrap().community, Some(1));
+}
+
+fn pn(ids_by_degree: &[(i64, i64)]) -> Vec<PreviewNode> {
+    ids_by_degree.iter().map(|&(id, degree)| PreviewNode { id, degree, community: None }).collect()
+}
+
+#[test]
+fn selection_grows_connected_from_the_strongest_hub() {
+    // Hub 1 with leaves 2..=5; a separate triangle 10-11-12; pairs 20-21, 30-31 with high degree elsewhere.
+    let nodes = pn(&[(20, 9), (1, 4), (10, 2), (11, 2), (12, 2), (2, 1), (3, 1), (4, 1), (5, 1), (21, 1), (30, 1), (31, 1)]);
+    let links = [(1, 2), (1, 3), (1, 4), (1, 5), (10, 11), (11, 12), (10, 12), (20, 21), (30, 31)];
+    // Pairs never seed; the star comes first, then the triangle.
+    assert_eq!(grow_preview_selection(&nodes, &links, 100), vec![1, 10, 11, 12, 2, 3, 4, 5]);
+    // Budget 6: the star (5) plus one triangle concept, which is a piece < 3 and dropped.
+    assert_eq!(grow_preview_selection(&nodes, &links, 6), vec![1, 2, 3, 4, 5]);
+    // Deterministic.
+    assert_eq!(grow_preview_selection(&nodes, &links, 7), grow_preview_selection(&nodes, &links, 7));
+}
+
+#[test]
+fn selection_prefers_concepts_linked_into_the_shape() {
+    // After 1 and 2, concept 3 (linked to both) comes before the more connected 4 (linked to 1 only).
+    let nodes = pn(&[(1, 3), (2, 2), (4, 2), (3, 2), (5, 1)]);
+    let links = [(1, 2), (1, 3), (2, 3), (1, 4), (4, 5)];
+    assert_eq!(&grow_preview_selection(&nodes, &links, 3)[..], &[1, 2, 3]);
+}
+
+#[test]
+fn selection_without_shapes_takes_the_first_concepts() {
+    let nodes = pn(&[(1, 1), (2, 1), (3, 0)]);
+    assert_eq!(grow_preview_selection(&nodes, &[(1, 2)], 2), vec![1, 2]);
+    assert_eq!(grow_preview_selection(&nodes, &[], 5), vec![1, 2, 3]);
 }
