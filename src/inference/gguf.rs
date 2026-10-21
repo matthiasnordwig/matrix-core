@@ -2,6 +2,7 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Process-global backend shared with the GGUF embedder/reranker — a
 // module-local singleton here caused `BackendAlreadyInitialized` for
@@ -52,7 +53,12 @@ impl GgufEngine {
         Ok(Self { model, n_ctx })
     }
 
-    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<String, String> {
+    /// One chat completion. `stop` is checked before every prompt chunk and every generated
+    /// token: once set (the caller stopped waiting — a stopped chat), generation ends with
+    /// `Err("cancelled")` instead of running to the end of the answer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>, stop: &AtomicBool) -> Result<String, String> {
+        let stopped = || stop.load(Ordering::Relaxed);
         let backend = get_backend()?;
         let mut ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(self.n_ctx))
@@ -104,6 +110,9 @@ impl GgufEngine {
         let mut n_past = 0;
         
         for chunk in tokens.chunks(chunk_size) {
+            if stopped() {
+                return Err("cancelled".to_string());
+            }
             batch.clear();
             for (i, &tok) in chunk.iter().enumerate() {
                 let is_last = (n_past as usize + i) == (tokens.len() - 1);
@@ -143,6 +152,9 @@ impl GgufEngine {
         // piece on its own turned it into U+FFFD pairs.
         let mut output: Vec<u8> = Vec::new();
         for _ in 0..max_tokens {
+            if stopped() {
+                return Err("cancelled".to_string());
+            }
             let next_token = chain.sample(&ctx, batch.n_tokens() - 1);
             
             // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
