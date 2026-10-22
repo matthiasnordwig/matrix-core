@@ -12,8 +12,17 @@ use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use super::chat_text::{route_for, TemplateRoute};
 
 /// Prompt text for `messages` (`(role, content)` pairs), ending with the
-/// assistant turn's opening.
+/// assistant turn's opening. A last `assistant` message is a prefill: the prompt
+/// ends with its text after that opening, and the answer continues it (the app's
+/// forced tool call writes the start of the call this way).
 pub fn render(model: &LlamaModel, messages: &[(&str, &str)]) -> Result<String, String> {
+    match messages.split_last() {
+        Some(((role, prefill), earlier)) if *role == "assistant" => Ok(format!("{}{prefill}", render_turns(model, earlier)?)),
+        _ => render_turns(model, messages),
+    }
+}
+
+fn render_turns(model: &LlamaModel, messages: &[(&str, &str)]) -> Result<String, String> {
     let tmpl = model.chat_template(None).map_err(|e| format!("model has no default chat template or invalid: {e}"))?;
     match route_for(tmpl.to_str().unwrap_or("")) {
         TemplateRoute::Jinja { kwargs } => jinja(model, &tmpl, messages, kwargs),
