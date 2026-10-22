@@ -10,10 +10,8 @@
 //! = the relevance score (higher = more relevant).
 //!
 //! Execution provider: same per-model choice as `onnx.rs` (default CPU, also on
-//! iOS; non-apple always CPU). Pitfall: CoreML's default compute units
-//! (`Coreml` → `All`) reliably crash during inference with this XLM-R model
-//! (large vocab, `word_embeddings` exceeds CoreML's 16384-dim limit); `Ane`
-//! avoids the crash but is slower than CPU, so CPU stays the default.
+//! iOS; non-apple always CPU). CPU is the fastest (~18 ms/pair); `Ane` and
+//! `Coreml` are slower or fail — measurements in `imp` below.
 //! Smoke run: `core/examples/rerank_smoke.rs`.
 
 /// Pure rank-merge (RETRIEVAL_QUALITY_PLAN.md AP3): given the reranker scores
@@ -37,18 +35,18 @@ mod imp {
     //! EP selection mirrors `onnx.rs::OrtEmbedder::load` (MODEL_INFRA_PLAN.md
     //! AP3): a per-model `ExecutionProvider` choice (default CPU), apple-only.
     //!
-    //! Measured (AP3 3a probe, jina-reranker-v2, XLM-R backbone): the CoreML
-    //! default compute-units (`All`) reliably **crashes** at inference time on
-    //! this model — CoreML rejects `roberta.embeddings.word_embeddings.weight`
-    //! (250002x768, exceeds CoreML's 16384 static-dim limit), splits the graph
-    //! into 86 partitions, and one of the resulting CoreML-assigned kernels
-    //! fails at run time ("Unable to compute the prediction"). Restricting
-    //! compute units to `CPUAndNeuralEngine` (the `Ane` option) avoids the crash
-    //! (unsupported ops fall back to CPU) but is ~1.9x slower than plain CPU
-    //! (measured ~46ms/pair vs. ~25ms/pair for a 16-pair batch) — so CPU stays
-    //! the default and `Coreml`/`All` is not recommended for this reranker, but
-    //! is left selectable since a future/different reranker model may fit
-    //! CoreML's limits better.
+    //! Measured (jina-reranker-v2, XLM-R backbone, M-series Mac, 20–30 candidates
+    //! per query, 2026-10-22):
+    //! - **CPU** ~18 ms/pair (0.36–0.55 s per query) — the default.
+    //! - **`Ane`** (`CPUAndNeuralEngine`) does not reach the Neural Engine: the
+    //!   graph runs as CoreML partitions on the CPU in fp32, the Einsum attention
+    //!   is unsupported by CoreML and falls back to ORT — ~2 s per query.
+    //! - **`Coreml`** (`All`) fails at inference in the default NeuralNetwork model
+    //!   format ("Unable to compute the prediction"; the 250002x768 word-embedding
+    //!   exceeds CoreML's 16384 static-dim limit, the graph splits into ~86
+    //!   partitions). The MLProgram format with static shapes runs (~0.94 s per
+    //!   query) but compiles for 1–2.5 minutes on first load — still slower than
+    //!   CPU, so not wired up. `Ane`/`Coreml` stay selectable for other models.
 
     use std::path::Path;
     use std::sync::Mutex;
