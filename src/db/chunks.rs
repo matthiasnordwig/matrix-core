@@ -345,6 +345,23 @@ impl Database {
         Ok(SectionContinuation { chunks, continues_at: None })
     }
 
+    /// The chunk after `chunk_id` in its document (omitted chunks skipped), `None` at the end
+    /// of the document or for an unknown id. Gives a small-window model the text a hit
+    /// continues into (services `commands/adjacent.rs`).
+    pub fn next_chunk(&self, chunk_id: i64) -> Result<Option<Chunk>> {
+        let Some(start) = self.chunk(chunk_id)? else {
+            return Ok(None);
+        };
+        let mut idx = start.chunk_index + 1;
+        while let Some(c) = self.chunk_by_document_index(start.document_id, idx)? {
+            if !c.is_omitted {
+                return Ok(Some(c));
+            }
+            idx += 1;
+        }
+        Ok(None)
+    }
+
     /// Fetch a chunk by (document_id, chunk_index) — the index is unique per
     /// document (`staging_chunk_index_is_unique`), so this is a point lookup.
     fn chunk_by_document_index(&self, document_id: i64, chunk_index: i64) -> Result<Option<Chunk>> {

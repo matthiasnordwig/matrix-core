@@ -253,3 +253,16 @@ fn an_order_that_misses_or_invents_a_chunk_changes_nothing() {
     let idx: Vec<i64> = db.list_chunks(ctx, true).unwrap().into_iter().map(|c| c.chunk_index).collect();
     assert_eq!(idx, vec![0, 1]);
 }
+
+#[test]
+fn next_chunk_skips_omitted_and_ends_with_the_document() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let a = mk_section_chunk(&db, ctx, doc, 0, None, false);
+    let _b = mk_section_chunk(&db, ctx, doc, 1, None, true);
+    let c = mk_section_chunk(&db, ctx, doc, 2, None, false);
+    let next = |id: i64| db.next_chunk(id).unwrap().map(|c| c.id);
+    assert_eq!(next(a), Some(c), "omitted chunk is skipped");
+    assert_eq!(next(c), None, "end of the document");
+    assert_eq!(next(c + 100), None, "unknown id");
+}
