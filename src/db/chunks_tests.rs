@@ -266,3 +266,35 @@ fn next_chunk_skips_omitted_and_ends_with_the_document() {
     assert_eq!(next(c), None, "end of the document");
     assert_eq!(next(c + 100), None, "unknown id");
 }
+
+#[test]
+fn document_outline_reads_chunks_in_index_order_without_omitted_and_ocr_headings() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let mk = |idx: i64, text: &str, metadata: serde_json::Value, omitted: bool| {
+        db.create_chunk(&NewChunk {
+            context_id: ctx,
+            document_id: doc,
+            chunk_index: idx,
+            char_start: 0,
+            char_end: 1,
+            text: text.into(),
+            signature: None,
+            is_omitted: omitted,
+            metadata: metadata.to_string(),
+        })
+        .unwrap()
+        .id
+    };
+    let md = serde_json::json!({ "chunk_type": "markdown_section" });
+    // Created out of order: the outline follows chunk_index, not the id.
+    let usage = mk(3, "## Usage\nUse it.", md.clone(), false);
+    let ocr = mk(2, "## Text on page 2 (OCR)\nScanned", serde_json::json!({ "chunk_type": "markdown_section", "ocr": true }), false);
+    let setup = mk(1, "## Setup\nRun it.", md.clone(), false);
+    let _gone = mk(0, "# Omitted\nNot read.", md.clone(), true);
+    let o = db.document_outline(doc).unwrap();
+    assert_eq!(o.path(setup).as_deref(), Some("Setup"));
+    assert_eq!(o.path(ocr).as_deref(), Some("Setup"), "the OCR section heading is no heading");
+    assert_eq!(o.path(usage).as_deref(), Some("Usage"));
+    assert_eq!(o.section(setup).unwrap().chunk_ids, vec![setup, ocr]);
+}

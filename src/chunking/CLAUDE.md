@@ -8,6 +8,8 @@ LLM-freie Layout-Pfad für PDFs (separate Heuristiken, siehe `handbuch/core.md` 
 zu Line-Gap/Forward-/Backward-Merge).
 
 `markdown.rs` ist der LLM-freie Überschriften-Chunker für `.md` (Tests: `markdown_tests.rs`).
+`outline.rs` liest die Gliederung (Pfad, ganzer Abschnitt) beim Abruf aus gespeicherten Chunks
+zurück, ohne Neuzerlegung (Tests: `outline_tests.rs`).
 **Index-Basis:** `char_start`/`char_end` sind überall **Byte-Offsets** in den Dokumenttext
 (`signatures.rs`, `structural.rs`, `markdown.rs`); `markdown.rs` garantiert zusätzlich
 `text[char_start..char_end] == chunk.text`.

@@ -362,6 +362,28 @@ impl Database {
         Ok(None)
     }
 
+    /// Outline of a document from its stored chunks (`chunking/outline.rs`): the heading path of
+    /// each chunk and the chunks of its whole section. Omitted chunks are left out; Markdown
+    /// headings count only in chunks of the Markdown chunker that are not OCR page text.
+    pub fn document_outline(&self, document_id: i64) -> Result<crate::chunking::outline::Outline> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, text, metadata FROM chunks WHERE document_id = ?1 AND is_omitted = 0 ORDER BY chunk_index",
+        )?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![document_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        let input: Vec<crate::chunking::outline::OutlineChunk> = rows
+            .iter()
+            .map(|(id, text, meta)| {
+                let meta: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
+                let markdown = meta.get("chunk_type").and_then(|v| v.as_str()) == Some("markdown_section")
+                    && meta.get("ocr").and_then(|v| v.as_bool()) != Some(true);
+                crate::chunking::outline::OutlineChunk { id: *id, text, markdown }
+            })
+            .collect();
+        Ok(crate::chunking::outline::Outline::build(&input))
+    }
+
     /// Fetch a chunk by (document_id, chunk_index) — the index is unique per
     /// document (`staging_chunk_index_is_unique`), so this is a point lookup.
     fn chunk_by_document_index(&self, document_id: i64, chunk_index: i64) -> Result<Option<Chunk>> {

@@ -12,6 +12,7 @@ pub mod signatures;
 pub mod window;
 pub mod structural;
 pub mod markdown;
+pub mod outline;
 pub mod text_repair;
 
 pub use segments::{split_segments, Segment};
@@ -30,3 +31,5 @@ pub fn prepare_windows(raw: &str, window_tokens: usize, overlap_ratio: f64) -> V
 mod tests;
 #[cfg(test)]
 mod markdown_tests;
+#[cfg(test)]
+mod outline_tests;
