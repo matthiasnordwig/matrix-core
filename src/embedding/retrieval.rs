@@ -151,11 +151,12 @@ impl Database {
                 if stored.is_empty() {
                     continue;
                 }
+                let gone = self.missing_document_ids(cid)?;
                 for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
                     let Some(qvec) = query_by_model.get(&model_id) else {
                         continue;
                     };
-                    for sv in &stored {
+                    for sv in stored.iter().filter(|sv| !gone.contains(&sv.document_id)) {
                         if let Some(allowed) = doc_ids {
                             if !allowed.contains(&sv.document_id) {
                                 continue;

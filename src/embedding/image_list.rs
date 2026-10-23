@@ -36,10 +36,12 @@ impl Database {
         if matches!(doc_ids, Some(d) if d.is_empty()) {
             return Ok(Vec::new());
         }
+        let gone = self.missing_document_ids(context_id)?;
         let mut hits: Vec<(f32, crate::db::models::StoredPageImageVector)> = self
             .scan_page_image_vectors(context_id, embedding_model_id)?
             .into_iter()
             .filter(|v| v.vector.len() == qvec.len())
+            .filter(|v| !gone.contains(&v.document_id))
             .filter(|v| doc_ids.is_none_or(|d| d.contains(&v.document_id)))
             .map(|v| (cosine(qvec, &v.vector), v))
             .collect();

@@ -174,8 +174,12 @@ impl Database {
             return Ok(Vec::new());
         }
         let stored = self.scan_context_vectors(context_id)?;
+        let gone = self.missing_document_ids(context_id)?;
         let mut scored = Vec::with_capacity(stored.len());
         for sv in &stored {
+            if gone.contains(&sv.document_id) {
+                continue; // file gone from disk (`source_files.rs`)
+            }
             if let Some(allowed) = doc_ids {
                 if !allowed.contains(&sv.document_id) {
                     continue;

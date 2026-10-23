@@ -168,8 +168,9 @@ impl Database {
             "SELECT c.* FROM chunks c \
                JOIN chunk_refs r ON r.chunk_id = c.id \
               WHERE r.ref_key = ? AND c.context_id IN ({placeholders}) \
-                AND c.is_omitted = 0 \
-              ORDER BY c.document_id, c.chunk_index"
+                AND c.is_omitted = 0 AND {present} \
+              ORDER BY c.document_id, c.chunk_index",
+            present = super::source_files::FILE_PRESENT_SQL
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(context_ids.len() + 1);

@@ -120,6 +120,8 @@ fn fts_match_scoped(
            JOIN chunks c ON c.id = chunks_fts.rowid \
           WHERE chunks_fts MATCH ? AND c.context_id = ? AND c.is_omitted = 0",
     );
+    // Documents whose file is gone from disk are left out (`source_files.rs`).
+    sql.push_str(&format!(" AND {}", super::source_files::FILE_PRESENT_SQL));
     if let Some(allowed) = doc_ids {
         let placeholders = std::iter::repeat("?")
             .take(allowed.len())
