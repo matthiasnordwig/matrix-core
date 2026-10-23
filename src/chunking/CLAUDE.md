@@ -10,9 +10,11 @@ zu Line-Gap/Forward-/Backward-Merge).
 `markdown.rs` ist der LLM-freie Überschriften-Chunker für `.md` (Tests: `markdown_tests.rs`).
 `outline.rs` liest die Gliederung (Pfad, ganzer Abschnitt) beim Abruf aus gespeicherten Chunks
 zurück, ohne Neuzerlegung (Tests: `outline_tests.rs`).
-**Index-Basis:** `char_start`/`char_end` sind überall **Byte-Offsets** in den Dokumenttext
-(`signatures.rs`, `structural.rs`, `markdown.rs`); `markdown.rs` garantiert zusätzlich
-`text[char_start..char_end] == chunk.text`.
+**Index-Basis:** `char_start`/`char_end` sind **Byte-Offsets** in den Dokumenttext
+(`signatures.rs`, `markdown.rs`); `markdown.rs` garantiert zusätzlich
+`text[char_start..char_end] == chunk.text`. `structural.rs` zählt in seinem eigenen, nicht
+gespeicherten Zeilentext — passt nicht auf `documents.extracted_text` eines PDFs.
+`pages.rs`: Seitenwechsel im Chunk (`metadata.page_breaks`, Offsets in den Chunk-Text).
 
 Vor dem Lesen ganzer Dateien: `grep -n "^pub fn \|^fn " *.rs` zeigt alle
 Signaturen im Ordner.

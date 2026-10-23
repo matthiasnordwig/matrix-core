@@ -11,6 +11,7 @@ pub mod sentences;
 pub mod signatures;
 pub mod window;
 pub mod structural;
+pub mod pages;
 pub mod markdown;
 pub mod outline;
 pub mod text_repair;
@@ -33,3 +34,5 @@ mod tests;
 mod markdown_tests;
 #[cfg(test)]
 mod outline_tests;
+#[cfg(test)]
+mod pages_tests;

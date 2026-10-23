@@ -13,11 +13,14 @@
 //! Each line passes `text_repair::repair_mojibake` (PDFs whose character map
 //! encodes UTF-8 read as Windows-1252) before it is classified.
 //! Offsets are byte offsets into the repaired text (see `chunking/CLAUDE.md`).
+//! Every chunk records the page of its lines (`pages::ChunkPages`): `page` is
+//! the start page, `page_breaks` the page changes inside the chunk text.
 
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
 use std::collections::BTreeMap;
 
+use super::pages::ChunkPages;
 use super::sentences::split_sentences;
 use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
@@ -98,16 +101,21 @@ pub fn chunk_pdf_structurally(
     let mut current_titel: Option<String> = None;
     
     let mut current_chunk_text = String::new();
-    let mut current_chunk_start_page: Option<usize> = None;
+    let mut current_pages = ChunkPages::default();
+    // Pages of each chunk in `all_chunks`, stamped into its metadata at the end
+    // (a backward merge still extends the last one).
+    let mut all_pages: Vec<ChunkPages> = Vec::new();
     let mut current_chunk_char_start: usize = 0;
     let mut total_chars_processed = 0;
 
-    let mut flush_chunk = |text: &mut String, abschnitt: &Option<String>, titel: &Option<String>, page: Option<usize>, char_start: usize| {
+    let mut flush_chunk = |text: &mut String, abschnitt: &Option<String>, titel: &Option<String>, pages: &ChunkPages, char_start: usize| {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             if trimmed.len() < min_chunk_chars && !all_chunks.is_empty() {
                 // Backward Merge
                 let last_chunk: &mut NewChunk = all_chunks.last_mut().unwrap();
+                // `trimmed` starts where `text` does (lines are trimmed), behind the added '\n'.
+                all_pages.last_mut().unwrap().append(pages, last_chunk.text.len() + 1);
                 last_chunk.text.push('\n');
                 last_chunk.text.push_str(trimmed);
                 last_chunk.char_end += (1 + trimmed.len()) as i64;
@@ -126,9 +134,6 @@ pub fn chunk_pdf_structurally(
             } else {
                 meta_map.insert("title".to_string(), serde_json::Value::String("".to_string()));
             }
-            if let Some(p) = page {
-                meta_map.insert("page".to_string(), serde_json::json!(p + 1));
-            }
             let metadata = serde_json::Value::Object(meta_map).to_string();
 
             all_chunks.push(NewChunk {
@@ -142,6 +147,7 @@ pub fn chunk_pdf_structurally(
                 is_omitted: false,
                 metadata,
             });
+            all_pages.push(pages.clone());
             chunk_index += 1;
             text.clear();
         }
@@ -306,8 +312,8 @@ pub fn chunk_pdf_structurally(
         }
 
         if force_flush {
-            flush_chunk(&mut current_chunk_text, &current_abschnitt, &current_titel, current_chunk_start_page, current_chunk_char_start);
-            current_chunk_start_page = None;
+            flush_chunk(&mut current_chunk_text, &current_abschnitt, &current_titel, &current_pages, current_chunk_char_start);
+            current_pages = ChunkPages::default();
             current_chunk_char_start = total_chars_processed;
         }
         
@@ -334,9 +340,10 @@ pub fn chunk_pdf_structurally(
         }
 
         if current_chunk_text.is_empty() {
-            current_chunk_start_page = Some(line.page_idx);
+            current_pages = ChunkPages::default();
             current_chunk_char_start = total_chars_processed;
         }
+        current_pages.line(current_chunk_text.len(), line.page_idx as i64 + 1);
         
         current_chunk_text.push_str(line_text_trimmed);
         current_chunk_text.push('\n');
@@ -354,20 +361,30 @@ pub fn chunk_pdf_structurally(
                     }
                 }
                 
-                let keep_text = current_chunk_text[..sentences[split_idx].byte_end].to_string();
-                let remainder_text = current_chunk_text[sentences[split_idx].byte_end..].to_string();
+                let cut = sentences[split_idx].byte_end;
+                let keep_text = current_chunk_text[..cut].to_string();
+                let remainder_text = current_chunk_text[cut..].to_string();
+                let trimmed_rest = remainder_text.trim_start();
+                let (keep_pages, rest_pages) = current_pages.split_at(cut, remainder_text.len() - trimmed_rest.len());
                 
                 let mut temp = keep_text;
-                flush_chunk(&mut temp, &current_abschnitt, &current_titel, current_chunk_start_page, current_chunk_char_start);
+                flush_chunk(&mut temp, &current_abschnitt, &current_titel, &keep_pages, current_chunk_char_start);
                 
-                current_chunk_text = remainder_text.trim_start().to_string();
-                current_chunk_start_page = Some(line.page_idx);
+                current_chunk_text = trimmed_rest.to_string();
+                current_pages = rest_pages;
                 current_chunk_char_start = total_chars_processed - current_chunk_text.len();
             }
         }
     }
 
-    flush_chunk(&mut current_chunk_text, &current_abschnitt, &current_titel, current_chunk_start_page, current_chunk_char_start);
+    flush_chunk(&mut current_chunk_text, &current_abschnitt, &current_titel, &current_pages, current_chunk_char_start);
 
+    // Pages last: a backward merge can still extend a pushed chunk.
+    for (chunk, pages) in all_chunks.iter_mut().zip(&all_pages) {
+        if let Ok(serde_json::Value::Object(mut meta)) = serde_json::from_str(&chunk.metadata) {
+            pages.stamp(&mut meta);
+            chunk.metadata = serde_json::Value::Object(meta).to_string();
+        }
+    }
     Ok(all_chunks)
 }
