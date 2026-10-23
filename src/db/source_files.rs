@@ -187,6 +187,20 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Documents of `context_id` without any source row — added by an older program
+    /// (before 0.2.3), which stored no path: `(id, file name, page count, ingested_at)`.
+    /// The file name is `zip_entry` when the title differs from it, else `name`.
+    /// `add_files` takes such a document over instead of adding its file a second time.
+    pub fn documents_without_source(&self, context_id: i64) -> Result<Vec<(i64, String, Option<i64>, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, COALESCE(d.zip_entry, d.name), d.page_count, d.ingested_at FROM documents d
+             WHERE d.context_id = ?1 AND NOT EXISTS (SELECT 1 FROM source_files s WHERE s.document_id = d.id)
+             ORDER BY d.id",
+        )?;
+        let rows = stmt.query_map([context_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Take or renew the lease on `context_id` for `holder` until `now + ttl_s`.
     /// `false` = another holder has it and it has not expired.
     pub fn try_source_lease(&self, context_id: i64, holder: &str, now: i64, ttl_s: i64) -> Result<bool> {

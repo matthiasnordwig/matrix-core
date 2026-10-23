@@ -113,6 +113,17 @@ fn every_call_stays_inside_its_context() {
 }
 
 #[test]
+fn documents_without_a_row_are_listed_by_file_name() {
+    let db = Database::open_in_memory().unwrap();
+    let ctx = context(&db, "A");
+    let (old, tracked) = (document(&db, ctx, "old.pdf"), document(&db, ctx, "new.pdf"));
+    db.record_source_file(&source(tracked, ctx, "/d/new.pdf"), false).unwrap();
+    let rows = db.documents_without_source(ctx).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].0, rows[0].1.as_str()), (old, "old.pdf"));
+}
+
+#[test]
 fn source_rows_go_with_their_document_and_context() {
     let db = Database::open_in_memory().unwrap();
     let ctx = context(&db, "A");
