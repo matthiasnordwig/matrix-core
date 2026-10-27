@@ -14,9 +14,12 @@ Task-Präfixe (`query_prefix`/`document_prefix`, schema_v59) werden NUR in
 Retrieval in `retrieval.rs` gruppiert nach Embedding-Raum — **kein** globaler
 Cross-Model-Vektor, siehe gelockte Designentscheidungen im Index `HANDBUCH.md` §2.
 Hybrid (AP1): `retrieve_hybrid_with`/`retrieve_hybrid_batch` fusionieren Vektor- und
-FTS5/BM25-Ränge per RRF (`provenance::rrf_fuse_traced`, Parameter und Füllwort-Filter der
+FTS5/BM25-Ränge per RRF (`provenance::rrf_fuse_traced_with`, Parameter und Füllwort-Filter der
 Stichwortsuche in `fusion.rs`, k=10 gemessen) — **pro Kontext/Raum, nur über
 Ränge**, damit die Cross-Space-Isolation erhalten bleibt. FTS-Seite in `db/fts.rs`.
+Über Sprachgrenzen (`fusion.rs` „Across languages", Tests `tests_language.rs`): Stichwortliste aus, wenn die
+Fragesprache (`crate::text_language`) von der Mehrheit der besten Vektortreffer abweicht; Bildtreffer ohne
+Stichworttreffer halb.
 
 Rerank (AP3): `rerank.rs`. Reine `rank_merge(scores, top_k)` (immer kompiliert,
 getestet). `OrtReranker` (hinter `onnx`-Feature, wie `onnx.rs`): `load(model_dir,
@@ -47,7 +50,7 @@ Seitenanfänge nach Textreparatur, Seite → Chunks; Tests `tests_page_select.rs
 `page_render.rs` (Feature `pdf-render`: PDF → JPEG der Grafikseiten; Messtabelle
 `core/examples/page_stats.rs`), `image_list.rs` (dritte Rangliste im Hybrid-Pfad, Tests
 `tests_images.rs` — nur Bildvektoren des Kontext-Modells, Abbildung auf Chunks). Die Fusion
-selbst läuft über `provenance.rs::rrf_fuse_traced` (bitgleich zur Referenz `rrf_fuse_weighted`)
+selbst läuft über `provenance.rs::rrf_fuse_traced_with` (mit Faktor 1 je Eintrag bitgleich zur Referenz `rrf_fuse_weighted`)
 und füllt `ScoredChunk::provenance` (Typ in `db/scored.rs`: Rang + RRF-Anteil je Liste
 Vektor/Stichwort/Bild, über Kontexte summiert wie der Score). Die Vorschau-Markierung
 `page_image_id` setzt `retrieve_hybrid_*` nur bei Bildrang ≤ 30 % von `preview_k`, aufgerundet

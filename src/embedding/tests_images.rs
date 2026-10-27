@@ -2,7 +2,7 @@
 //! image vectors bit-identical to the two-list fusion; an image hit lifts the
 //! query-closest chunk of its page (structural `metadata.page` and LLM byte
 //! ranges); never compares image vectors of another model; honours the
-//! `doc_ids` scope, omitted chunks and the `img=0` switch; the preview mark
+//! `doc_ids` scope, omitted chunks and the `img=0` switch; counts half without a keyword hit; the preview mark
 //! (`page_image_id`) only for an image rank within 30 % of the visible
 //! `preview_k` (the pure rule and provenance math: `tests_provenance.rs`).
 
@@ -270,6 +270,22 @@ fn doc_scope_applies_to_the_image_list() {
     assert!(run(&db, &[ctx], &queries(m), Some(&[]), &on()).is_empty());
     // Unscoped, the other document's page does count.
     assert!(run(&db, &[ctx], &queries(m), None, &on()).iter().any(|s| s.page_image_id.is_some()));
+}
+
+#[test]
+fn image_hit_without_keyword_hit_counts_half() {
+    let db = Database::open_in_memory().unwrap();
+    let (m, ctx, doc, ids) = structural(&db);
+    add_page(&db, ctx, doc, 3, None, Some((m, &Q)));
+    let image_share = |raw: &str| {
+        let got = db.retrieve_hybrid_with_params(&[ctx], &queries(m), raw, 10, 10, None, &on()).unwrap();
+        got.iter().find(|s| s.chunk_id == ids[3]).and_then(|s| s.provenance.image).unwrap().share
+    };
+    let k = on().k as f32;
+    // RAW matches no text: the page of image rank 1 counts half.
+    assert_eq!(image_share(RAW), on().img_no_keyword / (k + 1.0));
+    // "3" is in the text of the chunk the page maps onto ("abschnitt 3"): full share.
+    assert_eq!(image_share("3"), 1.0 / (k + 1.0));
 }
 
 #[test]

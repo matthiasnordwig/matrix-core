@@ -71,3 +71,5 @@ mod tests_page_select;
 mod tests_images;
 #[cfg(test)]
 mod tests_provenance;
+#[cfg(test)]
+mod tests_language;

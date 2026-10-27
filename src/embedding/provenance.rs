@@ -1,9 +1,11 @@
 //! Weighted Reciprocal Rank Fusion that remembers where each hit came from,
 //! and the page-image preview rule built on it.
 //!
-//! [`rrf_fuse_traced`] is the fusion of the hybrid path: a chunk's score is
-//! `Σ weight / (k + rank)` over the lists it appears in, accumulated in list
-//! order — bit-identical to the untraced `retrieval::rrf_fuse_weighted` — and
+//! [`rrf_fuse_traced_with`] is the fusion of the hybrid path: a chunk's score is
+//! `Σ weight · factor / (k + rank)` over the lists it appears in (`factor` per
+//! entry, e.g. ½ for an image hit without keyword hit, `fusion.rs`), accumulated in
+//! list order — with factor 1 bit-identical to the untraced
+//! `retrieval::rrf_fuse_weighted` (test form: `rrf_fuse_traced`) — and
 //! for each tagged list ([`ListKind`]) the chunk's 1-based rank and its
 //! contribution go into `ScoredChunk::provenance`.
 //!
@@ -47,12 +49,24 @@ pub fn shows_page_preview(p: &HitProvenance, preview_k: usize) -> bool {
 /// Weighted RRF over `(kind, list, weight)`, best-first lists of chunk ids.
 /// Untagged lists (`None`) add to the score but not to the provenance. Sorted
 /// by score desc, ties by ascending chunk id, truncated to `top_k`.
+#[cfg(test)]
 pub(crate) fn rrf_fuse_traced(lists: &[(Option<ListKind>, &[i64], f32)], k: usize, top_k: usize) -> Vec<ScoredChunk> {
+    rrf_fuse_traced_with(lists, k, top_k, |_, _| 1.0)
+}
+
+/// Traced weighted RRF with a factor per entry on top of the list weight (`factor(kind, chunk_id)`,
+/// untagged lists get `None`); a factor of 1 everywhere is bit-identical to `rrf_fuse_traced`.
+pub(crate) fn rrf_fuse_traced_with(
+    lists: &[(Option<ListKind>, &[i64], f32)],
+    k: usize,
+    top_k: usize,
+    factor: impl Fn(Option<ListKind>, i64) -> f32,
+) -> Vec<ScoredChunk> {
     let mut acc: HashMap<i64, ScoredChunk> = HashMap::new();
     for (kind, list, weight) in lists {
         for (i, &chunk_id) in list.iter().enumerate() {
             let rank = i + 1; // 1-based
-            let share = weight / (k + rank) as f32;
+            let share = weight * factor(*kind, chunk_id) / (k + rank) as f32;
             let hit = acc.entry(chunk_id).or_insert_with(|| ScoredChunk::new(chunk_id, 0.0));
             hit.score += share;
             let slot = match kind {

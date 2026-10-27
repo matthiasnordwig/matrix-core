@@ -26,11 +26,14 @@
 //! the *visible* `preview_k` (a weaker image hit still adds its RRF share, it
 //! just gets no preview).
 //! Ranks and scores never depend on the rule. Without image vectors the result
-//! is bit-identical to the two-list fusion.
+//! is bit-identical to the two-list fusion. Two weights depend on the question
+//! (`fusion.rs`, „Across languages"): the keyword list of a context drops when the
+//! question's language differs from that of most of its best vector hits, and an
+//! image hit whose chunk the keyword search did not find counts half.
 
 use std::collections::HashMap;
 
-use super::provenance::{rrf_fuse_traced, shows_page_preview, ListKind};
+use super::provenance::{rrf_fuse_traced_with, shows_page_preview, ListKind};
 use super::QueryEmbedder;
 use crate::db::models::ScoredChunk;
 use crate::{Database, Result};
@@ -63,7 +66,7 @@ pub(crate) fn rrf_fuse(lists: &[Vec<i64>], k: usize, top_k: usize) -> Vec<Scored
 
 /// [`rrf_fuse`] with a weight per list: a chunk's score is
 /// `Σ w_list / (k + rank)`. Weight 1.0 everywhere is plain RRF. Untraced
-/// reference of `provenance::rrf_fuse_traced` (the production fusion), kept
+/// reference of `provenance::rrf_fuse_traced_with` (the production fusion), kept
 /// for the fusion-math and bit-identity tests.
 #[cfg(test)]
 pub(crate) fn rrf_fuse_weighted(lists: &[(&[i64], f32)], k: usize, top_k: usize) -> Vec<ScoredChunk> {
@@ -236,6 +239,9 @@ impl Database {
     ) -> Result<Vec<ScoredChunk>> {
         let n = hybrid_fanout(top_k);
         let keyword_query = super::fusion::keyword_query(raw_query, fusion.drop_stopwords);
+        // Language of the question, only needed when a language mismatch changes the keyword weight.
+        let query_lang =
+            (fusion.cross_lang_fts < 1.0).then(|| crate::text_language::query_language(raw_query)).flatten();
         // Accumulate RRF scores and provenance globally across contexts/spaces.
         let mut acc: HashMap<i64, ScoredChunk> = HashMap::new();
         // Chunk → best-ranked page image mapped onto it (preview decided below).
@@ -266,17 +272,32 @@ impl Database {
                     Vec::new()
                 };
                 let img_ids: Vec<i64> = img_ranked.iter().map(|(c, _)| *c).collect();
+                // A question in another language than most of the best vector hits: the keyword
+                // list can only find same-language noise (`fusion.rs`, „Across languages").
+                let mut kw_weight = fusion.fts_weight;
+                if let Some(ql) = query_lang {
+                    let top: Vec<i64> = vec_ranked.iter().take(super::fusion::LANG_PROBE).copied().collect();
+                    let langs = self.chunk_languages(&top)?;
+                    let top_langs: Vec<Option<&str>> = top.iter().map(|id| langs.get(id).copied().flatten()).collect();
+                    kw_weight *= super::fusion::cross_language_factor(ql, &top_langs, fusion.cross_lang_fts);
+                }
                 // Fuse the rank lists for this context, then fold the
                 // per-context RRF scores into the global accumulator. An empty
                 // image list is left out entirely (bit-identical to before).
                 let mut lists = vec![
                     (Some(ListKind::Vector), vec_ranked.as_slice(), 1.0),
-                    (Some(ListKind::Keyword), fts_ranked.as_slice(), fusion.fts_weight),
+                    (Some(ListKind::Keyword), fts_ranked.as_slice(), kw_weight),
                 ];
                 if !img_ids.is_empty() {
                     lists.push((Some(ListKind::Image), img_ids.as_slice(), 1.0));
                 }
-                for sc in rrf_fuse_traced(&lists, fusion.k, n) {
+                // An image hit whose chunk the keyword search did not find counts less.
+                let keyword_ids: std::collections::HashSet<i64> = fts_ranked.iter().copied().collect();
+                let factor = |kind: Option<ListKind>, id: i64| match kind {
+                    Some(ListKind::Image) if !keyword_ids.contains(&id) => fusion.img_no_keyword,
+                    _ => 1.0,
+                };
+                for sc in rrf_fuse_traced_with(&lists, fusion.k, n, factor) {
                     let hit = acc.entry(sc.chunk_id).or_insert_with(|| ScoredChunk::new(sc.chunk_id, 0.0));
                     hit.score += sc.score;
                     hit.provenance.absorb(&sc.provenance);
@@ -303,6 +324,15 @@ impl Database {
         });
         merged.truncate(top_k);
         Ok(merged)
+    }
+
+    /// Language code of each chunk's text (`text_language::passage_language`).
+    fn chunk_languages(&self, ids: &[i64]) -> Result<HashMap<i64, Option<&'static str>>> {
+        Ok(self
+            .chunks_by_ids(ids)?
+            .into_iter()
+            .map(|c| (c.id, crate::text_language::passage_language(&c.text)))
+            .collect())
     }
 
     /// Grid batch variant of [`Self::retrieve_hybrid_with`]: one hybrid retrieval

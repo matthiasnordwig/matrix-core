@@ -19,9 +19,21 @@
 //! is the large lever, k = 10 is never worse than 60 in any cell, a lower
 //! keyword weight does not help; numbers in `handbuch/core.md`); the page-image
 //! list ([`FusionParams::img`]) is on by default with weight 1 and only
-//! contributes where image vectors exist. The `MATRIX_HYBRID_FUSION` env var (`stop=0|1`,
-//! `w=<f32>`, `k=<usize>`, `img=0|1`, comma-separated) only
-//! exists to re-measure alternatives headlessly (`services/examples/embed_compare.rs`).
+//! contributes where image vectors exist.
+//!
+//! Across languages (mixed collections, `handbuch/mcp.md` „Hybride Suche über Sprachgrenzen"):
+//! a question in one language finds passages in another only through the vector list — the
+//! keyword list can only match passages in the question's language (or shared names and numbers),
+//! so it pushes same-language noise above the right answer. When the question's language
+//! (`text_language::query_language`) differs from that of most of the [`LANG_PROBE`] best vector
+//! hits of a context, the keyword list of that context gets [`FusionParams::cross_lang_fts`]
+//! (default 0: off for that question). An image hit whose chunk the keyword search did not find
+//! (no word of the question on the page) counts with [`FusionParams::img_no_keyword`] (default
+//! 0.5): graphics pages of an unrelated report otherwise fill the top ranks of a question whose
+//! words they do not contain. The `MATRIX_HYBRID_FUSION` env var (`stop=0|1`, `w=<f32>`,
+//! `k=<usize>`, `img=0|1`, `xw=<f32>` (cross-language keyword factor), `iw=<f32>` (image without
+//! keyword hit), comma-separated) only exists to re-measure alternatives headlessly
+//! (`services/examples/embed_compare.rs`, `scripts/bench_search.py`).
 
 use std::sync::OnceLock;
 
@@ -38,16 +50,32 @@ pub struct FusionParams {
     pub k: usize,
     /// Fuse the page-image rank list (graphics pages mapped onto chunks).
     pub img: bool,
+    /// Factor for the keyword list of a context when the question is in another language than
+    /// most of its best vector hits (1 = off).
+    pub cross_lang_fts: f32,
+    /// RRF weight of an image hit whose chunk is not in the keyword list (1 = like any image hit).
+    pub img_no_keyword: f32,
+}
+
+/// How many of the best vector hits decide the language the answer is likely written in.
+pub(crate) const LANG_PROBE: usize = 10;
+
+/// Keyword-list factor for a question in `query_lang` when the best vector hits have `top_langs`:
+/// `factor` when more than half of those with a known language are in another language, else 1.
+pub(crate) fn cross_language_factor(query_lang: &str, top_langs: &[Option<&str>], factor: f32) -> f32 {
+    let known: Vec<&str> = top_langs.iter().flatten().copied().collect();
+    let other = known.iter().filter(|l| **l != query_lang).count();
+    if !known.is_empty() && other * 2 > known.len() { factor } else { 1.0 }
 }
 
 impl Default for FusionParams {
     fn default() -> Self {
-        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10, img: true }
+        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10, img: true, cross_lang_fts: 0.0, img_no_keyword: 0.5 }
     }
 }
 
 impl FusionParams {
-    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, comma-separated; unknown parts are ignored and
+    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, `xw=<f32>`, `iw=<f32>`, comma-separated; unknown parts are ignored and
     /// missing ones keep their default.
     pub fn parse(spec: &str) -> Self {
         let mut p = FusionParams::default();
@@ -55,6 +83,16 @@ impl FusionParams {
             match part.split_once('=') {
                 Some(("stop", v)) => p.drop_stopwords = v != "0",
                 Some(("img", v)) => p.img = v != "0",
+                Some(("xw", v)) => {
+                    if let Ok(w) = v.parse::<f32>() {
+                        p.cross_lang_fts = w.clamp(0.0, 1.0);
+                    }
+                }
+                Some(("iw", v)) => {
+                    if let Ok(w) = v.parse::<f32>() {
+                        p.img_no_keyword = w.clamp(0.0, 1.0);
+                    }
+                }
                 Some(("k", v)) => {
                     if let Ok(k) = v.parse::<usize>() {
                         p.k = k.clamp(1, 1000);

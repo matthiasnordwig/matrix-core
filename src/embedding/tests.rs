@@ -505,12 +505,15 @@ fn fusion_params_parse_and_defaults() {
     assert!(d.drop_stopwords);
     assert_eq!((d.k, d.fts_weight), (10, 1.0));
     assert_eq!(FusionParams::parse("stop=0"), FusionParams { drop_stopwords: false, ..d });
-    assert_eq!(FusionParams::parse("stop=1,w=0.5,k=10"), FusionParams { drop_stopwords: true, fts_weight: 0.5, k: 10, img: true });
+    assert_eq!(FusionParams::parse("stop=1,w=0.5,k=10"), FusionParams { drop_stopwords: true, fts_weight: 0.5, k: 10, ..d });
     assert!(d.img);
     assert_eq!(FusionParams::parse("img=0"), FusionParams { img: false, ..d });
     assert_eq!(FusionParams::parse("img=1,k=20"), FusionParams { k: 20, ..d });
     assert_eq!(FusionParams::parse("w=9"), FusionParams { fts_weight: 2.0, ..d });
     assert_eq!(FusionParams::parse("bogus,w=x"), d);
+    assert_eq!((d.cross_lang_fts, d.img_no_keyword), (0.0, 0.5));
+    assert_eq!(FusionParams::parse("xw=1,iw=2"), FusionParams { cross_lang_fts: 1.0, img_no_keyword: 1.0, ..d });
+    assert_eq!(FusionParams::parse("xw=0.25,iw=-1"), FusionParams { cross_lang_fts: 0.25, img_no_keyword: 0.0, ..d });
 }
 
 #[test]
