@@ -47,6 +47,7 @@ pub(crate) mod page_images;
 mod sheet_models;
 mod source_models;
 mod source_files;
+pub mod page_refresh;
 mod grid_run_models;
 pub mod sheet_tables;
 pub mod sheet_query;
@@ -343,3 +344,5 @@ mod sheet_query_tests;
 mod source_files_tests;
 #[cfg(test)]
 mod provisional_tests;
+#[cfg(test)]
+mod page_refresh_tests;

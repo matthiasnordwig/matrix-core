@@ -2,7 +2,8 @@
 //! (`evidence_carry_db.rs`), in one savepoint; a deleted document's evidence is
 //! parked without text, expires, and is adopted by the same file added again or
 //! a twin copy (`evidence_parking.rs`); restore from a backup with its checks
-//! (`evidence_restore.rs`).
+//! (`evidence_restore.rs`); a document replaced by its new version read again
+//! hands everything over by content (`replace_document_by`).
 use super::fixtures::*;
 use crate::db::chunks::ChunkSlot;
 use crate::db::models::*;
@@ -317,4 +318,47 @@ fn restore_from_backup_skips_foreign_edges_and_ambiguous_targets() {
     doc(&target, ctx, &text());
     assert!(matches!(restore_document(&backup.conn, &target.conn, d, ctx, false).unwrap(), RestoreOutcome::Ambiguous(ids) if ids.len() == 2));
     assert_eq!(match_target("f", &[(1, "g".into())]), RestoreOutcome::NoTarget { evidence: 0, extracted: 0 });
+}
+
+/// Count of evidence rows plus review chunk links of a collection.
+fn evidence_count(db: &Database, ctx: i64) -> usize {
+    let reviews = db.list_ontology_edge_reviews(ctx).unwrap().iter().filter(|r| r.chunk_id.is_some()).count();
+    evidence_rows(db, ctx).len() + reviews
+}
+
+#[test]
+fn a_new_version_takes_over_all_evidence_by_content() {
+    let db = db();
+    let (ctx, d, [e1, e2]) = seeded(&db);
+    let before = evidence_count(&db, ctx);
+    // The file read again: other text (line breaks of a newer reader), cut in three.
+    let new_text = format!("{}\n{B}\nAnhang mit weiteren Angaben zur Förderung.", A.trim_end());
+    let n = doc(&db, ctx, &new_text);
+    let a = chunk(&db, ctx, n, 0, 0, A.len(), A.trim_end());
+    let b = chunk(&db, ctx, n, 1, A.len(), A.len() + B.len(), B);
+    let extra = chunk(&db, ctx, n, 2, A.len() + B.len() + 1, new_text.len(), "Anhang mit weiteren Angaben zur Förderung.");
+
+    // The new version's source row is pending until the replacement confirms it, in the same savepoint.
+    let row = SourceFile { document_id: n, context_id: ctx, path: "/d/bericht.pdf".into(), byte_size: 1, mtime_ns: 1, sha256: "h".into(), missing_since: None };
+    db.record_source_file(&row, true).unwrap();
+    assert_eq!(db.pending_source_documents(ctx).unwrap(), vec![n]);
+    let preview = db.preview_replace_document_by(d, n).unwrap();
+    assert_eq!((preview.placed(), db.document(d).unwrap().is_some()), (3, true), "preview writes nothing");
+    let r = db.replace_document_by(d, n).unwrap();
+    assert!(db.pending_source_documents(ctx).unwrap().is_empty());
+    assert_eq!(evidence_count(&db, ctx), before);
+    assert_eq!((r.evidence, r.placed(), r.unplaced, r.edge_missing + r.edge_mismatch), (3, 3, 0, 0));
+    assert_eq!(evidence_rows(&db, ctx), vec![(e1, a, None), (e2, b, Some("garantiert die Verbindlichkeiten".into()))]);
+    assert_eq!(db.list_ontology_edge_reviews(ctx).unwrap()[0].chunk_id, Some(b));
+    let extracted = db.get_chunks_with_ontology(ctx).unwrap();
+    assert!(extracted.contains(&a) && extracted.contains(&b) && !extracted.contains(&extra));
+    assert!(db.document(d).unwrap().is_none());
+    assert_eq!(db.count_parked_documents(ctx).unwrap(), 0, "handed over, nothing parked");
+
+    // Never across collections, never onto itself.
+    let (other, _) = seed_context_with_chunk(&db, "other");
+    let foreign = doc(&db, other, "x");
+    assert!(db.replace_document_by(n, foreign).is_err());
+    assert!(db.replace_document_by(n, n).is_err());
+    assert!(db.document(n).unwrap().is_some());
 }

@@ -4,12 +4,15 @@
 //! page. The structural chunker (`structural.rs`) records every page change
 //! inside a chunk as `"page_breaks": [[byte_offset, page], …]` in the chunk's
 //! metadata — offsets are byte offsets into the chunk's own `text`, each at the
-//! start of a line, pages 1-based. Readers ([`ChunkPages::from_metadata`])
+//! start of a line, pages 1-based; a chunk on one page gets `"page_breaks": []`.
+//! The key itself is the mark of a chunker that records page changes: a PDF
+//! document none of whose chunks has it was read before (core
+//! `db/page_refresh.rs`). Readers ([`ChunkPages::from_metadata`])
 //! mark the changes in the text (`[p. 44]`, [`ChunkPages::mark`]), name the
 //! page range and find the page of a quoted passage ([`ChunkPages::locate`]).
 //!
-//! Chunks without `page_breaks` (one page, other chunkers, or chunked before
-//! the key existed) read as lying on their start page only.
+//! Chunks without `page_breaks` (other chunkers, or chunked before the key
+//! existed) read as lying on their start page only.
 
 use serde_json::{json, Map, Value};
 
@@ -50,14 +53,12 @@ impl ChunkPages {
         }
     }
 
-    /// Write `page` (start page) and, for a chunk over several pages, `page_breaks`.
+    /// Write `page` (start page) and `page_breaks` (empty for a chunk on one page).
     pub fn stamp(&self, meta: &mut Map<String, Value>) {
         let Some(&(_, first)) = self.0.first() else { return };
         meta.insert("page".into(), json!(first));
-        if self.0.len() > 1 {
-            let breaks: Vec<Value> = self.0[1..].iter().map(|(o, p)| json!([o, p])).collect();
-            meta.insert(BREAKS_KEY.into(), Value::Array(breaks));
-        }
+        let breaks: Vec<Value> = self.0[1..].iter().map(|(o, p)| json!([o, p])).collect();
+        meta.insert(BREAKS_KEY.into(), Value::Array(breaks));
     }
 
     /// The pages of a chunk from its metadata JSON; `None` without a page.

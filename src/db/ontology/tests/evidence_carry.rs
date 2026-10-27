@@ -1,5 +1,6 @@
 //! Pure rules of carrying graph evidence onto new chunks (`evidence_carry.rs`):
-//! placement tiers, unplaced pieces, the extracted rule, changed document text.
+//! placement tiers, unplaced pieces, the extracted rule, changed document text,
+//! the last rules for a new cut across the old one (quote over two chunks, shared words).
 use crate::db::ontology::evidence_carry::*;
 
 fn old(id: i64, s: i64, e: i64, text: &str, extracted: bool) -> OldChunk {
@@ -119,4 +120,29 @@ fn report_summary_counts() {
     assert!(!r.is_empty());
     assert!(r.summary().starts_with("evidence 2/3 carried over"));
     assert!(EvidenceCarryReport::default().is_empty());
+}
+
+#[test]
+fn a_cut_across_the_old_chunk_still_places_quote_and_labels() {
+    // Old chunk A+B; the new reader cut in the middle of B, so no new chunk contains
+    // the old text or lies inside it, and the quote runs over the cut.
+    let ab = format!("{A} {B}");
+    let g = graph(
+        vec![old(10, 0, 100, &ab, true)],
+        vec![
+            ev(1, 10, Some("garantiert die Verbindlichkeiten"), "Bund", "Bank"),
+            ev(2, 10, None, "KfW", "Mittelstand"),
+            ev(3, 10, None, "Fremd", "Anders"),
+        ],
+    );
+    let first = format!("Seite 1\n{A} Der Bund garantiert");
+    let second = "die Verbindlichkeiten der Bank. Seite 2 folgt hier.";
+    let p = plan_carry(&g, false, &[new(30, 0, 60, &first), new(31, 60, 120, second)]);
+    // Rule 5: the chunk where the quote starts; rule 6: the chunk naming KfW with most shared words;
+    // an edge whose ends no chunk names stays unplaced (counted).
+    assert_eq!(p.placed, vec![(0, 30, MatchTier::EvidenceText), (1, 30, MatchTier::Labels)]);
+    assert_eq!(p.unplaced, vec![2]);
+    // Same text: the old range decides, nothing is guessed by words.
+    let p = plan_carry(&g, true, &[new(30, 200, 260, &first), new(31, 260, 320, second)]);
+    assert_eq!((p.placed, p.unplaced), (vec![(0, 30, MatchTier::EvidenceText)], vec![1, 2]));
 }

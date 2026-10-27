@@ -34,11 +34,12 @@ fn a_chunk_over_a_page_break_keeps_both_pages() {
 }
 
 #[test]
-fn a_one_page_chunk_has_no_breaks_and_is_unchanged() {
+fn a_one_page_chunk_has_empty_breaks_and_is_unchanged() {
     let pages = ChunkPages::from_metadata(r#"{"page":7,"file":"a.pdf"}"#).unwrap();
     assert_eq!((pages.range(), pages.label()), ((7, 7), "p. 7".to_string()));
     assert_eq!(pages.mark("Text.\n"), "Text.\n");
-    assert_eq!(stamped(&pages), r#"{"page":7}"#);
+    assert_eq!(stamped(&pages), r#"{"page":7,"page_breaks":[]}"#, "the key marks a chunker that records pages");
+    assert_eq!(ChunkPages::from_metadata(r#"{"page":7,"page_breaks":[]}"#), Some(pages));
     assert_eq!(ChunkPages::from_metadata(r#"{"file":"a.md"}"#), None, "no page, no pages");
 }
 

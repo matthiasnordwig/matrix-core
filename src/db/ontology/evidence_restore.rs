@@ -12,11 +12,19 @@
 //! the app's (`evidence_carry.rs`, `apply_carry`): evidence of an edge that is
 //! missing in the target, lives in another collection or joins other nodes
 //! (labels) is skipped and counted.
+//!
+//! The same carry ([`carry_graph`]) hands a document's evidence to the new
+//! version that replaces it ([`Database::replace_document_by`]: a PDF read
+//! again from its file, services `pipeline/resync.rs` and `pipeline/refresh.rs`).
+//! There the new version is placed by content (`plan_carry` without
+//! `same_text`): its chunks come from a newer chunker, so the old byte ranges
+//! need not mean the same text even when the document text is unchanged —
+//! the chunk texts and stored quotes are what both versions share.
 use rusqlite::Connection;
 
-use super::evidence_carry::{plan_carry, text_fingerprint, EvidenceCarryReport};
+use super::evidence_carry::{plan_carry, text_fingerprint, DocumentGraph, EvidenceCarryReport};
 use super::evidence_carry_db::{apply_carry, preview_carry, read_chunk_spans, read_document_graph};
-use crate::db::Result;
+use crate::db::{CoreError, Database, Result};
 
 /// What happened to one backup document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,8 +80,64 @@ pub fn restore_document(
         }
         other => return Ok(other),
     };
-    let new = read_chunk_spans(target, target_document)?;
-    let plan = plan_carry(&graph, true, &new);
-    let report = if write { apply_carry(target, &graph, &plan, new.len())? } else { preview_carry(target, &graph, &plan, new.len())? };
+    let report = carry_graph(target, &graph, target_document, true, write)?;
     Ok(RestoreOutcome::Done { target_document, report })
+}
+
+/// Place `graph` (read from any connection) onto the chunks `target_document`
+/// has now in `target`; `same_text`: the old byte ranges are valid there.
+/// `write = false` only counts.
+pub fn carry_graph(target: &Connection, graph: &DocumentGraph, target_document: i64, same_text: bool, write: bool) -> Result<EvidenceCarryReport> {
+    let new = read_chunk_spans(target, target_document)?;
+    let plan = plan_carry(graph, same_text, &new);
+    if write {
+        apply_carry(target, graph, &plan, new.len())
+    } else {
+        preview_carry(target, graph, &plan, new.len())
+    }
+}
+
+impl Database {
+    /// Replace document `old` by its new version `new` (same collection, chunks
+    /// already made): in one savepoint read what hangs at `old`'s chunks, delete
+    /// `old` (its sheet tables too; nothing is parked), place the evidence,
+    /// review links and extracted marks onto `new` by content (module comment)
+    /// and confirm `new`'s `pending` source row (`source_files`). One savepoint,
+    /// so a crash leaves either `old` with a still `pending` `new` (removed by the
+    /// next update, `resync::leftovers`) or `new` alone — never both as final.
+    /// What finds no place is counted in the report (`unplaced`), never silent.
+    pub fn replace_document_by(&self, old: i64, new: i64) -> Result<EvidenceCarryReport> {
+        self.check_replacement(old, new)?;
+        self.with_sheet_drop("document_id = ?1", old, || {
+            let graph = read_document_graph(&self.conn, old)?;
+            self.conn.execute("DELETE FROM documents WHERE id = ?1", [old])?;
+            self.conn.execute("UPDATE source_files SET pending = 0 WHERE document_id = ?1", [new])?;
+            match graph {
+                Some(g) if !g.is_empty() => carry_graph(&self.conn, &g, new, false, true),
+                _ => Ok(EvidenceCarryReport { new_chunks: read_chunk_spans(&self.conn, new)?.len(), ..Default::default() }),
+            }
+        })
+    }
+
+    /// What [`Self::replace_document_by`] would carry, without writing (to tell
+    /// a wrong file from the new version before anything is replaced).
+    pub fn preview_replace_document_by(&self, old: i64, new: i64) -> Result<EvidenceCarryReport> {
+        self.check_replacement(old, new)?;
+        match read_document_graph(&self.conn, old)? {
+            Some(g) if !g.is_empty() => carry_graph(&self.conn, &g, new, false, false),
+            _ => Ok(EvidenceCarryReport { new_chunks: read_chunk_spans(&self.conn, new)?.len(), ..Default::default() }),
+        }
+    }
+
+    fn check_replacement(&self, old: i64, new: i64) -> Result<()> {
+        let contexts: Vec<i64> = {
+            let mut stmt = self.conn.prepare("SELECT context_id FROM documents WHERE id IN (?1, ?2)")?;
+            let rows = stmt.query_map([old, new], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        if old == new || contexts.len() != 2 || contexts[0] != contexts[1] {
+            return Err(CoreError::InvalidState(format!("documents {old} and {new} are not two documents of one collection")));
+        }
+        Ok(())
+    }
 }

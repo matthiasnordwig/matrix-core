@@ -25,8 +25,18 @@
 //!    (folded), ties by overlap;
 //! 4. the candidate with the largest overlap.
 //!
-//!    Without any candidate the piece is not placed: counted, never silent.
-//!    The schema has no evidence row without a chunk (`chunk_id NOT NULL`).
+//!    Without any candidate (the new cut lies across the old one), two last
+//!    rules before giving up:
+//! 5. the quote runs over two new chunks → the chunk where it starts;
+//! 6. changed text and no quote found → among the new chunks that name at
+//!    least one of the edge's node labels, the one sharing the most words
+//!    (folded, 3+ letters) with the old chunk's text. Words alone would hang
+//!    a relation onto a chunk that does not name its ends (an image text that
+//!    kept only the other half of the old chunk). Same text: the old range is
+//!    authoritative, nothing is guessed.
+//!
+//!    What still finds no place is not placed: counted, never silent. The
+//!    schema has no evidence row without a chunk (`chunk_id NOT NULL`).
 //!
 //! **Extracted rule.** A new chunk counts as extracted only when every byte of
 //! it was already read by the extractor: same text → the old chunks overlapping
@@ -34,7 +44,9 @@
 //! folded text lies inside one extracted old chunk. Everything else stays open,
 //! so a continued extraction does exactly the gaps (e.g. a new chunk that
 //! reaches into a formerly omitted passage is extracted again as a whole).
-use crate::text_match::{contains_evidence_normalized, fold, normalize};
+use std::collections::HashSet;
+
+use crate::text_match::{contains_evidence_normalized, fold, normalize, split_ellipsis_fragments};
 
 /// One chunk of the document as it was before the replacement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +246,9 @@ pub fn plan_carry(old: &DocumentGraph, same_text: bool, new: &[NewChunkSpan]) ->
 
     let mut plan = CarryPlan::default();
     let mut cache: Vec<Option<Vec<(usize, i64)>>> = vec![None; old.chunks.len()];
+    // Rules 5 and 6, built only when needed.
+    let mut joined: Option<(String, Vec<usize>)> = None;
+    let mut words: Option<Vec<HashSet<String>>> = None;
     for (ei, ev) in old.evidence.iter().enumerate() {
         let cands = match old_index(ev.chunk_id) {
             Some(oi) => cache[oi].get_or_insert_with(|| candidates(oi)).clone(),
@@ -256,6 +271,19 @@ pub fn plan_carry(old: &DocumentGraph, same_text: bool, new: &[NewChunkSpan]) ->
                 Some((k, if score(k) > 0 { MatchTier::Labels } else { MatchTier::Overlap }))
             }
         };
+        let pick = pick.or_else(|| {
+            let joined = joined.get_or_insert_with(|| join_normalized(&normalized));
+            if let Some(k) = quote.and_then(|q| quote_start(joined, q)) {
+                return Some((k, MatchTier::EvidenceText));
+            }
+            if same_text {
+                return None;
+            }
+            let words = words.get_or_insert_with(|| live.iter().map(|n| word_set(&n.text)).collect());
+            let labels: Vec<String> = ev.labels.iter().map(|l| fold(l)).filter(|l| l.chars().count() >= 2).collect();
+            let named = |k: usize| labels.iter().any(|l| folded[k].contains(l.as_str()));
+            old_index(ev.chunk_id).and_then(|oi| most_shared_words(&old.chunks[oi].text, words, &named)).map(|k| (k, MatchTier::Labels))
+        });
         match pick {
             Some((k, tier)) => plan.placed.push((ei, live[k].id, tier)),
             None => plan.unplaced.push(ei),
@@ -284,4 +312,48 @@ pub fn plan_carry(old: &DocumentGraph, same_text: bool, new: &[NewChunkSpan]) ->
         }
     }
     plan
+}
+
+/// The normalized texts of the new chunks joined by one space, with the start
+/// offset of each in the joined text.
+fn join_normalized(normalized: &[String]) -> (String, Vec<usize>) {
+    let mut text = String::new();
+    let mut starts = Vec::with_capacity(normalized.len());
+    for n in normalized {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        starts.push(text.len());
+        text.push_str(n.trim());
+    }
+    (text, starts)
+}
+
+/// Rule 5: the chunk (index) where `quote` starts, when it is found only across chunks.
+fn quote_start((text, starts): &(String, Vec<usize>), quote: &str) -> Option<usize> {
+    if !contains_evidence_normalized(text, quote) {
+        return None;
+    }
+    let first = normalize(split_ellipsis_fragments(quote).first()?).0;
+    let at = text.find(&first)?;
+    starts.iter().rposition(|&s| s <= at)
+}
+
+/// Folded words of 3+ letters.
+fn word_set(text: &str) -> HashSet<String> {
+    fold(text).split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(str::to_string).collect()
+}
+
+/// Rule 6: among the chunks (index) `named` accepts, the one sharing the most
+/// words with `old_text`; ties → the earliest.
+fn most_shared_words(old_text: &str, words: &[HashSet<String>], named: &dyn Fn(usize) -> bool) -> Option<usize> {
+    let old = word_set(old_text);
+    let mut best: Option<(usize, usize)> = None;
+    for (k, w) in words.iter().enumerate().filter(|(k, _)| named(*k)) {
+        let shared = w.intersection(&old).count();
+        if shared > 0 && best.is_none_or(|(_, b)| shared > b) {
+            best = Some((k, shared));
+        }
+    }
+    best.map(|(k, _)| k)
 }
