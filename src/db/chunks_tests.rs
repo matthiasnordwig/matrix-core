@@ -1,6 +1,8 @@
 //! Tests for `complete_section_chunks` — section-continuation lookup against
 //! chunk fragmentation (multi-part §§/Artikel split across staging chunks by
-//! the structural chunker). Mirrors `chunk_refs_tests.rs`'s seed pattern.
+//! the structural chunker): along the outline read from the texts where it knows
+//! headings, else along `metadata.section` (the `mk_section_chunk` cases, whose
+//! texts have none). Mirrors `chunk_refs_tests.rs`'s seed pattern.
 
 use super::{ChunkSlot, SectionContinuation};
 use crate::db::models::*;
@@ -185,6 +187,80 @@ fn max_extra_zero_still_reports_continues_at() {
     let solo_result = db.complete_section_chunks(solo, 0).unwrap();
     assert!(solo_result.chunks.is_empty());
     assert_eq!(solo_result.continues_at, None);
+}
+
+/// A legal act whose chunker `section` is one coarse "Abschnitt 2" for every chunk (as seen
+/// in the EU acts of the search bench): the continuation follows the articles of the outline.
+fn mk_act(db: &Database, ctx: i64, doc: i64, texts: &[(&str, bool)]) -> Vec<i64> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(i, (text, omitted))| {
+            db.create_chunk(&NewChunk {
+                context_id: ctx,
+                document_id: doc,
+                chunk_index: i as i64,
+                char_start: 0,
+                char_end: 1,
+                text: (*text).into(),
+                signature: None,
+                is_omitted: *omitted,
+                metadata: serde_json::json!({ "section": "Abschnitt 2" }).to_string(),
+            })
+            .unwrap()
+            .id
+        })
+        .collect()
+}
+
+#[test]
+fn continuation_ends_at_the_next_article_of_the_outline() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let ids = mk_act(
+        &db,
+        ctx,
+        doc,
+        &[
+            ("Artikel 1\nGegenstand\n(1) Diese Verordnung regelt die Aufbewahrung der Unterlagen.", false),
+            ("(2) Sie gilt auch für Unterlagen, die vor ihrem Inkrafttreten entstanden sind.\nArtikel 2", false),
+            ("Begriffe\n(1) Im Sinne dieser Verordnung bezeichnet der Ausdruck Unterlage jedes Schriftstück.", false),
+            ("(2) Eine Kopie steht dem Original gleich, wenn sie beglaubigt ist.", false),
+            ("Artikel 3\nInkrafttreten\nDiese Verordnung tritt am zwanzigsten Tag nach ihrer Veröffentlichung in Kraft.", false),
+        ],
+    );
+    let r = db.complete_section_chunks(ids[0], 5).unwrap();
+    assert_eq!(chunk_ids(&r), vec![ids[1]], "Artikel 1 ends with the chunk that holds the heading of Artikel 2");
+    assert_eq!(r.continues_at, None);
+    let r = db.complete_section_chunks(ids[2], 5).unwrap();
+    assert_eq!(chunk_ids(&r), vec![ids[3]], "Artikel 2 does not run into Artikel 3");
+    let r = db.complete_section_chunks(ids[2], 0).unwrap();
+    assert_eq!(r.continues_at, Some(ids[3]));
+    let r = db.complete_section_chunks(ids[3], 5).unwrap();
+    assert!(r.chunks.is_empty() && r.continues_at.is_none(), "last chunk of Artikel 2: no marker");
+}
+
+#[test]
+fn outline_continuation_stops_at_an_omitted_chunk_and_outside_every_section() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let ids = mk_act(
+        &db,
+        ctx,
+        doc,
+        &[
+            ("Erwägungsgrund ohne Überschrift, der vor dem ersten Artikel steht und keinen Pfad hat.", false),
+            ("Artikel 1\nGegenstand\n(1) Diese Verordnung regelt die Aufbewahrung der Unterlagen.", false),
+            ("(2) Ausgelassener Text des Artikels, etwa eine Kopfzeile der Seite.", true),
+            ("(3) Sie gilt auch für Unterlagen, die vor ihrem Inkrafttreten entstanden sind.", false),
+            ("Artikel 2\nBegriffe\nIm Sinne dieser Verordnung bezeichnet der Ausdruck Unterlage jedes Schriftstück.", false),
+            ("Artikel 3\nInkrafttreten\nDiese Verordnung tritt in Kraft.", false),
+        ],
+    );
+    let r = db.complete_section_chunks(ids[0], 5).unwrap();
+    assert!(r.chunks.is_empty() && r.continues_at.is_none(), "the chunker section is not followed in an act with an outline");
+    let r = db.complete_section_chunks(ids[1], 5).unwrap();
+    assert!(r.chunks.is_empty() && r.continues_at.is_none(), "an omitted chunk ends the run");
 }
 
 #[test]

@@ -185,6 +185,11 @@ impl Outline {
         Outline { headings: b.headings, chunks: places }
     }
 
+    /// Whether any heading was recognised in the document (else every `path`/`section` is `None`).
+    pub fn has_headings(&self) -> bool {
+        !self.headings.is_empty()
+    }
+
     /// Path of a chunk ("KAPITEL III › Artikel 18 – Title › (1)–(3)"); `None` when no heading is
     /// known above it.
     pub fn path(&self, chunk_id: i64) -> Option<String> {

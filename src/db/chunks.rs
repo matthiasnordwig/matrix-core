@@ -12,7 +12,7 @@ use super::models::*;
 use super::{Database, Result};
 
 /// Result of [`Database::complete_section_chunks`]: the contiguous run of
-/// same-section continuation chunks found (in `chunk_index` order), plus
+/// continuation chunks of the same section (in `chunk_index` order), plus
 /// where the section goes on beyond what was returned.
 #[derive(Debug, Clone)]
 pub struct SectionContinuation {
@@ -292,49 +292,60 @@ impl Database {
             .execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])?)
     }
 
-    /// Follow a chunk's structural `section` (the chunker-written
-    /// `metadata.section` JSON field, e.g. `"Artikel 395 (1)"`) forward through
-    /// contiguous same-document, same-section chunks — the fix for
-    /// fragmented §§/Artikel that the structural chunker splits across
-    /// multiple staging chunks.
+    /// The chunks that continue `chunk_id`'s section: walks `chunk_index + 1, + 2, …` of the same
+    /// document while each next chunk exists, is not omitted and belongs to the same section — a
+    /// gap ends the run. Sections come from the document's outline read from the chunk texts
+    /// (`chunking/outline.rs`, the article or numbered section up to the next heading of the same
+    /// or a higher rank), so a run never crosses into the next article. Only in a document where
+    /// the outline knows no heading at all does it follow the structural chunker's
+    /// `metadata.section` (string-equal, non-empty); a chunk outside every outline section, or
+    /// without a chunker section there, has no continuation.
     ///
-    /// Starting from `chunk_id`, walks `chunk_index + 1, + 2, …` of the same
-    /// document as long as each next chunk exists, is not omitted, and its
-    /// `metadata.section` is *exactly* (string-equal) the start chunk's
-    /// non-empty section — a gap (missing index, omitted, or a different/empty
-    /// section) ends the run. `max_extra` caps how many continuation chunks are
-    /// returned (`0` is legal: no chunks, but `continues_at` is still reported).
-    /// If the section still matches beyond the cap, that chunk's id is returned
-    /// as `continues_at` so a caller can cheaply learn "this section continues"
-    /// without paying for the extra chunks.
-    ///
-    /// A missing/empty starting section returns an empty result outright — no
-    /// guessing at continuation for unstructured content.
-    pub fn complete_section_chunks(
+    /// `max_extra` caps how many continuation chunks are returned (`0` is legal: no chunks, but
+    /// `continues_at` is still reported): if the section goes on beyond the cap, that chunk's id is
+    /// `continues_at`, so a caller learns "this section continues" without paying for the chunks.
+    pub fn complete_section_chunks(&self, chunk_id: i64, max_extra: usize) -> Result<SectionContinuation> {
+        let Some(start) = self.chunk(chunk_id)? else {
+            return Ok(SectionContinuation { chunks: Vec::new(), continues_at: None });
+        };
+        let outline = self.document_outline(start.document_id)?;
+        self.section_continuation(&outline, &start, max_extra)
+    }
+
+    /// [`Self::complete_section_chunks`] with the outline of `start`'s document already built (a
+    /// caller with several hits of one document builds it once).
+    pub fn section_continuation(
         &self,
-        chunk_id: i64,
+        outline: &crate::chunking::outline::Outline,
+        start: &Chunk,
         max_extra: usize,
     ) -> Result<SectionContinuation> {
+        enum Same {
+            Outline(std::collections::HashSet<i64>),
+            Chunker(String),
+        }
         let empty = SectionContinuation { chunks: Vec::new(), continues_at: None };
-        let Some(start) = self.chunk(chunk_id)? else {
-            return Ok(empty);
+        let same = if outline.has_headings() {
+            match outline.section(start.id) {
+                Some(s) => Same::Outline(s.chunk_ids.into_iter().collect()),
+                None => return Ok(empty),
+            }
+        } else {
+            match chunk_section(start) {
+                Some(s) => Same::Chunker(s),
+                None => return Ok(empty),
+            }
         };
-        let Some(section) = chunk_section(&start) else {
-            return Ok(empty);
-        };
-
         let mut chunks = Vec::new();
         let mut next_index = start.chunk_index + 1;
-        loop {
-            let Some(candidate) = self.chunk_by_document_index(start.document_id, next_index)? else {
+        while let Some(candidate) = self.chunk_by_document_index(start.document_id, next_index)? {
+            let belongs = !candidate.is_omitted
+                && match &same {
+                    Same::Outline(ids) => ids.contains(&candidate.id),
+                    Same::Chunker(section) => chunk_section(&candidate).as_ref() == Some(section),
+                };
+            if !belongs {
                 break;
-            };
-            if candidate.is_omitted {
-                break;
-            }
-            match chunk_section(&candidate) {
-                Some(s) if s == section => {}
-                _ => break,
             }
             if chunks.len() >= max_extra {
                 return Ok(SectionContinuation { chunks, continues_at: Some(candidate.id) });

@@ -5,7 +5,14 @@
 //! - line-gap detection: enumerations are recognised by conspicuous vertical
 //!   gaps (`y_gap > font_size * 1.5`);
 //! - forward merge: a short heading (buffer `< min_chunk_chars`) flows into the
-//!   following paragraph instead of standing alone;
+//!   following paragraph instead of standing alone (a heading followed by
+//!   another heading, "Artikel 13" + its title line, is still flushed and glued
+//!   to the previous chunk: carrying it forward measured worse on the search
+//!   bench, `handbuch/core.md`);
+//! - running lines (the same text on at least a quarter of the pages, e.g. the
+//!   language code "DE" of an Official Journal page) and layout lines (wide
+//!   gaps, e.g. "27.12.2022    Official Journal …    L 333/80") are never
+//!   headings, so they do not become `section`/`title`; they stay in the text;
 //! - backward merge: too-short leftovers (`< min_chunk_chars`, e.g. a cut after
 //!   a definition at a sentence end) are glued to the previous chunk;
 //! - `max_chunk_chars` is only an emergency brake for very long unstructured
@@ -18,7 +25,7 @@
 
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::pages::ChunkPages;
 use super::sentences::split_sentences;
@@ -77,12 +84,21 @@ pub fn chunk_pdf_structurally(
         });
         comps.push(CompiledPattern {
             role: "heading_l1".to_string(),
-            regex: RegexBuilder::new(r"^((?:Article|Art\.|§|AT|Kapitel|Abschnitt|TITEL|TITLE|CHAPTER)\s*[\d.a-zA-Z]+)\s*(.*)").case_insensitive(true).build().unwrap(),
+            // A number (or a Roman numeral after a space) must follow the word: "at the request" or
+            // "At least" at a line start is no heading.
+            regex: RegexBuilder::new(r"^((?:Artikel|Article|Art\.|§|AT|Kapitel|Abschnitt|TITEL|TITLE|CHAPTER)(?:\s*\d[\d.]*[a-z]?|\s+[IVXLC]+)\b)\s*(.*)").case_insensitive(true).build().unwrap(),
             priority: 100,
         });
+        // Numbered section "2.1 Scope": number = section, rest = title.
         comps.push(CompiledPattern {
             role: "heading_l1".to_string(),
-            regex: RegexBuilder::new(r"^(\d+(\.\d+)*\.?|\([a-zA-Z0-9]\))\s+[A-Za-zÄÖÜäöüß].{0,79}$").case_insensitive(true).build().unwrap(),
+            regex: RegexBuilder::new(r"^(\d+(?:\.\d+)*\.?)\s+([A-Za-zÄÖÜäöüß].{0,79})$").case_insensitive(true).build().unwrap(),
+            priority: 110,
+        });
+        // List item "(a) …": a sub-section of the current one, keeps the title.
+        comps.push(CompiledPattern {
+            role: "heading_l1".to_string(),
+            regex: RegexBuilder::new(r"^(\([a-zA-Z0-9]\))\s+[A-Za-zÄÖÜäöüß].{0,79}$").case_insensitive(true).build().unwrap(),
             priority: 110,
         });
         comps.push(CompiledPattern {
@@ -258,9 +274,17 @@ pub fn chunk_pdf_structurally(
         }
     }
     
+    // Running lines: the same text on at least a quarter of the pages (at least 3).
+    let mut pages_of: HashMap<&str, HashSet<usize>> = HashMap::new();
+    for l in &classified_lines {
+        pages_of.entry(l.text.as_str()).or_default().insert(l.page_idx);
+    }
+    let running_min = (page_count / 4).max(3);
+    let running: HashSet<&str> = pages_of.into_iter().filter(|(_, p)| p.len() >= running_min).map(|(t, _)| t).collect();
+
     let mut prev_y = -1;
     let mut prev_page = 0;
-    
+
     for line in classified_lines.iter() {
         let line_text_trimmed = line.text.trim();
         
@@ -275,10 +299,14 @@ pub fn chunk_pdf_structurally(
         prev_page = line.page_idx;
 
         let mut matched_role = line.matched_role.clone();
-        let extracted_abschnitt = line.extracted_abschnitt.clone();
+        let mut extracted_abschnitt = line.extracted_abschnitt.clone();
         let mut extracted_titel = line.extracted_titel.clone();
 
-        if matched_role.is_none() && is_new_paragraph && line_text_trimmed.len() < 80 {
+        let never_heading = running.contains(line.text.as_str()) || line_text_trimmed.contains("    ");
+        if never_heading && matched_role.as_deref().is_some_and(|r| r.starts_with("heading")) {
+            (matched_role, extracted_abschnitt, extracted_titel) = (None, None, None);
+        }
+        if matched_role.is_none() && !never_heading && is_new_paragraph && line_text_trimmed.len() < 80 {
             let ends_with_punctuation = line_text_trimmed.ends_with('.') 
                 || line_text_trimmed.ends_with(',') 
                 || line_text_trimmed.ends_with(':') 
@@ -320,7 +348,8 @@ pub fn chunk_pdf_structurally(
         if is_heading {
             if let Some(ref a) = extracted_abschnitt {
                 // Check if it's a major heading (contains letters other than just a-z enum)
-                let is_major = a.contains("Art") || a.contains('§') || a.contains("Kapitel") || a.contains("Abschnitt") || a.contains("TITEL") || a.contains("TITLE") || a.contains("CHAPTER");
+                let lower = a.to_lowercase();
+                let is_major = ["art", "§", "kapitel", "abschnitt", "titel", "title", "chapter"].iter().any(|k| lower.contains(k));
                 if is_major {
                     primary_abschnitt = Some(a.clone());
                     current_abschnitt = Some(a.clone());

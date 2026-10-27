@@ -170,6 +170,48 @@ fn short_trailing_block_is_backward_merged() {
     assert!(chunks[0].text.contains("Ende."));
 }
 
+fn meta(c: &crate::db::models::NewChunk, key: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(&c.metadata).unwrap();
+    v[key].as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn artikel_heading_opens_its_chunk_and_becomes_the_section() {
+    let md = format!("{FILLER_A}\n\nArtikel 5\n\n{FILLER_B}");
+    let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();
+    let texts: Vec<_> = chunks.iter().map(|c| &c.text).collect();
+    assert_eq!(chunks.len(), 2, "{texts:?}");
+    assert!(chunks[1].text.starts_with("Artikel 5\n"), "{texts:?}");
+    assert_eq!(meta(&chunks[1], "section"), "Artikel 5");
+}
+
+#[test]
+fn upper_case_section_word_is_a_major_heading() {
+    let md = format!("Abschnitt 2\n\n{FILLER_A}\n\nABSCHNITT 4\n\n{FILLER_B}");
+    let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();
+    let sections: Vec<_> = chunks.iter().map(|c| meta(c, "section")).collect();
+    assert_eq!(sections, ["Abschnitt 2", "ABSCHNITT 4"], "not \"Abschnitt 2 ABSCHNITT 4\"");
+}
+
+#[test]
+fn a_word_at_a_line_start_is_no_heading_without_a_number() {
+    let md = format!("Article 3\n\n{FILLER_A}\n\nat the request of a Member State\n\n{FILLER_B}");
+    let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();
+    assert!(chunks.iter().all(|c| meta(c, "section") == "Article 3"), "{:?}", chunks.iter().map(|c| &c.metadata).collect::<Vec<_>>());
+}
+
+#[test]
+fn running_page_header_is_no_title() {
+    // A bold "DE" (the language code of an Official Journal page) on every page: before, it was a
+    // heading and the title of the chunks after it.
+    let para = |i: usize| format!("Absatz {i} mit genug Text, damit er eine eigene Zeile fuellt.\nNoch eine Zeile.");
+    let md = (0..24).map(|i| format!("**DE**\n\n{}", para(i))).collect::<Vec<_>>().join("\n\n");
+    let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();
+    let pages: std::collections::BTreeSet<_> = chunks.iter().filter_map(|c| pages::ChunkPages::from_metadata(&c.metadata)).flat_map(|p| [p.range().0, p.range().1]).collect();
+    assert!(pages.len() >= 3, "fixture must span at least 3 pages: {pages:?}");
+    assert!(chunks.iter().all(|c| meta(c, "title") != "DE"), "{:?}", chunks.iter().map(|c| &c.metadata).collect::<Vec<_>>());
+}
+
 // ── text_repair::repair_mojibake ────────────────────────────────────────────
 
 use super::text_repair::repair_mojibake;
