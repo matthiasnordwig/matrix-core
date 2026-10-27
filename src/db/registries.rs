@@ -416,6 +416,12 @@ impl Database {
         Ok(())
     }
 
+    /// Set only the "Advanced tool use" flag of an endpoint (the one-time switch of local models to basic).
+    pub fn set_llm_endpoint_tools_advanced(&self, id: i64, advanced: bool) -> Result<()> {
+        self.conn.execute("UPDATE llm_endpoints SET tools_advanced = ?2 WHERE id = ?1", params![id, advanced])?;
+        Ok(())
+    }
+
     /// Set an endpoint's context window and the split derived from it (prompt window, answer
     /// reserve) — for models whose window the platform reports (Apple Intelligence: the OS
     /// decides it). Touches nothing else.

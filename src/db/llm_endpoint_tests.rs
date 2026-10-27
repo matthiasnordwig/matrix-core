@@ -361,3 +361,15 @@ fn deleting_a_reasoning_list_nulls_endpoint_fk() {
     let after = db.llm_endpoint(ep.id).unwrap().unwrap();
     assert_eq!(after.reasoning_list_id, None);
 }
+
+#[test]
+fn set_llm_endpoint_tools_advanced_touches_only_that_flag() {
+    let db = db();
+    let a = seed_endpoint(&db, "a", "gguf");
+    let b = seed_endpoint(&db, "b", "gguf");
+    db.set_llm_endpoint_tools_advanced(a, true).unwrap();
+    assert!(db.llm_endpoint(a).unwrap().unwrap().tools_advanced);
+    assert!(!db.llm_endpoint(b).unwrap().unwrap().tools_advanced);
+    db.set_llm_endpoint_tools_advanced(a, false).unwrap();
+    assert!(!db.llm_endpoint(a).unwrap().unwrap().tools_advanced);
+}
