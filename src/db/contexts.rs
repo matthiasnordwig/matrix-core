@@ -94,8 +94,10 @@ impl Database {
             .optional()?)
     }
 
+    /// Every collection the user made — provisional ones (files attached in Ask,
+    /// schema_v72, `provisional.rs`) are left out, so no list ever shows them.
     pub fn list_contexts(&self) -> Result<Vec<Context>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM contexts ORDER BY name")?;
+        let mut stmt = self.conn.prepare("SELECT * FROM contexts WHERE provisional = 0 ORDER BY name")?;
         let rows = stmt.query_map([], row_to_context)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }

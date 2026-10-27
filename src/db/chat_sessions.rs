@@ -93,12 +93,13 @@ impl Database {
             .ok_or_else(|| CoreError::NotFound(format!("chat_session {id}")))
     }
 
-    /// Deletes the session; its `chat_messages` cascade via the FK.
+    /// Deletes the session; its `chat_messages` cascade via the FK, its
+    /// provisional collection (files attached in Ask, `provisional.rs`) goes too.
     pub fn delete_chat_session(&self, id: i64) -> Result<bool> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM chat_sessions WHERE id = ?1", [id])?
-            > 0)
+        self.in_savepoint("delete_chat", || {
+            self.delete_provisional_contexts_of_chat(id)?;
+            Ok(self.conn.execute("DELETE FROM chat_sessions WHERE id = ?1", [id])? > 0)
+        })
     }
 
     /// Append a plain (non-tool, no-meta) turn — user questions and legacy

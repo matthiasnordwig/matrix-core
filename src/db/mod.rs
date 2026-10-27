@@ -29,6 +29,7 @@ pub mod chunk_refs;
 pub mod chunk_kinds;
 pub mod collection_summary;
 mod contexts;
+mod provisional;
 pub mod embeddings;
 mod fts;
 mod grid;
@@ -217,6 +218,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v69.sql"),
     include_str!("schema_v70.sql"),
     include_str!("schema_v71.sql"),
+    include_str!("schema_v72.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -339,3 +341,5 @@ mod sample_key_tests;
 mod sheet_query_tests;
 #[cfg(test)]
 mod source_files_tests;
+#[cfg(test)]
+mod provisional_tests;
