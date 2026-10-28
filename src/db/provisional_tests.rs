@@ -103,10 +103,32 @@ fn start_up_sweep_removes_attachments_without_a_reachable_chat_only() {
     let no_chat = db.create_provisional_context(&spec("stateless"), None).unwrap().id;
     let empty_chat = db.create_provisional_context(&spec("silent"), Some(silent)).unwrap().id;
     // An own collection without any chat is untouched (it has no mark).
-    assert_eq!(db.delete_orphan_provisional_contexts().unwrap(), 2);
+    assert_eq!(db.delete_orphan_provisional_contexts(0).unwrap(), 2);
     assert!(exists(&db, kept_chat) && exists(&db, mine));
     assert!(!exists(&db, no_chat) && !exists(&db, empty_chat));
-    assert_eq!(db.delete_orphan_provisional_contexts().unwrap(), 0, "idempotent");
+    assert_eq!(db.delete_orphan_provisional_contexts(0).unwrap(), 0, "idempotent");
+}
+
+const DAY: i64 = 24 * 3600;
+
+fn age(db: &Database, id: i64, secs: i64) {
+    db.conn.execute("UPDATE contexts SET created_at = unixepoch() - ?2 WHERE id = ?1", [id, secs]).unwrap();
+}
+
+#[test]
+fn start_up_sweep_spares_young_orphans_and_never_touches_an_own_collection() {
+    let db = Database::open_in_memory().unwrap();
+    let mine = own(&db, "Mine");
+    age(&db, mine, 30 * DAY);
+    // Another process starting while the app fills an attachment for an unanswered chat.
+    let young = db.create_provisional_context(&spec("young"), None).unwrap().id;
+    age(&db, young, DAY - 60);
+    let old = db.create_provisional_context(&spec("old"), None).unwrap().id;
+    age(&db, old, DAY + 60);
+    assert_eq!(db.delete_orphan_provisional_contexts(DAY).unwrap(), 1);
+    assert!(exists(&db, young) && !exists(&db, old) && exists(&db, mine));
+    assert_eq!(db.delete_orphan_provisional_contexts(0).unwrap(), 1, "only the young attachment, never the own one");
+    assert!(exists(&db, mine));
 }
 
 #[test]
@@ -128,5 +150,5 @@ fn v72_applies_on_an_existing_v71_database() {
     assert_eq!(db.schema_version().unwrap(), super::MIGRATIONS.len() as i64);
     assert!(!db.is_provisional_context(1).unwrap(), "existing rows are the user's own");
     assert_eq!(listed(&db), vec![1]);
-    assert_eq!(db.delete_orphan_provisional_contexts().unwrap(), 0);
+    assert_eq!(db.delete_orphan_provisional_contexts(0).unwrap(), 0);
 }

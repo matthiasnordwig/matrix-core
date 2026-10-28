@@ -6,14 +6,17 @@
 //! "Discard" (`discard_provisional_context`), or the clean-up when its chat is
 //! deleted (`delete_provisional_contexts_of_chat`, called by
 //! `delete_chat_session`) or at start-up (`delete_orphan_provisional_contexts`:
-//! no chat, or a chat without a single turn — nobody can reach it any more).
+//! no chat, or a chat without a single turn — nobody can reach it any more —
+//! and older than the given age, so another process starting on the same file
+//! never sweeps an attachment that is still being indexed for an unanswered chat).
 //!
 //! Invariant: every delete here goes through `delete_if_provisional`, which
 //! re-checks the mark and deletes in one savepoint — a collection the user made
 //! is never deleted by this file.
 //!
 //! Known window: the chat is bound only after its first saved answer, so a crash
-//! before that answer leaves an unbound attachment that the next start deletes.
+//! before that answer leaves an unbound attachment that a start after the age
+//! limit deletes.
 //! Only the index is lost then (passages, vectors); the user's files on disk stay.
 
 use rusqlite::{params, OptionalExtension};
@@ -92,13 +95,16 @@ impl Database {
         self.delete_provisional_where("provisional_chat_id = ?1", Some(chat_id))
     }
 
-    /// Start-up sweep: provisional collections without a chat, or whose chat
-    /// has no turn (an attachment nobody asked about can no longer be reopened).
-    pub fn delete_orphan_provisional_contexts(&self) -> Result<usize> {
+    /// Start-up sweep: provisional collections created at least `min_age_secs`
+    /// ago without a chat, or whose chat has no turn (an attachment nobody asked
+    /// about can no longer be reopened). The age spares a young attachment that
+    /// a running app is still filling before its first answer binds it.
+    pub fn delete_orphan_provisional_contexts(&self, min_age_secs: i64) -> Result<usize> {
         self.delete_provisional_where(
-            "(provisional_chat_id IS NULL
+            "created_at <= unixepoch() - ?1
+             AND (provisional_chat_id IS NULL
               OR NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = contexts.provisional_chat_id))",
-            None,
+            Some(min_age_secs),
         )
     }
 
