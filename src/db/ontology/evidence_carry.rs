@@ -41,7 +41,11 @@
 //! **Extracted rule.** A new chunk counts as extracted only when every byte of
 //! it was already read by the extractor: same text → the old chunks overlapping
 //! it are all extracted and together cover its whole range; changed text → its
-//! folded text lies inside one extracted old chunk. Everything else stays open,
+//! folded text is found in the old chunks' folded texts joined in document
+//! order (one space between) at a place where every old chunk it touches is
+//! extracted — so a new cut across old boundaries over unchanged text stays
+//! read; a new chunk shorter than `MIN_FOLDED` must equal one extracted old
+//! chunk instead (a lone heading would be found anywhere). Everything else stays open,
 //! so a continued extraction does exactly the gaps (e.g. a new chunk that
 //! reaches into a formerly omitted passage is extracted again as a whole).
 use std::collections::HashSet;
@@ -290,6 +294,7 @@ pub fn plan_carry(old: &DocumentGraph, same_text: bool, new: &[NewChunkSpan]) ->
         }
     }
 
+    let mut old_joined: Option<OldJoined> = None;
     for (k, n) in live.iter().enumerate() {
         let done = if same_text {
             let (s, e) = (n.char_start, n.char_end);
@@ -304,14 +309,59 @@ pub fn plan_carry(old: &DocumentGraph, same_text: bool, new: &[NewChunkSpan]) ->
             }
             all && covered >= e && e > s
         } else {
-            folded[k].len() >= MIN_FOLDED
-                && old.chunks.iter().zip(&old_folded).any(|(o, of)| o.extracted && of.contains(folded[k].as_str()))
+            let joined = old_joined.get_or_insert_with(|| OldJoined::new(old, &old_folded));
+            joined.read(folded[k].trim())
         };
         if done {
             plan.extracted.push(n.id);
         }
     }
     plan
+}
+
+/// The old chunks' folded texts (trimmed) joined by one space in document
+/// order, each with its byte range in the joined text and its extracted mark.
+struct OldJoined {
+    text: String,
+    spans: Vec<(usize, usize, bool)>,
+    /// Folded texts of the extracted old chunks, for the short-chunk rule.
+    whole: HashSet<String>,
+}
+
+impl OldJoined {
+    fn new(old: &DocumentGraph, old_folded: &[String]) -> Self {
+        let mut order: Vec<usize> = (0..old.chunks.len()).collect();
+        order.sort_by_key(|&i| (old.chunks[i].char_start, old.chunks[i].id));
+        let mut j = OldJoined { text: String::new(), spans: Vec::new(), whole: HashSet::new() };
+        for i in order {
+            let t = old_folded[i].trim();
+            if t.is_empty() {
+                continue;
+            }
+            if !j.text.is_empty() {
+                j.text.push(' ');
+            }
+            let start = j.text.len();
+            j.text.push_str(t);
+            j.spans.push((start, j.text.len(), old.chunks[i].extracted));
+            if old.chunks[i].extracted {
+                j.whole.insert(t.to_string());
+            }
+        }
+        j
+    }
+
+    /// Whether the extractor already read `needle` (a new chunk's folded, trimmed text).
+    fn read(&self, needle: &str) -> bool {
+        if needle.len() < MIN_FOLDED {
+            return !needle.is_empty() && self.whole.contains(needle);
+        }
+        self.text.match_indices(needle).any(|(s, m)| {
+            let e = s + m.len();
+            let mut touched = self.spans.iter().filter(|&&(a, b, _)| a < e && s < b).peekable();
+            touched.peek().is_some() && touched.all(|&(_, _, x)| x)
+        })
+    }
 }
 
 /// The normalized texts of the new chunks joined by one space, with the start

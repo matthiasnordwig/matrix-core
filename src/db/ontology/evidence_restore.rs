@@ -106,9 +106,25 @@ impl Database {
     /// so a crash leaves either `old` with a still `pending` `new` (removed by the
     /// next update, `resync::leftovers`) or `new` alone — never both as final.
     /// What finds no place is counted in the report (`unplaced`), never silent.
+    /// `new` keeps `old`'s title and description (the same document read again;
+    /// a title given by hand or by the model must not fall back to the new
+    /// reading's guess); its file name stays in `zip_entry` when the title differs.
     pub fn replace_document_by(&self, old: i64, new: i64) -> Result<EvidenceCarryReport> {
         self.check_replacement(old, new)?;
         self.with_sheet_drop("document_id = ?1", old, || {
+            self.conn.execute(
+                "UPDATE documents AS n
+                    SET name = o.name,
+                        zip_entry = NULLIF(COALESCE(n.zip_entry, n.name), o.name),
+                        description = COALESCE(o.description, n.description)
+                   FROM documents AS o WHERE o.id = ?1 AND n.id = ?2",
+                [old, new],
+            )?;
+            self.conn.execute(
+                "UPDATE chunks SET metadata = json_set(metadata, '$.document_title', (SELECT name FROM documents WHERE id = ?1))
+                  WHERE document_id = ?1 AND json_valid(metadata) AND json_type(metadata) = 'object'",
+                [new],
+            )?;
             let graph = read_document_graph(&self.conn, old)?;
             self.conn.execute("DELETE FROM documents WHERE id = ?1", [old])?;
             self.conn.execute("UPDATE source_files SET pending = 0 WHERE document_id = ?1", [new])?;

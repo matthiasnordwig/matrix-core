@@ -146,3 +146,27 @@ fn a_cut_across_the_old_chunk_still_places_quote_and_labels() {
     let p = plan_carry(&g, true, &[new(30, 200, 260, &first), new(31, 260, 320, second)]);
     assert_eq!((p.placed, p.unplaced), (vec![(0, 30, MatchTier::EvidenceText)], vec![1, 2]));
 }
+
+#[test]
+fn changed_text_keeps_read_marks_across_old_boundaries() {
+    const C: &str = "Ein Anhang, den noch niemand gelesen hat.";
+    let g = graph(
+        vec![old(10, 0, 48, A, true), old(11, 48, 100, "1.3 Fähren", true), old(12, 100, 150, B, true), old(13, 150, 190, C, false)],
+        vec![],
+    );
+    let p = plan_carry(
+        &g,
+        false,
+        &[
+            // The same text read again, cut elsewhere: across 10/11/12, line breaks of a newer reader.
+            new(20, 0, 70, &format!("{A}\n\n1.3  Fähren\nDer Bund garantiert")),
+            // A lone heading equal to an extracted old chunk; one that is only part of one.
+            new(21, 70, 80, "1.3 Fähren"),
+            new(22, 80, 90, "1.3"),
+            // Reaches into the unread passage; text that was never there.
+            new(23, 90, 150, &format!("der Bank. {C}")),
+            new(24, 150, 190, "Ganz neuer Text, der vorher nirgends stand."),
+        ],
+    );
+    assert_eq!(p.extracted, vec![20, 21]);
+}

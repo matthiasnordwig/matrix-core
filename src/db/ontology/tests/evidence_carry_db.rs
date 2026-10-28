@@ -362,3 +362,28 @@ fn a_new_version_takes_over_all_evidence_by_content() {
     assert!(db.replace_document_by(n, n).is_err());
     assert!(db.document(n).unwrap().is_some());
 }
+
+#[test]
+fn a_new_version_keeps_the_title_and_description() {
+    let db = db();
+    let (ctx, d, _) = seeded(&db);
+    assert!(db.rename_document(d, "Jahresbericht 2024").unwrap());
+    assert!(db.set_document_description(d, Some("Bericht der Bank")).unwrap());
+    let n = doc(&db, ctx, &text());
+    chunk(&db, ctx, n, 0, 0, text().len(), &text());
+    db.replace_document_by(d, n).unwrap();
+    let new = db.document(n).unwrap().unwrap();
+    assert_eq!((new.name.as_str(), new.zip_entry.as_deref()), ("Jahresbericht 2024", Some("bericht.pdf")));
+    assert_eq!(new.description.as_deref(), Some("Bericht der Bank"));
+    let metas: Vec<String> = db.list_chunks(ctx, true).unwrap().into_iter().filter(|c| c.document_id == n).map(|c| c.metadata).collect();
+    assert!(!metas.is_empty() && metas.iter().all(|m| m.contains("Jahresbericht 2024")), "{metas:?}");
+
+    // Title equal to the file name: no `zip_entry`.
+    let m = doc(&db, ctx, &text());
+    chunk(&db, ctx, m, 0, 0, text().len(), &text());
+    let o = doc(&db, ctx, &text());
+    chunk(&db, ctx, o, 0, 0, text().len(), &text());
+    db.replace_document_by(m, o).unwrap();
+    let kept = db.document(o).unwrap().unwrap();
+    assert_eq!((kept.name.as_str(), kept.zip_entry.as_deref(), kept.description.as_deref()), ("bericht.pdf", None, None));
+}
