@@ -1,6 +1,6 @@
 //! CRUD for the Lens system (`ontology_lenses`/`ontology_lens_node_types`/
-//! `ontology_lens_edge_verdicts`) — see BACKLOG.md "Schema-Labeling ohne
-//! destruktives Sanitize" and `app/crates/services/src/ontology/extract/sanitize.rs`
+//! `ontology_lens_edge_verdicts`) — see `handbuch/ontology.md`
+//! „Lens-System“ and `app/crates/services/src/ontology/extract/sanitize.rs`
 //! (`materialize_lens`, the writer of these tables).
 use crate::db::{Database, Result};
 use crate::db::models::OntologyLens;

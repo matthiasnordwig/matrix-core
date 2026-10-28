@@ -1,7 +1,7 @@
 //! Read-only frequency analysis over permanently-kept raw types, feeding
 //! schema-gap suggestions ("this context's raw output keeps producing a type
-//! your profile has no slot for") — see BACKLOG.md "Schema-Typ-Vorschläge aus
-//! Rohtyp-Häufigkeiten". Pure SQL, no LLM; canonicalization of the resulting
+//! your profile has no slot for") — see `handbuch/db.md`
+//! „Schema-Vorschläge“. Pure SQL, no LLM; canonicalization of the resulting
 //! raw-type clusters against a broad reference catalog lives in
 //! `app/crates/services/src/ontology/extract/schema_suggest.rs`.
 use crate::db::{Database, Result};
@@ -31,8 +31,7 @@ impl Database {
 
     /// Groups edges the *active* lens marked `deleted` by
     /// `(relation_type, resolved_source_type, resolved_target_type)` — feeds
-    /// "constraint-gap" suggestions (see BACKLOG.md "Constraint-Lücken-
-    /// Vorschläge"): a relation type is known and allowed, but its profile
+    /// "constraint-gap" suggestions (see `handbuch/db.md` „Schema-Vorschläge“): a relation type is known and allowed, but its profile
     /// constraint list has no entry for this source/target type pair, so the
     /// lens drops the edge. `relation_type`/the two type columns are each
     /// `COALESCE(lens-resolved value, raw value)` — same fallback pattern as

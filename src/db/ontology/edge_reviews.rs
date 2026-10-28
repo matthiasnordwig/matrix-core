@@ -98,7 +98,7 @@ impl Database {
 
     /// Bulk "keep edge": drop review rows by id in one statement instead of N
     /// round-trips from the frontend (triage of large review batches — see
-    /// BACKLOG.md's edge-review-triage item). Returns the number of rows
+    /// `handbuch/ontology.md` „Quarantäne vs. Edge-Reviews“). Returns the number of rows
     /// actually deleted. `rusqlite` has no native slice-bind for `IN (...)`,
     /// so the placeholder list is built manually (ids are i64s from our own
     /// DB, never user text — no injection surface).

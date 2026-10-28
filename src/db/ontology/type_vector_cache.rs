@@ -1,6 +1,6 @@
 //! CRUD for `ontology_type_vector_cache` — a persistent raw-type -> vector
 //! cache shared by `materialize_lens` and `schema_suggest.rs` (see
-//! `schema_v35.sql`, BACKLOG.md "Rohtyp-Embeddings ... batchen + cachen").
+//! `schema_v35.sql`, `handbuch/db.md` „Schema-Vorschläge“).
 //! Keyed per `embedding_model_id` since vectors are model-specific.
 use crate::db::{Database, Result};
 use crate::db::embeddings::{blob_to_vector, vector_to_blob};

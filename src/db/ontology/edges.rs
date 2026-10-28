@@ -260,7 +260,7 @@ impl Database {
     }
 
     /// Feeds `materialize_lens`'s exhaustive resolve loop (every edge, not
-    /// just ones violating a constraint — see BACKLOG.md's Lens system).
+    /// just ones violating a constraint — see `handbuch/ontology.md` „Lens-System“).
     pub fn get_ontology_edges_raw(&self, context_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
         let mut stmt = self.conn.prepare("SELECT id, source_id, target_id, raw_relation_type FROM ontology_edges WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| {
@@ -292,7 +292,7 @@ impl Database {
     /// Like `get_ontology_edges_full`, but excludes edges the context's
     /// active lens verdicted `'deleted'` and uses the lens-resolved relation
     /// type (falling back to raw where no lens/no mapping row exists) — see
-    /// BACKLOG.md's Lens system. Used by community detection so a lens's
+    /// `handbuch/ontology.md` „Lens-System“. Used by community detection so a lens's
     /// "removed" edges don't shape community structure.
     pub fn get_ontology_edges_full_for_lens(&self, context_id: i64) -> Result<Vec<(i64, i64, String)>> {
         let mut stmt = self.conn.prepare(

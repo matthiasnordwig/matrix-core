@@ -179,7 +179,7 @@ impl Database {
 
         // Reversed edges swap source/target in the SELECT rather than
         // mutating the underlying row (the lens is a display-time overlay,
-        // see BACKLOG.md's Lens system); deleted edges are excluded outright.
+        // see `handbuch/ontology.md` „Lens-System“); deleted edges are excluded outright.
         let mut e_stmt = self.conn.prepare_cached(&format!("
             SELECT
                 CASE WHEN v.verdict = 'reversed' THEN t.label ELSE s.label END,

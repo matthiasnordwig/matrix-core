@@ -490,8 +490,8 @@ pub struct Context {
     /// (previously only ephemeral frontend state, see ISSUES.md).
     pub ontology_pool_id: Option<i64>,
     /// Optional dedicated endpoint/pool used ONLY for the extraction +
-    /// polarity-verification phases (see BACKLOG.md "Phasen-getrennte
-    /// Modellwahl", `schema_v36.sql`) — the judgment-critical phases where a
+    /// polarity-verification phases (see `handbuch/ontology.md`
+    /// "Modellauswahl, Pools, Fallback", `schema_v36.sql`) — the judgment-critical phases where a
     /// stronger/different model plausibly helps most. Dedup/community keep
     /// using the main source (`llm_id`/`ontology_pool_id`) regardless. At
     /// most one of `ontology_extract_llm_id`/`ontology_extract_pool_id`
@@ -898,7 +898,7 @@ pub struct OntologyNode {
     pub entity_type: String,
     /// The type the LLM actually produced at extraction time, kept permanently
     /// (never overwritten by lens materialization) — see
-    /// `core/src/db/ontology/lenses.rs`/BACKLOG.md's "Lens" system.
+    /// `core/src/db/ontology/lenses.rs`/`handbuch/ontology.md` „Lens-System“.
     /// `#[serde(default)]` so a context bundle exported before this field
     /// existed still deserializes on import (falls back to `entity_type`'s
     /// value being re-derived at insert time, not this default directly —
@@ -931,8 +931,8 @@ pub struct OntologyEdge {
     pub target_id: i64,
     pub relation_type: String,
     /// The relation type the LLM actually produced at extraction time, kept
-    /// permanently — see `OntologyNode::raw_entity_type`/BACKLOG.md's Lens
-    /// system. `#[serde(default)]` for the same reason as
+    /// permanently — see `OntologyNode::raw_entity_type`/`handbuch/ontology.md` „Lens-System“.
+    /// `#[serde(default)]` for the same reason as
     /// `OntologyNode::raw_entity_type`.
     #[serde(default)]
     pub raw_relation_type: String,
@@ -995,8 +995,8 @@ pub struct OntologyCommunityWithMembers {
 
 /// Materializes one `OntologyProfile`'s cosine-snap + relation-constraint
 /// resolution against a context's permanently-kept raw types, without
-/// mutating them (see `OntologyNode::raw_entity_type`/BACKLOG.md's Lens
-/// system). A context's `active_lens_id` picks which lens (if any) filters/
+/// mutating them (see `OntologyNode::raw_entity_type`/`handbuch/ontology.md` „Lens-System“).
+/// A context's `active_lens_id` picks which lens (if any) filters/
 /// relabels its graph for retrieval/dedup/community.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OntologyLens {
@@ -1068,8 +1068,8 @@ pub struct MergeLogEntry {
 
 /// One row of `ontology_run_log` (schema_v43): per-phase success/failure
 /// counters that survive app restart, unlike the in-memory applog ring
-/// buffer. Only the community-summarization phase writes rows for now (see
-/// BACKLOG.md) — data source for the Ontology admin window's optional status
+/// buffer. Only the community-summarization phase writes rows for now —
+/// data source for the Ontology admin window's optional status
 /// lines, never consulted by the pipeline itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OntologyRunLogEntry {

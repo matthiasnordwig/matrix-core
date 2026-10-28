@@ -104,8 +104,8 @@ impl Database {
     }
 
     /// `raw_entity_type` mirrors `entity_type` at insert time — nothing has
-    /// snapped anything yet, so they start out identical (see BACKLOG.md's
-    /// Lens system: only `materialize_lens` reads/writes a distinct resolved
+    /// snapped anything yet, so they start out identical (see
+    /// `handbuch/ontology.md` „Lens-System“: only `materialize_lens` reads/writes a distinct resolved
     /// type from here on, in the separate `ontology_lens_node_types` table).
     pub fn create_ontology_node(&self, new: &NewOntologyNode) -> Result<OntologyNode> {
         self.conn.execute(
@@ -207,7 +207,7 @@ impl Database {
     }
 
     /// Feeds `materialize_lens`'s exhaustive resolve loop (every node, not
-    /// just ones whose raw type isn't allowed — see BACKLOG.md's Lens system).
+    /// just ones whose raw type isn't allowed — see `handbuch/ontology.md` „Lens-System“).
     pub fn get_ontology_nodes_raw(&self, context_id: i64) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare("SELECT id, raw_entity_type FROM ontology_nodes WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -319,7 +319,7 @@ impl Database {
     /// back to the raw type where no lens/no mapping row exists) instead of
     /// the raw type directly — used by dedup bucketing so pair volume scales
     /// with the schema's type count, not with however many distinct raw
-    /// types extraction happened to produce (see BACKLOG.md's Lens system).
+    /// types extraction happened to produce (see `handbuch/ontology.md` „Lens-System“).
     pub fn get_ontology_nodes_with_embeddings_and_lens_type(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT o.id, COALESCE(lnt.resolved_type, o.raw_entity_type), o.label, o.description, o.vector_blob
