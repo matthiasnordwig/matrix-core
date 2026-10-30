@@ -42,7 +42,7 @@ use ndarray::Array2;
 use ort::ep::coreml::{ComputeUnits as CoreMLComputeUnits, CoreML as CoreMLExecutionProvider};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
-use tokenizers::Tokenizer;
+use tokenizers::{Tokenizer, TruncationParams};
 
 use super::QueryEmbedder;
 use crate::db::embeddings::l2_normalize;
@@ -68,6 +68,20 @@ pub struct OrtEmbedder {
     feature_inputs: Vec<(String, usize)>,
     /// Graph emits a pooled `sentence_embedding` output (skip mean-pool).
     has_sentence_embedding: bool,
+}
+
+/// Longest input of one embedding call. Attention memory grows with the square of the text
+/// length and the ONNX arena keeps its peak, while nothing else limits a passage: one line
+/// without breaks stays one chunk however long. A mail of 66 898 characters took the process to
+/// 24 GB. The vector then stands for the start of the passage; keyword search still sees all of it.
+const MAX_INPUT_TOKENS: usize = 2048;
+
+fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
+    let limit = TruncationParams { max_length: MAX_INPUT_TOKENS, ..Default::default() };
+    tokenizer
+        .with_truncation(Some(limit))
+        .map_err(|e| CoreError::Embedding(format!("tokenizer truncation: {e}")))?;
+    Ok(())
 }
 
 /// Declared last dimension of a `*_features` input, default 512 when dynamic/unknown.
@@ -141,8 +155,9 @@ impl OrtEmbedder {
             .collect();
         let has_sentence_embedding = session.outputs().iter().any(|o| o.name() == "sentence_embedding");
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| CoreError::Embedding(format!("tokenizer load: {e}")))?;
+        cap_input_tokens(&mut tokenizer)?;
 
         Ok(Self {
             session: Mutex::new(session),
