@@ -55,6 +55,7 @@ mod transfer;
 pub use transfer::TableSchema;
 pub mod ontology;
 mod savepoint;
+pub(crate) mod vector_hold;
 mod migration_hooks;
 use migration_hooks::{
     migrate_v49_to_v50_reranker, migrate_v50_to_v51_embedding_kind, migrate_v51_to_v52_reranker_kind,
@@ -229,6 +230,8 @@ pub struct Database {
     conn: Connection,
     /// Key for API keys at rest (`secret_fields.rs`); `None` = plaintext as before.
     secret_key: Option<crate::secrets::SecretKey>,
+    /// Vectors of the collection searched last (`vector_hold.rs`).
+    vectors: vector_hold::VectorHold,
 }
 
 impl Database {
@@ -248,7 +251,8 @@ impl Database {
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
         )?;
         Self::migrate(&mut conn)?;
-        let db = Self { conn, secret_key: None };
+        let vectors = vector_hold::VectorHold::watching(&conn);
+        let db = Self { conn, secret_key: None, vectors };
         // Safety net for physical sheet tables whose registry row is gone (sheet_tables.rs).
         db.drop_orphan_sheet_tables()?;
         // Parked evidence of deleted documents expires (ontology/evidence_parking.rs).
@@ -341,6 +345,8 @@ mod mmproj_tests;
 mod chunks_index_tests;
 #[cfg(test)]
 mod sample_key_tests;
+#[cfg(test)]
+mod vector_hold_tests;
 #[cfg(test)]
 mod vector_math_tests;
 #[cfg(test)]

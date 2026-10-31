@@ -150,26 +150,17 @@ impl Database {
         let mut row_merged: Vec<Vec<ScoredChunk>> = vec![Vec::new(); queries_by_row.len()];
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             for cid in ctxs {
-                let stored = self.scan_context_vectors(cid)?;
-                if stored.is_empty() {
-                    continue;
-                }
+                let table = self.vector_table(cid)?;
                 let gone = self.missing_document_ids(cid)?;
                 for (row_idx, query_by_model) in queries_by_row.iter().enumerate() {
                     let Some(qvec) = query_by_model.get(&model_id) else {
                         continue;
                     };
-                    for sv in stored.iter().filter(|sv| !gone.contains(&sv.document_id)) {
-                        if let Some(allowed) = doc_ids {
-                            if !allowed.contains(&sv.document_id) {
-                                continue;
-                            }
-                        }
-                        if sv.vector.len() == qvec.len() {
-                            row_merged[row_idx].push(ScoredChunk::new(
-                                sv.chunk_id,
-                                crate::db::embeddings::cosine(qvec, &sv.vector),
-                            ));
+                    let query_norm = crate::db::embeddings::dot(qvec, qvec).sqrt();
+                    for i in table.visible(&gone, doc_ids) {
+                        let (chunk_id, vector) = table.row(i);
+                        if vector.len() == qvec.len() {
+                            row_merged[row_idx].push(ScoredChunk::new(chunk_id, table.cosine(i, qvec, query_norm)));
                         }
                     }
                 }

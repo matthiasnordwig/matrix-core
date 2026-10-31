@@ -4,7 +4,7 @@
 //! for `aarch64-apple-ios`). `dot` is plain Rust that the compiler vectorizes
 //! for each target (NEON on ARM, SSE on x86).
 
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, OptionalExtension};
 
 use super::models::*;
 use super::{CoreError, Database, Result};
@@ -72,23 +72,6 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-fn row_to_stored_vector(row: &Row<'_>) -> rusqlite::Result<StoredVector> {
-    let blob: Vec<u8> = row.get("vector")?;
-    // blob_to_vector only fails on a corrupt (non-multiple-of-4) BLOB; surface
-    // that through rusqlite's error channel so query_map stays ergonomic.
-    let vector = blob_to_vector(&blob).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(blob.len(), rusqlite::types::Type::Blob, Box::new(
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
-        ))
-    })?;
-    Ok(StoredVector {
-        chunk_id: row.get("chunk_id")?,
-        document_id: row.get("document_id")?,
-        dim: row.get("dim")?,
-        vector,
-    })
-}
-
 impl Database {
     /// Store a chunk's embedding. Fails if `vector.len()` disagrees with `dim`.
     /// `INSERT OR REPLACE` (one row per chunk): re-embedding overwrites in place,
@@ -138,33 +121,13 @@ impl Database {
     }
 
     /// Count stored vectors for a context without loading them — used for
-    /// export size estimates (`scan_context_vectors` would decode every BLOB).
+    /// export size estimates and to decide whether a block of them is held (`vector_hold.rs`).
     pub fn count_embeddings_for_context(&self, context_id: i64) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM embeddings WHERE context_id = ?1",
             [context_id],
             |row| row.get(0),
         )?)
-    }
-
-    /// Load every vector for a context (one embedding space — the unit a
-    /// brute-force scan operates over).
-    pub fn scan_context_vectors(&self, context_id: i64) -> Result<Vec<StoredVector>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT chunk_id, document_id, dim, vector FROM embeddings WHERE context_id = ?1",
-        )?;
-        let rows = stmt.query_map([context_id], row_to_stored_vector)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    /// Load vectors for a specific set of documents within a context (the
-    /// file-level retrieval scope the left pane requests).
-    pub fn scan_document_vectors(&self, document_id: i64) -> Result<Vec<StoredVector>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT chunk_id, document_id, dim, vector FROM embeddings WHERE document_id = ?1",
-        )?;
-        let rows = stmt.query_map([document_id], row_to_stored_vector)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Brute-force cosine top-k over a context's vectors. All vectors in a
@@ -184,25 +147,16 @@ impl Database {
         if matches!(doc_ids, Some(d) if d.is_empty()) {
             return Ok(Vec::new());
         }
-        let stored = self.scan_context_vectors(context_id)?;
-        let gone = self.missing_document_ids(context_id)?;
-        let mut scored = Vec::with_capacity(stored.len());
-        for sv in &stored {
-            if gone.contains(&sv.document_id) {
-                continue; // file gone from disk (`source_files.rs`)
+        let table = self.vector_table(context_id)?;
+        let gone = self.missing_document_ids(context_id)?; // file gone from disk (`source_files.rs`)
+        let query_norm = dot(query, query).sqrt();
+        let mut scored = Vec::with_capacity(table.len());
+        for i in table.visible(&gone, doc_ids) {
+            let (chunk_id, vector) = table.row(i);
+            if vector.len() != query.len() {
+                return Err(CoreError::DimMismatch { expected: query.len(), got: vector.len() });
             }
-            if let Some(allowed) = doc_ids {
-                if !allowed.contains(&sv.document_id) {
-                    continue;
-                }
-            }
-            if sv.vector.len() != query.len() {
-                return Err(CoreError::DimMismatch {
-                    expected: query.len(),
-                    got: sv.vector.len(),
-                });
-            }
-            scored.push(ScoredChunk::new(sv.chunk_id, cosine(query, &sv.vector)));
+            scored.push(ScoredChunk::new(chunk_id, table.cosine(i, query, query_norm)));
         }
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);

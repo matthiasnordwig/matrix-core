@@ -650,15 +650,6 @@ pub struct NewEmbedding {
     pub vector: Vec<f32>,
 }
 
-/// A vector loaded back for a brute-force similarity scan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredVector {
-    pub chunk_id: i64,
-    pub document_id: i64,
-    pub dim: i64,
-    pub vector: Vec<f32>,
-}
-
 // Retrieval hits live in `scored.rs`, spreadsheet-table rows in `sheet_models.rs`,
 // grid-run history types in `grid_run_models.rs`, disk sources in `source_models.rs`.
 pub use super::{grid_run_models::*, scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*, source_models::*};
