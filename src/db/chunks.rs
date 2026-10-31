@@ -396,7 +396,8 @@ impl Database {
     }
 
     /// Fetch a chunk by (document_id, chunk_index) — the index is unique per
-    /// document (`staging_chunk_index_is_unique`), so this is a point lookup.
+    /// document (`staging_chunk_index_is_unique`), and `idx_chunks_document`
+    /// (schema_v73) makes this a point lookup: it runs once per search hit.
     fn chunk_by_document_index(&self, document_id: i64, chunk_index: i64) -> Result<Option<Chunk>> {
         Ok(self
             .conn
