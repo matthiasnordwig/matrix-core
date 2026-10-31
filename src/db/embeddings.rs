@@ -1,9 +1,8 @@
 //! Vector persistence: raw f32 BLOBs + pure-Rust brute-force cosine.
 //!
 //! No `sqlite-vec` / HNSW C-extensions (those break static cross-compilation
-//! for `aarch64-apple-ios`). The dot-product loops are plain iterators that
-//! LLVM autovectorizes into ARM64 NEON on Apple Silicon — fast enough for
-//! brute-force over thousands of small (128-dim Matryoshka) vectors.
+//! for `aarch64-apple-ios`). `dot` is plain Rust that the compiler vectorizes
+//! for each target (NEON on ARM, SSE on x86).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -34,9 +33,21 @@ pub fn blob_to_vector(bytes: &[u8]) -> Result<Vec<f32>> {
 
 // --- vector math -----------------------------------------------------------
 
+/// Dot product over the common length. Eight running sums, because the compiler must keep the
+/// order of a single float sum and therefore leaves `iter().sum()` scalar.
 #[inline]
 pub fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    const LANES: usize = 8;
+    let n = a.len().min(b.len());
+    let (a, b) = (a[..n].chunks_exact(LANES), b[..n].chunks_exact(LANES));
+    let tail: f32 = a.remainder().iter().zip(b.remainder()).map(|(x, y)| x * y).sum();
+    let mut sums = [0.0f32; LANES];
+    for (x, y) in a.zip(b) {
+        for i in 0..LANES {
+            sums[i] += x[i] * y[i];
+        }
+    }
+    sums.iter().sum::<f32>() + tail
 }
 
 /// L2-normalize in place. No-op for a zero vector. Used by the embedder

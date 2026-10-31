@@ -342,6 +342,8 @@ mod chunks_index_tests;
 #[cfg(test)]
 mod sample_key_tests;
 #[cfg(test)]
+mod vector_math_tests;
+#[cfg(test)]
 mod sheet_query_tests;
 #[cfg(test)]
 mod source_files_tests;
