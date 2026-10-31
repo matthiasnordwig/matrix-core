@@ -224,6 +224,47 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn count_documents(&self, context_id: i64) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM documents WHERE context_id = ?1", [context_id], |r| r.get(0))?)
+    }
+
+    /// Highest document id of a context, 0 for an empty one. New documents get a higher id, so this
+    /// marks "everything from here on is new" without loading the context.
+    pub fn max_document_id(&self, context_id: i64) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM documents WHERE context_id = ?1 ORDER BY id DESC LIMIT 1",
+                [context_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    /// The context's documents with an id above `after_id`, ordered like `list_documents`.
+    pub fn documents_after(&self, context_id: i64, after_id: i64) -> Result<Vec<Document>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM documents WHERE context_id = ?1 AND id > ?2 ORDER BY name")?;
+        let rows = stmt.query_map(params![context_id, after_id], row_to_document)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Document texts of a context, every one up to `limit` documents, above that an evenly thinned
+    /// selection of about `limit`: `list_documents` would load and sort all texts of a large context.
+    pub fn document_texts_sample(&self, context_id: i64, limit: i64) -> Result<Vec<String>> {
+        let step = (self.count_documents(context_id)? / limit.max(1)).max(1);
+        let mut stmt = self.conn.prepare(
+            "SELECT extracted_text FROM documents
+             WHERE context_id = ?1 AND id % ?2 = 0 AND extracted_text IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![context_id, step], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Set (or clear, with `None`/empty) a document's tool-manifest description
     /// (schema_v54, AP8). An empty string is normalized to `NULL` so the manifest
     /// builder can simply skip files without a description.

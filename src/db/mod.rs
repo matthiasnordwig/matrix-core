@@ -344,6 +344,8 @@ mod mmproj_tests;
 #[cfg(test)]
 mod chunks_index_tests;
 #[cfg(test)]
+mod document_listing_tests;
+#[cfg(test)]
 mod sample_key_tests;
 #[cfg(test)]
 mod vector_hold_tests;
