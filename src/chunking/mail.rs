@@ -24,6 +24,7 @@ const MAX_LINES_BETWEEN_MARKERS: usize = 1;
 const HEADER_LOOKAHEAD: usize = 5;
 /// A Lotus block starts at the sender and date lines above its `To:`.
 const MAX_SENDER_LINES: usize = 3;
+const MAX_GAP_ABOVE_TO: usize = 2;
 /// Longest text behind a rule that still counts as a footer.
 const MAX_FOOTER_CHARS: usize = 2_000;
 /// Shorter passages are not tracked as repeats.
@@ -84,13 +85,18 @@ fn followed_by(lines: &[Line], i: usize, keys: &[&str]) -> bool {
     lines[i + 1..].iter().take(HEADER_LOOKAHEAD).any(|l| keys.iter().any(|k| starts_with_key(l.text, k)))
 }
 
-/// The Lotus sender and date lines directly above a `To:` line, if the first of them looks like one.
+/// The Lotus sender and date lines above a `To:` line, if the first of them looks like one. An
+/// empty line may stand between them and the `To:` (Lotus often writes one with only tabs).
 fn lotus_start(lines: &[Line], to: usize, floor: usize) -> usize {
-    let mut s = to;
-    while s > floor && to - s < MAX_SENDER_LINES && !lines[s - 1].text.is_empty() {
+    let mut top = to;
+    while top > floor && to - top < MAX_GAP_ABOVE_TO && lines[top - 1].text.is_empty() {
+        top -= 1;
+    }
+    let mut s = top;
+    while s > floor && top - s < MAX_SENDER_LINES && !lines[s - 1].text.is_empty() {
         s -= 1;
     }
-    let above = &lines[s..to];
+    let above = &lines[s..top];
     if above.iter().any(|l| DATE.is_match(l.text) || l.text.contains('@')) { s } else { to }
 }
 

@@ -186,3 +186,16 @@ fn importance_line_is_part_of_an_embedded_header() {
     let own = format!("{HEAD}{text}\n");
     assert_eq!(duplicate_key(&chunk(&a, 1, 2)[1]).unwrap(), duplicate_key(&chunk(&own, 1, 2)[0]).unwrap());
 }
+
+#[test]
+fn lotus_sender_above_a_line_of_tabs_belongs_to_the_block() {
+    let t = format!(
+        "{HEAD}Can you confirm that?\n\n\n\n\tJohn Malowney\n\t07/17/2000 11:25 AM\n\t\t \n\t\t To: Tana Jones/HOU/ECT@ECT\n\t\t cc: Jan M King/HOU/ECT@ECT\n\t\t Subject: ISDA\n\nThey are a public utility.\n"
+    );
+    let cs = chunk(&t, 1, 2);
+    assert_offsets(&t, &cs);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"]);
+    assert!(cs[0].text.ends_with("Can you confirm that?"), "{}", cs[0].text);
+    assert_eq!(meta(&cs[1])["quoted_from"], "John Malowney");
+    assert_eq!(meta(&cs[1])["quoted_date"], "07/17/2000 11:25 AM");
+}
