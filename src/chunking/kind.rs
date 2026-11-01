@@ -210,7 +210,7 @@ fn scores(c: &Counts, total_chars: usize) -> Vec<(DocKind, f64)> {
     vec![
         (DocKind::Chat, share(c.chat) * 3.0),
         (DocKind::Slides, if c.slide >= 2 { 1.5 + share(c.slide) * 3.0 } else { 0.0 }),
-        (DocKind::Transcript, if speakers_ok { share(c.speaker) * 3.0 } else { 0.0 } + share(c.timestamp) * 2.0),
+        (DocKind::Transcript, if speakers_ok { (share(c.speaker) * 3.0).max(if per_10k(c.speaker) >= 3.0 { 1.4 } else { 0.0 }) } else { 0.0 } + share(c.timestamp) * 2.0),
         (DocKind::Legal, if is_law { (per_10k(c.legal) * 1.6).min(3.0) } else { 0.0 }),
         (DocKind::Minutes, if c.agenda >= 3 || (c.agenda >= 2 && c.minutes_word) { 1.4 } else { 0.0 }),
         (DocKind::Book, if !book_length || is_law { 0.0 } else if c.chapter >= 2 { 1.6 } else if c.heading <= 2 { 1.1 } else { 0.0 }),
