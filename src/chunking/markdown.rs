@@ -122,7 +122,7 @@ fn signature(text: &str) -> String {
 }
 
 /// End of `text[start..end]` with trailing whitespace removed.
-fn trimmed_end(text: &str, start: usize, end: usize) -> usize {
+pub(super) fn trimmed_end(text: &str, start: usize, end: usize) -> usize {
     start + text[start..end].trim_end().len()
 }
 
@@ -321,7 +321,7 @@ fn split_range(text: &str, lines: &[Line], a: usize, b: usize, max_chars: usize)
 
 /// Splits the byte range `[start, end)` into ranges of at most `max_chars`: at
 /// sentence starts, what is still too long at word starts, the rest anywhere.
-fn split_long_text(text: &str, start: usize, end: usize, max_chars: usize) -> Vec<(usize, usize)> {
+pub(super) fn split_long_text(text: &str, start: usize, end: usize, max_chars: usize) -> Vec<(usize, usize)> {
     let slice = &text[start..end];
     if slice.chars().count() <= max_chars {
         return vec![(start, end)];
@@ -347,7 +347,7 @@ fn split_long_text(text: &str, start: usize, end: usize, max_chars: usize) -> Ve
 
 /// Cuts `[start, end)` at some of `cuts` (ascending byte offsets), taking as
 /// much as fits into each range; a range without a cut inside may stay too long.
-fn pack_at(text: &str, start: usize, end: usize, cuts: &[usize], max_chars: usize) -> Vec<(usize, usize)> {
+pub(super) fn pack_at(text: &str, start: usize, end: usize, cuts: &[usize], max_chars: usize) -> Vec<(usize, usize)> {
     if text[start..end].chars().count() <= max_chars {
         return vec![(start, end)];
     }

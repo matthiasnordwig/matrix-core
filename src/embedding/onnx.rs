@@ -70,11 +70,11 @@ pub struct OrtEmbedder {
     has_sentence_embedding: bool,
 }
 
-/// Longest input of one embedding call. Attention memory grows with the square of the text
-/// length and the ONNX arena keeps its peak, while nothing else limits a passage: one line
-/// without breaks stays one chunk however long. A mail of 66 898 characters took the process to
-/// 24 GB. The vector then stands for the start of the passage; keyword search still sees all of it.
-pub(super) const MAX_INPUT_TOKENS: usize = 2048;
+/// Longest input of one embedding call, an emergency brake: chunkers keep passages below it.
+/// Memory grows faster than the text and the ONNX arena keeps its peak (EmbeddingGemma 2 on CPU,
+/// measured: 2 048 tokens 1.4 GB, 8 192 tokens 7.8 GB, 16 384 tokens 26 GB). The vector of a longer
+/// text stands for its start; keyword search still sees all of it.
+pub(super) const MAX_INPUT_TOKENS: usize = if cfg!(target_os = "ios") { 2048 } else { 8192 };
 
 pub(super) fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
     let limit = TruncationParams { max_length: MAX_INPUT_TOKENS, ..Default::default() };
