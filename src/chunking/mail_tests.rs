@@ -1,6 +1,6 @@
 //! Mail chunker on the block forms found in the Enron corpus.
 
-use super::mail::{chunk_mail as chunk, duplicate_key};
+use super::mail::{chunk_mail as chunk, duplicate_key, MAIL_MAX_CHARS};
 use crate::db::models::NewChunk;
 
 const HEAD: &str = "# Wow\n\n**From:** a@example.com  \n**To:** b@example.com  \n**Date:** 2000-09-06 04:46 -07:00\n\n";
@@ -81,11 +81,27 @@ fn angle_quoted_reply_is_found_behind_the_marks() {
 }
 
 #[test]
-fn a_long_block_stays_whole() {
-    let t = format!("{HEAD}{}", "Prices rose again today.\n\n".repeat(4000));
+fn block_over_the_limit_is_cut_at_paragraphs_only() {
+    let para = "word ".repeat(1500);
+    let body = format!("{para}\n\n").repeat(5);
+    let t = format!("{HEAD}{body}");
     let cs = chunk(&t, 1, 2);
-    assert_eq!(cs.len(), 1);
-    assert!(cs[0].text.chars().count() > 90_000);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 1);
+    for c in &cs {
+        assert!(c.text.chars().count() <= MAIL_MAX_CHARS);
+        assert!(c.text.ends_with("word"), "cut inside a paragraph");
+    }
+}
+
+#[test]
+fn line_over_the_limit_falls_back_to_sentences() {
+    let t = format!("{HEAD}{}", "Prices rose again today. ".repeat(2000));
+    let cs = chunk(&t, 1, 2);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 1);
+    assert!(cs[0].text.starts_with("# Wow") && cs[0].text.contains("Prices rose"));
+    assert!(cs.iter().all(|c| c.text.chars().count() <= MAIL_MAX_CHARS + HEAD.len() && c.text.ends_with("today.")));
 }
 
 #[test]

@@ -3,8 +3,9 @@
 //! here: a paragraph alone is often too little, the whole mail too much when it has several themes.
 //! The passage stays whole for reading and citing; each topic gets its own search vector.
 //!
-//! Pure: `paragraph_units` cuts, the caller embeds, `topic_groups` groups. The one length here is a
-//! brake for the model, whose time and memory climb steeply above about 2 000 tokens (`embedding/onnx.rs`).
+//! Pure: `paragraph_units` cuts, the caller embeds, `topic_groups` groups. A topic ends at a paragraph
+//! at the latest when it reaches [`MAX_UNIT_CHARS`], about 2 000 tokens: one vector must still stand
+//! for it, and the model's time and memory climb steeply above that (`embedding/onnx.rs`).
 
 use std::ops::Range;
 
@@ -13,8 +14,8 @@ use super::markdown::split_long_text;
 /// A paragraph with fewer words is a greeting or a signature: it says nothing alone and goes with
 /// its neighbour.
 const MIN_UNIT_WORDS: usize = 12;
-/// Brake for one model call, about 2 000 tokens; a longer paragraph is read sentence by sentence.
-const MODEL_BRAKE_CHARS: usize = 8_000;
+/// Most text one vector stands for, about 2 000 tokens; a longer paragraph is read by sentences.
+pub const MAX_UNIT_CHARS: usize = 8_000;
 
 /// The paragraphs of `text` as byte ranges, short ones joined to their neighbour.
 pub fn paragraph_units(text: &str) -> Vec<(usize, usize)> {
@@ -52,7 +53,7 @@ pub fn paragraph_units(text: &str) -> Vec<(usize, usize)> {
     } else if let Some(s) = carry {
         merged.push((s, s + text[s..].trim_end().len()));
     }
-    merged.into_iter().flat_map(|(s, e)| split_long_text(text, s, e, MODEL_BRAKE_CHARS)).collect()
+    merged.into_iter().flat_map(|(s, e)| split_long_text(text, s, e, MAX_UNIT_CHARS)).collect()
 }
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -76,15 +77,20 @@ pub fn mean_vector(vectors: &[Vec<f32>]) -> Vec<f32> {
 }
 
 /// Runs of neighbouring units on one topic: a unit joins the current run while it is at least
-/// `min_similarity` close to the run's mean.
-pub fn topic_groups(vectors: &[Vec<f32>], min_similarity: f32) -> Vec<Range<usize>> {
+/// `min_similarity` close to the run's mean and the run stays within [`MAX_UNIT_CHARS`].
+/// `sizes` are the units' lengths in characters.
+pub fn topic_groups(vectors: &[Vec<f32>], sizes: &[usize], min_similarity: f32) -> Vec<Range<usize>> {
     let mut groups = Vec::new();
     let mut start = 0;
+    let mut size = sizes.first().copied().unwrap_or(0);
     for i in 1..vectors.len() {
-        if cosine(&mean_vector(&vectors[start..i]), &vectors[i]) < min_similarity {
+        let same_topic = cosine(&mean_vector(&vectors[start..i]), &vectors[i]) >= min_similarity;
+        if !same_topic || size + sizes[i] > MAX_UNIT_CHARS {
             groups.push(start..i);
             start = i;
+            size = 0;
         }
+        size += sizes[i];
     }
     if !vectors.is_empty() {
         groups.push(start..vectors.len());
