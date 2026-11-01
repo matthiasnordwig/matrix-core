@@ -241,3 +241,13 @@ fn long_line_inside_a_code_fence_stays_whole() {
     assert_offsets(&t, &cs);
     assert_eq!(cs.len(), 1);
 }
+
+#[test]
+fn embedding_parts_cut_at_paragraphs_and_keep_short_text_whole() {
+    use super::markdown::embedding_parts;
+    assert_eq!(embedding_parts("short", 100), vec![(0, 5)]);
+    let t = format!("{}\n\n{}", "a ".repeat(40).trim_end(), "b ".repeat(40).trim_end());
+    let parts = embedding_parts(&t, 100);
+    assert_eq!(parts.len(), 2);
+    assert!(t[parts[0].0..parts[0].1].ends_with('a') && t[parts[1].0..parts[1].1].starts_with('b'));
+}

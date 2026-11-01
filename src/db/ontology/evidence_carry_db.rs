@@ -225,7 +225,8 @@ impl Database {
     }
 
     /// Make the chunks of `document_id` anew while keeping the graph's
-    /// evidence (module comment): one savepoint reads what hangs at the old
+    /// evidence (module comment): one savepoint hands passages that other
+    /// documents repeat over to a repeat (`promote_duplicates`), reads what hangs at the old
     /// chunks, deletes them, runs `build` (which creates the new chunks and may
     /// change the document text), and carries everything over. An `Err` from
     /// `build` rolls all of it back. Nests inside an open transaction.
@@ -235,6 +236,8 @@ impl Database {
         build: impl FnOnce() -> std::result::Result<T, E>,
     ) -> std::result::Result<(T, EvidenceCarryReport), E> {
         self.in_savepoint("replace_chunks", || {
+            // Repeats of its passages in other documents hand over to the first of them, so they stay findable.
+            self.promote_duplicates(document_id)?;
             let graph = read_document_graph(&self.conn, document_id)?;
             self.conn
                 .execute("DELETE FROM chunks WHERE document_id = ?1", [document_id])

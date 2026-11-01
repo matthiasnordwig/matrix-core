@@ -78,6 +78,10 @@ impl Database {
                 "UPDATE embeddings SET chunk_id = ?1, document_id = ?2 WHERE chunk_id = ?3",
                 params![heir, document, old],
             )?;
+            self.conn.execute(
+                "UPDATE embedding_parts SET chunk_id = ?1, document_id = ?2 WHERE chunk_id = ?3",
+                params![heir, document, old],
+            )?;
         }
         Ok(())
     }

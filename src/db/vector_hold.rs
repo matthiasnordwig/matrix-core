@@ -75,7 +75,7 @@ impl VectorHold {
         let writes = Arc::new(AtomicU64::new(0));
         let counter = writes.clone();
         conn.update_hook(Some(move |_action, _db: &str, table: &str, _rowid: i64| {
-            if table == "embeddings" {
+            if table == "embeddings" || table == "embedding_parts" {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         }));
@@ -119,7 +119,10 @@ impl Database {
             values: Vec::new(),
             norms: Vec::new(),
         };
-        let mut stmt = self.conn.prepare("SELECT chunk_id, document_id, vector FROM embeddings WHERE context_id = ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT chunk_id, document_id, vector FROM embeddings WHERE context_id = ?1 \
+             UNION ALL SELECT chunk_id, document_id, vector FROM embedding_parts WHERE context_id = ?1",
+        )?;
         let mut rows = stmt.query([context_id])?;
         while let Some(row) = rows.next()? {
             let bytes = row.get_ref(2)?.as_blob().map_err(rusqlite::Error::from)?;

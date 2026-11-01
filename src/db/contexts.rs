@@ -52,6 +52,7 @@ fn row_to_document(row: &Row<'_>) -> rusqlite::Result<Document> {
         content_hash: row.get("content_hash")?,
         extracted_text: row.get("extracted_text")?,
         ingested_at: row.get("ingested_at")?,
+        chunker: row.get("chunker")?,
     })
 }
 
@@ -339,9 +340,9 @@ impl Database {
             tx.execute(
                 "INSERT INTO documents
                     (context_id, name, zip_entry, byte_size, page_count, content_hash,
-                     extracted_text, ingested_at, description)
+                     extracted_text, ingested_at, description, chunker)
                  SELECT ?2, name, zip_entry, byte_size, page_count, content_hash,
-                        extracted_text, ingested_at, description
+                        extracted_text, ingested_at, description, chunker
                  FROM documents WHERE id = ?1",
                 params![doc_id, dst],
             )?;

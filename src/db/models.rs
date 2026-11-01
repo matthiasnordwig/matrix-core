@@ -568,6 +568,10 @@ pub struct Document {
     pub content_hash: Option<String>,
     pub extracted_text: Option<String>,
     pub ingested_at: i64,
+    /// Name of the `DocKind` the document was cut with (`documents.chunker`); `None` for documents
+    /// of collections that are not cut structurally or read before the column existed.
+    #[serde(default)]
+    pub chunker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

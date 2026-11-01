@@ -98,7 +98,20 @@ impl Database {
     /// changes: the old vectors live in a different embedding space and would
     /// otherwise be compared (meaninglessly) against new-model query vectors.
     /// Returns the number of rows removed.
+    /// Replaces the part vectors of a passage (none for a short one).
+    pub fn set_embedding_parts(&self, e: &NewEmbedding, parts: &[Vec<f32>]) -> Result<()> {
+        self.conn.execute("DELETE FROM embedding_parts WHERE chunk_id = ?1", [e.chunk_id])?;
+        for (i, v) in parts.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO embedding_parts (chunk_id, part, context_id, document_id, vector) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![e.chunk_id, i as i64, e.context_id, e.document_id, vector_to_blob(v)],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn delete_embeddings_for_context(&self, context_id: i64) -> Result<usize> {
+        self.conn.execute("DELETE FROM embedding_parts WHERE context_id = ?1", [context_id])?;
         Ok(self
             .conn
             .execute("DELETE FROM embeddings WHERE context_id = ?1", [context_id])?)
@@ -150,7 +163,7 @@ impl Database {
         let table = self.vector_table(context_id)?;
         let gone = self.missing_document_ids(context_id)?; // file gone from disk (`source_files.rs`)
         let query_norm = dot(query, query).sqrt();
-        let mut scored = Vec::with_capacity(table.len());
+        let mut scored: Vec<ScoredChunk> = Vec::with_capacity(table.len());
         for i in table.visible(&gone, doc_ids) {
             let (chunk_id, vector) = table.row(i);
             if vector.len() != query.len() {
@@ -159,7 +172,8 @@ impl Database {
             scored.push(ScoredChunk::new(chunk_id, table.cosine(i, query, query_norm)));
         }
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
-        Ok(scored)
+        // A long passage has several vectors and counts once, with its best.
+        let mut seen = std::collections::HashSet::new();
+        Ok(scored.into_iter().filter(|s| seen.insert(s.chunk_id)).take(top_k).collect())
     }
 }
