@@ -12,9 +12,11 @@ pub mod signatures;
 pub mod window;
 pub mod structural;
 pub mod pages;
+pub mod kind;
 pub mod mail;
 pub mod markdown;
 pub mod outline;
+pub mod rules;
 pub mod text_repair;
 
 pub use segments::{split_segments, Segment};
@@ -35,6 +37,8 @@ mod tests;
 mod markdown_tests;
 #[cfg(test)]
 mod mail_tests;
+#[cfg(test)]
+mod rules_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
