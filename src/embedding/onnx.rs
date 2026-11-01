@@ -70,14 +70,24 @@ pub struct OrtEmbedder {
     has_sentence_embedding: bool,
 }
 
-/// Longest input of one embedding call, an emergency brake: chunkers keep passages below it.
-/// Memory grows faster than the text and the ONNX arena keeps its peak (EmbeddingGemma 2 on CPU,
-/// measured: 2 048 tokens 1.4 GB, 8 192 tokens 7.8 GB, 16 384 tokens 26 GB). The vector of a longer
-/// text stands for its start; keyword search still sees all of it.
-pub(super) const MAX_INPUT_TOKENS: usize = if cfg!(any(target_os = "ios", target_os = "android")) { 2048 } else { 8192 };
+/// Input lengths in tokens and the memory one call needs (EmbeddingGemma 2 on CPU, measured; the ONNX
+/// arena keeps its peak, and memory grows faster than the text: 16 384 tokens took 26 GB).
+const INPUT_STEPS: [(usize, u64); 3] = [(2_048, 1_400 << 20), (4_096, 2_900 << 20), (8_192, 7_800 << 20)];
+/// Share of the device's memory one call may take.
+const MEMORY_DIVISOR: u64 = 3;
+/// Where the memory cannot be read: enough for a passage of the structural chunkers.
+const UNKNOWN_MEMORY_TOKENS: usize = 4_096;
 
-pub(super) fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
-    let limit = TruncationParams { max_length: MAX_INPUT_TOKENS, ..Default::default() };
+/// Longest input of one embedding call on a device with `memory` bytes, the same rule on every
+/// platform. The vector of a longer text stands for its start; keyword search still sees all of it.
+pub(super) fn input_token_limit(memory: Option<u64>) -> usize {
+    let Some(memory) = memory else { return UNKNOWN_MEMORY_TOKENS };
+    let fitting = INPUT_STEPS.iter().rev().find(|(_, needs)| *needs <= memory / MEMORY_DIVISOR);
+    fitting.map_or(INPUT_STEPS[0].0, |(tokens, _)| *tokens)
+}
+
+pub(super) fn cap_input_tokens(tokenizer: &mut Tokenizer, max_length: usize) -> Result<()> {
+    let limit = TruncationParams { max_length, ..Default::default() };
     tokenizer
         .with_truncation(Some(limit))
         .map_err(|e| CoreError::Embedding(format!("tokenizer truncation: {e}")))?;
@@ -157,7 +167,7 @@ impl OrtEmbedder {
 
         let mut tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| CoreError::Embedding(format!("tokenizer load: {e}")))?;
-        cap_input_tokens(&mut tokenizer)?;
+        cap_input_tokens(&mut tokenizer, input_token_limit(crate::device_memory::device_memory_bytes()))?;
 
         Ok(Self {
             session: Mutex::new(session),

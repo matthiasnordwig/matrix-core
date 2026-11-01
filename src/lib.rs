@@ -2,6 +2,7 @@
 
 pub mod chunking;
 pub mod db;
+pub mod device_memory;
 pub mod embedding;
 pub mod inference;
 #[cfg(feature = "gguf")]
