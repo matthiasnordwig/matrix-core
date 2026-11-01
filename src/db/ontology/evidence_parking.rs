@@ -52,6 +52,7 @@ impl Database {
     /// document of the same text right away if there is one.
     pub fn delete_document_parking(&self, id: i64) -> Result<DeletedDocument> {
         self.with_sheet_drop("document_id = ?1", id, || {
+            self.promote_duplicates(id)?;
             let twin_key: Option<(i64, String)> = self
                 .conn
                 .query_row("SELECT context_id, extracted_text FROM documents WHERE id = ?1", [id], |r| {

@@ -1,6 +1,6 @@
 //! Mail chunker on the block forms found in the Enron corpus.
 
-use super::mail::{chunk_mail as chunk, MAIL_MAX_CHARS};
+use super::mail::{chunk_mail as chunk, duplicate_key, MAIL_MAX_CHARS};
 use crate::db::models::NewChunk;
 
 const HEAD: &str = "# Wow\n\n**From:** a@example.com  \n**To:** b@example.com  \n**Date:** 2000-09-06 04:46 -07:00\n\n";
@@ -115,4 +115,42 @@ fn text_without_header_still_chunks() {
     let cs = chunk("just text\n", 1, 2);
     assert_eq!(cs.len(), 1);
     assert_eq!(cs[0].text, "just text");
+}
+
+#[test]
+fn filing_lines_land_in_the_metadata_of_every_passage() {
+    let t = format!(
+        "# Wow\n\n**From:** a@example.com  \n**Date:** 2000-09-06  \n**Folder:** \\\\Arnold\\Sent Items  \n**Mailbox:** Arnold-J\n\nI agree.\n\n-----Original Message-----\nFrom: X\nSent: Today\nTo: Y\n\nWhy?\n"
+    );
+    let cs = chunk(&t, 1, 2);
+    assert_eq!(cs.len(), 2);
+    for c in &cs {
+        assert_eq!(meta(c)["folder_kind"], "sent");
+        assert_eq!(meta(c)["mailbox"], "Arnold-J");
+    }
+}
+
+#[test]
+fn the_same_mail_in_two_folders_has_one_key_and_a_changed_text_another() {
+    let body = "The plan stands, and we go ahead with it as discussed on Monday. ".repeat(5);
+    let filed = |folder: &str, text: &str| {
+        let t = format!("# Wow\n\n**From:** a@example.com  \n**Folder:** {folder}  \n**Mailbox:** A\n\n{text}\n");
+        duplicate_key(&chunk(&t, 1, 2)[0]).unwrap()
+    };
+    assert_eq!(filed("Inbox", &body), filed("Projects", &body));
+    assert_ne!(filed("Inbox", &body), filed("Inbox", &format!("{body} Changed.")));
+}
+
+#[test]
+fn a_quoted_block_has_the_same_key_behind_quote_marks() {
+    let block = "From: X\nSent: Today\nTo: Y\n\nThe plan stands, and we go ahead with it as discussed on Monday and Tuesday. And more of the same text.\nA second line that makes the block long enough to count as a repeat worth tracking.\n";
+    let plain = format!("{HEAD}Yes.\n\n-----Original Message-----\n{block}");
+    let marked = format!("{HEAD}No.\n\n> -----Original Message-----\n{}", block.lines().map(|l| format!("> {l}\n")).collect::<String>());
+    let (a, b) = (chunk(&plain, 1, 2), chunk(&marked, 1, 2));
+    assert_eq!(duplicate_key(&a[1]).unwrap(), duplicate_key(&b[1]).unwrap());
+}
+
+#[test]
+fn short_passages_have_no_key() {
+    assert!(duplicate_key(&chunk(&format!("{HEAD}Thanks.\n"), 1, 2)[0]).is_none());
 }

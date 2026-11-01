@@ -27,6 +27,9 @@ pub mod chat_sessions;
 pub mod chunks;
 pub mod chunk_refs;
 pub mod chunk_kinds;
+mod chunk_duplicates;
+#[cfg(test)]
+mod chunk_duplicates_tests;
 pub mod collection_summary;
 mod contexts;
 mod provisional;
@@ -222,6 +225,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v71.sql"),
     include_str!("schema_v72.sql"),
     include_str!("schema_v73.sql"),
+    include_str!("schema_v74.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

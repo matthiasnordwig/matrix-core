@@ -23,6 +23,10 @@ const MAX_LINES_BETWEEN_MARKERS: usize = 1;
 const HEADER_LOOKAHEAD: usize = 5;
 /// A Lotus block starts at the sender and date lines above its `To:`.
 const MAX_SENDER_LINES: usize = 3;
+/// Shorter passages are not tracked as repeats.
+const MIN_DUPLICATE_CHARS: usize = 200;
+/// Header lines that say where a copy is filed, not what it says.
+const FILING_LINES: [&str; 2] = ["**Folder:** ", "**Mailbox:** "];
 
 static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*original message\s*-{2,}").unwrap());
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());
@@ -136,6 +140,45 @@ fn split_block(text: &str, lines: &[Line], first: usize, cut_from: usize, end: u
         .collect()
 }
 
+/// Text of a `**Label:** value` header line of the mail.
+fn header_value<'a>(lines: &'a [Line], body: usize, label: &str) -> Option<&'a str> {
+    let key = format!("**{label}:** ");
+    lines[..body].iter().find_map(|l| l.text.strip_prefix(key.as_str())).map(str::trim)
+}
+
+/// What a folder name says, across the languages of mail programs.
+fn folder_kind(folder: &str) -> &'static str {
+    let last = folder.rsplit(['\\', '/']).find(|s| !s.is_empty()).unwrap_or("").to_lowercase();
+    let is = |names: &[&str]| names.iter().any(|n| last.contains(n));
+    if is(&["inbox", "eingang", "réception", "entrada"]) {
+        "inbox"
+    } else if is(&["sent", "gesendet", "envoy", "enviad", "postausgang"]) {
+        "sent"
+    } else if is(&["deleted", "trash", "gelöscht", "papierkorb", "supprim", "eliminad"]) {
+        "deleted"
+    } else if is(&["draft", "entwürfe", "entwurf", "brouillon", "borrador"]) {
+        "drafts"
+    } else {
+        "other"
+    }
+}
+
+/// Key under which a mail passage counts as a repeat: its text without filing lines, quote marks and
+/// line breaks. `None` for short passages (a "Thanks" is no repeat worth tracking) and other chunks.
+pub fn duplicate_key(chunk: &NewChunk) -> Option<String> {
+    if !chunk.metadata.contains("\"mail_message\"") && !chunk.metadata.contains("\"mail_quoted\"") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for line in scan(&chunk.text) {
+        if !line.text.is_empty() && !FILING_LINES.iter().any(|l| line.text.starts_with(l)) {
+            lines.push(line.text);
+        }
+    }
+    let clean = lines.join("\n");
+    (clean.chars().count() >= MIN_DUPLICATE_CHARS).then(|| crate::db::ontology::evidence_carry::text_fingerprint(&clean))
+}
+
 /// Cuts one mail into passages.
 pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk> {
     let lines = scan(text);
@@ -144,6 +187,8 @@ pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk
     }
     let subject = lines.iter().find_map(|l| l.text.strip_prefix("# ")).unwrap_or("").trim().to_string();
     let body = body_start(&lines);
+    let folder = header_value(&lines, body, "Folder");
+    let mail_box = header_value(&lines, body, "Mailbox");
     let mut bounds = block_starts(&lines, body);
     // A forward without own text: the mail's header belongs to the block it forwards.
     let own_text = bounds.first().is_none_or(|&s| lines[body..s].iter().any(|l| !l.text.is_empty()));
@@ -159,6 +204,13 @@ pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk
             continue;
         }
         let mut meta = serde_json::json!({ "section": subject, "title": subject });
+        if let Some(f) = folder {
+            meta["folder"] = f.into();
+            meta["folder_kind"] = folder_kind(f).into();
+        }
+        if let Some(m) = mail_box {
+            meta["mailbox"] = m.into();
+        }
         if b == 0 {
             meta["chunk_type"] = "mail_message".into();
             meta["heading_path"] = subject.clone().into();
