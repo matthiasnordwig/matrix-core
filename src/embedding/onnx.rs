@@ -74,9 +74,9 @@ pub struct OrtEmbedder {
 /// length and the ONNX arena keeps its peak, while nothing else limits a passage: one line
 /// without breaks stays one chunk however long. A mail of 66 898 characters took the process to
 /// 24 GB. The vector then stands for the start of the passage; keyword search still sees all of it.
-const MAX_INPUT_TOKENS: usize = 2048;
+pub(super) const MAX_INPUT_TOKENS: usize = 2048;
 
-fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
+pub(super) fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
     let limit = TruncationParams { max_length: MAX_INPUT_TOKENS, ..Default::default() };
     tokenizer
         .with_truncation(Some(limit))
