@@ -102,7 +102,7 @@ macro_rules! rx {
     };
 }
 
-rx!(LEGAL, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:§§?\s*\d|art\.\s*\d|artikel\s+\d|article\s+\d|artículo\s+\d|section\s+\d+[.:]|ziffer\s+\d)");
+rx!(LEGAL, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:§§?\s*\d|art\.\s*\d|artikel\s+\d|article\s+\d|artículo\s+\d|section\s+\d+[.:]|ziffer\s+\d|(?-i:AT|BTO?|BTR)\s*\d)");
 rx!(AGENDA, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:top\s*\d|tagesordnungspunkt\s*\d|agenda item\s*\d|item\s+\d+[.:]|point\s+\d+[.:]|punto\s+\d+[.:])");
 rx!(MINUTES_WORD, r"(?i)\b(protokoll|niederschrift|minutes of|anwesend|attendees|beschluss|procès-verbal|acta de)\b");
 rx!(SPEAKER, r"^(?:\*\*)?([A-ZÄÖÜÉ][\p{L}.'\- ]{1,38})(?:\*\*)?:\s+\S");
@@ -203,12 +203,12 @@ fn scores(c: &Counts, total_chars: usize) -> Vec<(DocKind, f64)> {
     let book_length = total_chars >= BOOK_MIN_CHARS && c.mean_paragraph >= BOOK_MIN_PARAGRAPH;
     vec![
         (DocKind::Chat, share(c.chat) * 3.0),
-        (DocKind::Slides, if c.slide >= 2 { 1.0 + share(c.slide) * 3.0 } else { 0.0 }),
+        (DocKind::Slides, if c.slide >= 2 { 1.5 + share(c.slide) * 3.0 } else { 0.0 }),
         (DocKind::Transcript, if speakers_ok { share(c.speaker) * 3.0 } else { 0.0 } + share(c.timestamp) * 2.0),
-        (DocKind::Legal, if c.legal >= 3 { per_10k(c.legal).min(3.0) } else { 0.0 }),
+        (DocKind::Legal, if c.legal >= 3 { (per_10k(c.legal) * 1.6).min(3.0) } else { 0.0 }),
         (DocKind::Minutes, if c.agenda >= 3 || (c.agenda >= 2 && c.minutes_word) { 1.4 } else { 0.0 }),
-        (DocKind::Book, if book_length && c.chapter >= 2 { 1.6 } else if book_length && c.heading <= 2 { 1.1 } else { 0.0 }),
-        (DocKind::Manual, if c.step >= 5 && (c.warning >= 1 || per_10k(c.step) >= 5.0) { 1.3 } else { 0.0 }),
+        (DocKind::Book, if !book_length || c.legal >= 3 { 0.0 } else if c.chapter >= 2 { 1.6 } else if c.heading <= 2 { 1.1 } else { 0.0 }),
+        (DocKind::Manual, if per_10k(c.step) >= 10.0 || (c.step >= 5 && c.warning >= 3) { 1.3 } else { 0.0 }),
         (DocKind::Form, if total_chars <= FORM_MAX_CHARS && c.form_word && share(c.label) >= 0.3 { 1.2 } else { 0.0 }),
         (DocKind::Report, if c.heading >= 3 { 1.0 } else { 0.0 }),
     ]
