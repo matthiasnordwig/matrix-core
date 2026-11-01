@@ -25,8 +25,6 @@ const HEADER_LOOKAHEAD: usize = 5;
 const MAX_SENDER_LINES: usize = 3;
 /// Shorter passages are not tracked as repeats.
 const MIN_DUPLICATE_CHARS: usize = 200;
-/// Header lines that say where a copy is filed, not what it says.
-const FILING_LINES: [&str; 2] = ["**Folder:** ", "**Mailbox:** "];
 
 static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*original message\s*-{2,}").unwrap());
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());
@@ -163,20 +161,48 @@ fn folder_kind(folder: &str) -> &'static str {
     }
 }
 
-/// Key under which a mail passage counts as a repeat: its text without filing lines, quote marks and
-/// line breaks. `None` for short passages (a "Thanks" is no repeat worth tracking) and other chunks.
+/// First line after the header of a passage: a mail's `**From:**` block, or the marker and header
+/// lines of an embedded mail. The body alone says whether two passages are the same mail: a mail
+/// quoted in a reply carries another header than the mail itself.
+fn after_header(lines: &[Line]) -> usize {
+    let mut i = 0;
+    let mut in_header = false;
+    while let Some(l) = lines.get(i) {
+        let t = l.text;
+        let marker = t.is_empty() || t.starts_with("# ") || t.starts_with("**") || ORIGINAL.is_match(t) || FORWARD.is_match(t);
+        let head = HEADER_LINE.is_match(t) || t.starts_with("---") || t.ends_with("wrote:");
+        if marker || head {
+            in_header |= head;
+            i += 1;
+            continue;
+        }
+        // Lotus puts sender and date lines above its `To:`.
+        let lotus = !in_header && i + MAX_SENDER_LINES < lines.len() && lines[i + 1..=i + MAX_SENDER_LINES].iter().any(|l| starts_with_key(l.text, "to:"));
+        if !lotus {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// Key under which a mail passage counts as a repeat: its body with all white space and quote marks
+/// folded, so a wrapped quote matches its original. A short body says too little alone, so it counts
+/// together with its header; `None` for passages short even then and for other chunks.
 pub fn duplicate_key(chunk: &NewChunk) -> Option<String> {
     if !chunk.metadata.contains("\"mail_message\"") && !chunk.metadata.contains("\"mail_quoted\"") {
         return None;
     }
-    let mut lines = Vec::new();
-    for line in scan(&chunk.text) {
-        if !line.text.is_empty() && !FILING_LINES.iter().any(|l| line.text.starts_with(l)) {
-            lines.push(line.text);
-        }
-    }
-    let clean = lines.join("\n");
+    let lines = scan(&chunk.text);
+    let fold = |ls: &[Line]| ls.iter().filter(|l| !is_filing(l.text)).flat_map(|l| l.text.split_whitespace()).collect::<Vec<_>>().join(" ");
+    let body = fold(&lines[after_header(&lines).min(lines.len())..]);
+    let clean = if body.chars().count() >= MIN_DUPLICATE_CHARS { body } else { fold(&lines) };
     (clean.chars().count() >= MIN_DUPLICATE_CHARS).then(|| crate::db::ontology::evidence_carry::text_fingerprint(&clean))
+}
+
+/// A header line that says where this copy is filed, not what it says.
+fn is_filing(line: &str) -> bool {
+    line.starts_with("**Folder:** ") || line.starts_with("**Mailbox:** ")
 }
 
 /// Cuts one mail into passages.

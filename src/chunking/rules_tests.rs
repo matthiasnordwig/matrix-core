@@ -163,3 +163,11 @@ fn plausibility_rejects_one_huge_block_and_crumbs() {
     let crumbs: Vec<NewChunk> = (0..30).map(|i| NewChunk { chunk_index: i, text: "ab".into(), ..one.clone() }).collect();
     assert!(!is_plausible(&"ab ".repeat(30), &crumbs, 3000));
 }
+
+#[test]
+fn a_licence_with_numbered_sections_at_the_end_of_a_book_is_no_law() {
+    let chapters = (1..=4).map(|i| format!("Chapter {i}\n\n{}\n\n", prose(60))).collect::<String>();
+    let licence = (1..=6).map(|i| format!("Section {i}. Terms\n\nYou may copy this.\n\n")).collect::<String>();
+    let filler = format!("{}\n\n", prose(5)).repeat(40);
+    assert_eq!(kind(&format!("{chapters}{filler}{filler}{licence}"), "book.txt"), DocKind::Book);
+}

@@ -108,7 +108,7 @@ rx!(MINUTES_WORD, r"(?i)\b(protokoll|niederschrift|minutes of|anwesend|attendees
 rx!(SPEAKER, r"^(?:\*\*)?([A-ZÄÖÜÉ][\p{L}.'\- ]{1,38})(?:\*\*)?:\s+\S");
 rx!(TIMESTAMP, r"^\[?\d{1,2}:\d{2}(:\d{2})?\]?\s|-->");
 rx!(CHAT, r"^\[?\d{1,4}[./-]\d{1,2}[./-]\d{1,4},?\s+\d{1,2}:\d{2}");
-rx!(CHAPTER, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:kapitel|chapter|chapitre|capítulo)\s+(?:\d+|[ivxlc]+|[\p{L}]+)\b");
+rx!(CHAPTER, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:kapitel|chapter|chapitre|capítulo)\s+(?:\d+|[ivxlc]+|[\p{L}]+)\b|(?i)^\p{L}+s\s+kapitel\s*$");
 rx!(HEADING, r"^(?:#{1,6}\s+\S|\d+(?:\.\d+)*\.?\s+\p{Lu})");
 rx!(STEP, r"^(?:\s*\d{1,2}[.)]\s+\p{Lu}|(?:schritt|step|étape|paso)\s+\d)");
 rx!(WARNING, r"(?i)^(?:\*\*)?(?:warnung|achtung|vorsicht|hinweis|warning|caution|note|attention|advertencia)\b");
@@ -117,22 +117,22 @@ rx!(LABEL, r"^(?:\*\*)?[\p{L}][\p{L} ./-]{1,30}(?:\*\*)?:\s*\S.{0,60}$");
 rx!(FORM_WORD, r"(?i)\b(rechnung|invoice|facture|factura|iban|betrag|formular|antrag|total)\b");
 
 /// Whole text if short, else its start, middle and end: enough lines to tell kinds apart.
-fn sample(text: &str) -> String {
+fn sample(text: &str) -> Vec<&str> {
     let n = text.len();
     if n <= SAMPLE_HEAD + 2 * SAMPLE_TAIL {
-        return text.to_string();
+        return vec![text];
     }
     let at = |p: usize| (p..n).find(|&i| text.is_char_boundary(i)).unwrap_or(n);
     let mid = n / 2;
-    [(0, SAMPLE_HEAD), (mid, mid + SAMPLE_TAIL), (n - SAMPLE_TAIL, n)]
-        .map(|(a, b)| &text[at(a)..at(b)])
-        .join("\n")
+    [(0, SAMPLE_HEAD), (mid, mid + SAMPLE_TAIL), (n - SAMPLE_TAIL, n)].map(|(a, b)| &text[at(a)..at(b)]).to_vec()
 }
 
 struct Counts {
     lines: usize,
     chars: usize,
     legal: usize,
+    /// Marks before the end of the text; a licence at the end of a book is no law.
+    legal_outside_end: bool,
     agenda: usize,
     speaker: usize,
     speakers: usize,
@@ -149,11 +149,16 @@ struct Counts {
     mean_paragraph: f64,
 }
 
-fn count(sample: &str) -> Counts {
+fn count(parts: &[&str]) -> Counts {
+    let sample = parts.join("\n");
+    let sample = sample.as_str();
+    let before_end = &parts[..parts.len().saturating_sub(1).max(1)];
+    let marks_before_end = before_end.iter().any(|p| p.lines().any(|l| LEGAL.is_match(l)));
     let mut c = Counts {
         lines: 0,
         chars: sample.len(),
         legal: 0,
+        legal_outside_end: marks_before_end,
         agenda: 0,
         speaker: 0,
         speakers: 0,
@@ -200,14 +205,15 @@ fn scores(c: &Counts, total_chars: usize) -> Vec<(DocKind, f64)> {
     let share = |n: usize| n as f64 / lines;
     // Speakers come back; the labels of a form do not.
     let speakers_ok = (2..=MAX_SPEAKERS).contains(&c.speakers) && c.speaker >= 2 * c.speakers;
+    let is_law = c.legal >= 3 && c.legal_outside_end;
     let book_length = total_chars >= BOOK_MIN_CHARS && c.mean_paragraph >= BOOK_MIN_PARAGRAPH;
     vec![
         (DocKind::Chat, share(c.chat) * 3.0),
         (DocKind::Slides, if c.slide >= 2 { 1.5 + share(c.slide) * 3.0 } else { 0.0 }),
         (DocKind::Transcript, if speakers_ok { share(c.speaker) * 3.0 } else { 0.0 } + share(c.timestamp) * 2.0),
-        (DocKind::Legal, if c.legal >= 3 { (per_10k(c.legal) * 1.6).min(3.0) } else { 0.0 }),
+        (DocKind::Legal, if is_law { (per_10k(c.legal) * 1.6).min(3.0) } else { 0.0 }),
         (DocKind::Minutes, if c.agenda >= 3 || (c.agenda >= 2 && c.minutes_word) { 1.4 } else { 0.0 }),
-        (DocKind::Book, if !book_length || c.legal >= 3 { 0.0 } else if c.chapter >= 2 { 1.6 } else if c.heading <= 2 { 1.1 } else { 0.0 }),
+        (DocKind::Book, if !book_length || is_law { 0.0 } else if c.chapter >= 2 { 1.6 } else if c.heading <= 2 { 1.1 } else { 0.0 }),
         (DocKind::Manual, if per_10k(c.step) >= 10.0 || (c.step >= 5 && c.warning >= 3) { 1.3 } else { 0.0 }),
         (DocKind::Form, if total_chars <= FORM_MAX_CHARS && c.form_word && share(c.label) >= 0.3 { 1.2 } else { 0.0 }),
         (DocKind::Report, if c.heading >= 3 { 1.0 } else { 0.0 }),

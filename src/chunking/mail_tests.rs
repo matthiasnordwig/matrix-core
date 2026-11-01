@@ -154,3 +154,16 @@ fn a_quoted_block_has_the_same_key_behind_quote_marks() {
 fn short_passages_have_no_key() {
     assert!(duplicate_key(&chunk(&format!("{HEAD}Thanks.\n"), 1, 2)[0]).is_none());
 }
+
+#[test]
+fn a_mail_and_its_quote_in_a_reply_have_one_key() {
+    let text = "The plan stands, and we go ahead with it as discussed on Monday and Tuesday of this week.\nIt also holds for the second site, where the same crew starts as soon as the permits are in.\nPlease tell the others.";
+    let own = format!("{HEAD}{text}\n");
+    let reply = format!("{HEAD}Agreed.\n\n-----Original Message-----\nFrom: A\nSent: Monday\nTo: B\nSubject: Wow\n\n{text}\n");
+    let lotus = format!("{HEAD}Agreed.\n\n\n\nJeff Richter\n09/06/2000 07:39 AM\nTo: B/HOU/ECT@ECT\ncc:  \nSubject: Wow\n\n{text}\n");
+    let wrapped = format!("{HEAD}No.\n\n> -----Original Message-----\n> From: A\n> Sent: Monday\n> To: B\n>\n> {}\n", text.replace(" as discussed", "\n> as discussed").replace('\n', "\n> ").replace("> > ", "> "));
+    let key = |t: &str, i: usize| duplicate_key(&chunk(t, 1, 2)[i]).unwrap();
+    assert_eq!(key(&own, 0), key(&reply, 1));
+    assert_eq!(key(&own, 0), key(&lotus, 1));
+    assert_eq!(key(&own, 0), key(&wrapped, 1));
+}
