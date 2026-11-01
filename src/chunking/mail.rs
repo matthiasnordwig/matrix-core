@@ -23,12 +23,23 @@ const MAX_LINES_BETWEEN_MARKERS: usize = 1;
 const HEADER_LOOKAHEAD: usize = 5;
 /// A Lotus block starts at the sender and date lines above its `To:`.
 const MAX_SENDER_LINES: usize = 3;
+/// Longest text behind a rule that still counts as a footer.
+const MAX_FOOTER_CHARS: usize = 2_000;
 /// Shorter passages are not tracked as repeats.
 const MIN_DUPLICATE_CHARS: usize = 200;
 
 static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*original message\s*-{2,}").unwrap());
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());
-static HEADER_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(from|sent|date|to|cc|bcc|subject):").unwrap());
+static HEADER_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(from|sent|date|to|cc|bcc|subject|importance|priority|reply-to|sent by):|^please respond to\b|^[ap]m -{3,}").unwrap());
+/// Lines that carry nothing of a mail's own and differ between copies, at its end.
+static TRAILING_NOISE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(-{2,}\s*original message\s*-{2,}|<embedded .*>|-+\s*inline attachment follows\s*-+|\(revision: \d+\))$").unwrap());
+/// Where a gateway's or list's footer starts: a ruled line, or its first words.
+static FOOTER_START: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^([*_=-]{20,}|confidentiality notice|this e-?mail is the property|this message (and any attachments )?(is|are|may) .*confidential|to unsubscribe\b|get your free download)").unwrap()
+});
+
 static DATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d{1,2}/\d{1,2}/\d{2,4}(\s+\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?)?").unwrap());
 static FROM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^from:\s*(.+)$").unwrap());
@@ -194,10 +205,39 @@ pub fn duplicate_key(chunk: &NewChunk) -> Option<String> {
         return None;
     }
     let lines = scan(&chunk.text);
-    let fold = |ls: &[Line]| ls.iter().filter(|l| !is_filing(l.text)).flat_map(|l| l.text.split_whitespace()).collect::<Vec<_>>().join(" ");
-    let body = fold(&lines[after_header(&lines).min(lines.len())..]);
+    let body = fold(without_footer(&lines[after_header(&lines).min(lines.len())..]));
     let clean = if body.chars().count() >= MIN_DUPLICATE_CHARS { body } else { fold(&lines) };
     (clean.chars().count() >= MIN_DUPLICATE_CHARS).then(|| crate::db::ontology::evidence_carry::text_fingerprint(&clean))
+}
+
+/// The text of `lines` without filing lines, white space folded.
+fn fold(lines: &[Line]) -> String {
+    lines.iter().filter(|l| !is_filing(l.text)).flat_map(|l| l.text.split_whitespace()).collect::<Vec<_>>().join(" ")
+}
+
+/// Body of a passage as `duplicate_key` compares it.
+pub fn passage_body(text: &str) -> String {
+    let lines = scan(text);
+    fold(without_footer(&lines[after_header(&lines).min(lines.len())..]))
+}
+
+/// A body without what mail systems add at its end, which differs from copy to copy.
+fn without_footer<'a, 'b>(lines: &'a [Line<'b>]) -> &'a [Line<'b>] {
+    let mut end = lines.len();
+    while end > 0 && (lines[end - 1].text.is_empty() || TRAILING_NOISE.is_match(lines[end - 1].text)) {
+        end -= 1;
+    }
+    let mut tail_chars = 0;
+    for i in (0..end).rev() {
+        tail_chars += lines[i].text.len();
+        if tail_chars > MAX_FOOTER_CHARS {
+            break;
+        }
+        if FOOTER_START.is_match(lines[i].text) {
+            return without_footer(&lines[..i]);
+        }
+    }
+    &lines[..end]
 }
 
 /// A header line that says where this copy is filed, not what it says.

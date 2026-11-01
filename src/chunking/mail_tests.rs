@@ -167,3 +167,22 @@ fn a_mail_and_its_quote_in_a_reply_have_one_key() {
     assert_eq!(key(&own, 0), key(&lotus, 1));
     assert_eq!(key(&own, 0), key(&wrapped, 1));
 }
+
+#[test]
+fn footers_and_empty_markers_at_the_end_do_not_tell_copies_apart() {
+    let text = "The plan stands, and we go ahead with it as discussed on Monday and Tuesday of this week.\nIt also holds for the second site, where the same crew starts as soon as the permits are in.\nPlease tell the others.";
+    let key = |tail: &str| duplicate_key(&chunk(&format!("{HEAD}{text}\n{tail}"), 1, 2)[0]).unwrap();
+    let plain = key("");
+    assert_eq!(plain, key("\n**********************************************************************\nThis e-mail is the property of Enron Corp. and may contain confidential information.\n"));
+    assert_eq!(plain, key("\n<Embedded StdOleLink>\n"));
+    assert_eq!(plain, key("\n_________________________________________________________________\nGet your FREE download of MSN Explorer\n"));
+    assert_ne!(plain, key("\nAnd one more sentence that belongs to the mail itself and changes what it says.\n"));
+}
+
+#[test]
+fn importance_line_is_part_of_an_embedded_header() {
+    let text = "The plan stands, and we go ahead with it as discussed on Monday and Tuesday of this week.\nIt also holds for the second site, where the same crew starts as soon as the permits are in.\nPlease tell the others.";
+    let a = format!("{HEAD}Yes.\n\n-----Original Message-----\nFrom: A\nSent: Monday\nTo: B\nSubject: Wow\nImportance: High\n\n{text}\n");
+    let own = format!("{HEAD}{text}\n");
+    assert_eq!(duplicate_key(&chunk(&a, 1, 2)[1]).unwrap(), duplicate_key(&chunk(&own, 1, 2)[0]).unwrap());
+}

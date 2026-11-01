@@ -83,7 +83,7 @@ fn main() {
     let mut out = String::new();
     let mut multi = 0usize;
     let mut seen = std::collections::HashSet::new();
-    let (mut kept, mut kept_chars, mut parts) = (0usize, 0u64, 0usize);
+    let (mut kept, mut kept_chars, mut parts, mut small) = (0usize, 0u64, 0usize, 0usize);
     while let Some(r) = rows.next().expect("row") {
         let id: i64 = r.get(0).expect("id");
         let Some(text): Option<String> = r.get(1).expect("text") else { continue };
@@ -98,6 +98,7 @@ fn main() {
                 kept += 1;
                 kept_chars += c.text.len() as u64;
                 parts += embedding_parts(&c.text, 6_000).len();
+                small += embedding_parts(&c.text, 2_000).len();
             }
         }
         if b.len() > 1 {
@@ -108,5 +109,5 @@ fn main() {
         }
     }
     std::fs::write(samples, out).expect("samples");
-    println!("{}", serde_json::json!({ "old": old.json(), "new": new.json(), "embedded_once": { "passages": kept, "bytes": kept_chars, "vectors": parts } }));
+    println!("{}", serde_json::json!({ "old": old.json(), "new": new.json(), "embedded_once": { "passages": kept, "bytes": kept_chars, "vectors": parts, "vectors_2000": small } }));
 }
