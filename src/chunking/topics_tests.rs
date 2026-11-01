@@ -1,6 +1,6 @@
 //! Paragraphs and topics of long texts.
 
-use super::topics::{mean_vector, paragraph_units, topic_groups, MAX_UNIT_CHARS};
+use super::topics::{mean_vector, paragraph_units, topic_groups, MAX_TOPIC_CHARS};
 
 fn sentence(word: &str) -> String {
     format!("{word} ").repeat(20).trim_end().to_string()
@@ -51,6 +51,6 @@ fn neighbours_on_one_topic_stay_together_and_a_new_topic_starts_a_group() {
 #[test]
 fn a_topic_ends_at_a_paragraph_before_one_vector_could_no_longer_stand_for_it() {
     let v = vec![1.0, 0.0];
-    let big = MAX_UNIT_CHARS / 2 + 1;
+    let big = MAX_TOPIC_CHARS / 2 + 1;
     assert_eq!(topic_groups(&[v.clone(), v.clone(), v], &[big, big, 10], 0.8), vec![0..1, 1..3]);
 }

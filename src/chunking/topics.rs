@@ -4,8 +4,8 @@
 //! The passage stays whole for reading and citing; each topic gets its own search vector.
 //!
 //! Pure: `paragraph_units` cuts, the caller embeds, `topic_groups` groups. A topic ends at a paragraph
-//! at the latest when it reaches [`MAX_UNIT_CHARS`], about 2 000 tokens: one vector must still stand
-//! for it, and the model's time and memory climb steeply above that (`embedding/onnx.rs`).
+//! at the latest at [`MAX_TOPIC_CHARS`], the most one vector can stand for. [`MAX_UNIT_CHARS`] limits
+//! a single model call: its time and memory climb steeply above that (`embedding/onnx.rs`).
 
 use std::ops::Range;
 
@@ -14,8 +14,10 @@ use super::markdown::split_long_text;
 /// A paragraph with fewer words is a greeting or a signature: it says nothing alone and goes with
 /// its neighbour.
 const MIN_UNIT_WORDS: usize = 12;
-/// Most text one vector stands for, about 2 000 tokens; a longer paragraph is read by sentences.
+/// Most text for one model call, about 2 000 tokens; a longer paragraph is read by sentences.
 pub const MAX_UNIT_CHARS: usize = 8_000;
+/// Most text one topic vector stands for, the usual reach of long passages (10 000 to 20 000 characters).
+pub const MAX_TOPIC_CHARS: usize = 16_000;
 
 /// The paragraphs of `text` as byte ranges, short ones joined to their neighbour.
 pub fn paragraph_units(text: &str) -> Vec<(usize, usize)> {
@@ -77,7 +79,7 @@ pub fn mean_vector(vectors: &[Vec<f32>]) -> Vec<f32> {
 }
 
 /// Runs of neighbouring units on one topic: a unit joins the current run while it is at least
-/// `min_similarity` close to the run's mean and the run stays within [`MAX_UNIT_CHARS`].
+/// `min_similarity` close to the run's mean and the run stays within [`MAX_TOPIC_CHARS`].
 /// `sizes` are the units' lengths in characters.
 pub fn topic_groups(vectors: &[Vec<f32>], sizes: &[usize], min_similarity: f32) -> Vec<Range<usize>> {
     let mut groups = Vec::new();
@@ -85,7 +87,7 @@ pub fn topic_groups(vectors: &[Vec<f32>], sizes: &[usize], min_similarity: f32) 
     let mut size = sizes.first().copied().unwrap_or(0);
     for i in 1..vectors.len() {
         let same_topic = cosine(&mean_vector(&vectors[start..i]), &vectors[i]) >= min_similarity;
-        if !same_topic || size + sizes[i] > MAX_UNIT_CHARS {
+        if !same_topic || size + sizes[i] > MAX_TOPIC_CHARS {
             groups.push(start..i);
             start = i;
             size = 0;
