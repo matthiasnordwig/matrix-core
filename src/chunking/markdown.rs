@@ -121,16 +121,6 @@ fn signature(text: &str) -> String {
     text.chars().take(80).collect()
 }
 
-/// Ranges of a long passage to embed one by one, each at most `max_chars`: at paragraphs, then
-/// like a long line. A short passage is one range.
-pub fn embedding_parts(text: &str, max_chars: usize) -> Vec<(usize, usize)> {
-    let paragraphs: Vec<usize> = text.match_indices("\n\n").map(|(i, _)| i + 2).collect();
-    pack_at(text, 0, text.len(), &paragraphs, max_chars)
-        .into_iter()
-        .flat_map(|(s, e)| split_long_text(text, s, e, max_chars))
-        .collect()
-}
-
 /// End of `text[start..end]` with trailing whitespace removed.
 pub(super) fn trimmed_end(text: &str, start: usize, end: usize) -> usize {
     start + text[start..end].trim_end().len()

@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod outline;
 pub mod rules;
 pub mod text_repair;
+pub mod topics;
 
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};
@@ -39,6 +40,8 @@ mod markdown_tests;
 mod mail_tests;
 #[cfg(test)]
 mod rules_tests;
+#[cfg(test)]
+mod topics_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]

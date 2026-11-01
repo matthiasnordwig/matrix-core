@@ -2,19 +2,15 @@
 //! (reply, forward, Lotus header block) are separate passages, so a hit belongs to one author.
 //!
 //! The text is the Markdown of `ingest/mail` (subject heading, `**From:**` lines, body). Offsets are
-//! byte offsets and chunks are verbatim slices, as in `markdown.rs`. A block stays whole up to
-//! [`MAIL_MAX_CHARS`]; above that it is cut at paragraphs, then as `markdown.rs` cuts a long line.
-//! Mails without a usable block marker stay one block, with no cut below the limit.
+//! byte offsets and chunks are verbatim slices, as in `markdown.rs`. A block stays whole, whatever
+//! its length: search reaches the topics of a long one through `chunking/topics.rs`.
 
 use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::markdown::{pack_at, split_long_text, trimmed_end};
+use super::markdown::trimmed_end;
 use crate::db::models::NewChunk;
-
-/// Longest block in characters, about what the embedder takes in one call.
-pub const MAIL_MAX_CHARS: usize = 30_000;
 
 const HEADER_SEP: &str = " › ";
 /// Body lines between two markers that still count as one block's header (a wrapped banner line).
@@ -135,18 +131,6 @@ fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
         .iter()
         .find_map(|t| SENT.captures(t).map(|c| c[2].trim().to_string()).or_else(|| DATE.find(t).map(|m| m.as_str().to_string())));
     (from, date)
-}
-
-/// One block as ranges of at most [`MAIL_MAX_CHARS`]: at paragraphs from line `cut_from` on, then like a long line.
-fn split_block(text: &str, lines: &[Line], first: usize, cut_from: usize, end: usize) -> Vec<(usize, usize)> {
-    let start = lines[first].start;
-    let stop = trimmed_end(text, start, lines[end - 1].end);
-    let paragraphs: Vec<usize> =
-        (cut_from..end).filter(|&i| lines[i - 1].text.is_empty() && !lines[i].text.is_empty()).map(|i| lines[i].start).collect();
-    pack_at(text, start, stop, &paragraphs, MAIL_MAX_CHARS)
-        .into_iter()
-        .flat_map(|(s, e)| split_long_text(text, s, e, MAIL_MAX_CHARS))
-        .collect()
 }
 
 /// Text of a `**Label:** value` header line of the mail.
@@ -288,36 +272,20 @@ pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk
             meta["quoted_from"] = from.into();
             meta["quoted_date"] = date.into();
         }
-        // The mail's header stays with its first paragraph.
-        let cut_from = if b == 0 { (body + 1).max(first + 1) } else { first + 1 };
-        let mut parts = split_block(text, &lines, first, cut_from, end);
-        if b == 0 && parts.len() > 1 && body < lines.len() && parts[0].1 <= lines[body].start {
-            parts[1].0 = parts[0].0; // the sentence split takes the header for a sentence of its own
-            parts.remove(0);
-        }
-        let n_parts = parts.len();
-        for (part, (start, stop)) in parts.into_iter().enumerate() {
-            let slice = &text[start..stop];
-            if slice.is_empty() {
-                continue;
-            }
-            let mut m = meta.clone();
-            if n_parts > 1 {
-                m["part"] = (part + 1).into();
-                m["parts"] = n_parts.into();
-            }
-            out.push(NewChunk {
-                context_id,
-                document_id,
-                chunk_index: out.len() as i64,
-                char_start: start as i64,
-                char_end: stop as i64,
-                text: slice.to_string(),
-                signature: Some(slice.chars().take(80).collect()),
-                is_omitted: false,
-                metadata: m.to_string(),
-            });
-        }
+        let start = lines[first].start;
+        let stop = trimmed_end(text, start, lines[end - 1].end);
+        let slice = &text[start..stop];
+        out.push(NewChunk {
+            context_id,
+            document_id,
+            chunk_index: out.len() as i64,
+            char_start: start as i64,
+            char_end: stop as i64,
+            text: slice.to_string(),
+            signature: Some(slice.chars().take(80).collect()),
+            is_omitted: false,
+            metadata: meta.to_string(),
+        });
     }
     out
 }

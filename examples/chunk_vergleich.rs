@@ -7,7 +7,8 @@
 use std::fmt::Write as _;
 
 use app::chunking::mail::{chunk_mail, duplicate_key};
-use app::chunking::markdown::{chunk_markdown_structurally, embedding_parts, DEFAULT_MAX_CHARS};
+use app::chunking::markdown::{chunk_markdown_structurally, DEFAULT_MAX_CHARS};
+use app::chunking::topics::paragraph_units;
 use app::db::models::NewChunk;
 use rusqlite::{Connection, OpenFlags};
 
@@ -97,8 +98,8 @@ fn main() {
             if duplicate_key(c).is_none_or(|k| seen.insert(k)) {
                 kept += 1;
                 kept_chars += c.text.len() as u64;
-                parts += embedding_parts(&c.text, 6_000).len();
-                small += embedding_parts(&c.text, 2_000).len();
+                parts += paragraph_units(&c.text).len();
+                small += 1;
             }
         }
         if b.len() > 1 {
