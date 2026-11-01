@@ -67,6 +67,8 @@ static BANNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-_=]{2,}\s*\p{L
 static DATED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}:\d{2}|\b\d{1,2}\.?\s\p{L}{3,}\.?\s\d{4}\b|\p{L}{3,}\.?\s\d{1,2},?\s\d{4}\b|\d{4}\s?[年년]\s?\d{1,2}\s?[月월]\s?\d{1,2}\s?[日일]").unwrap()
 });
+/// The small word before a date behind a sender: `on`, `am`, `le`.
+static SENDER_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+\p{Ll}{1,3}$").unwrap());
 static NOTES_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\p{L}/[\p{L}&_ -]+/\p{L}").unwrap());
 /// A web address as a value.
 static CONTACT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(https?://|www\.)").unwrap());
@@ -287,6 +289,10 @@ fn block_starts(lines: &[Line], body: usize) -> Vec<usize> {
         (marker_end, after_header) = (end, header);
         i = end;
     }
+    // A last header with nothing below it says nothing of its own; it stays with the text above.
+    if lines[marker_end.min(lines.len())..].iter().all(|l| l.text.is_empty()) {
+        starts.pop();
+    }
     starts
 }
 
@@ -296,9 +302,9 @@ fn banner_end(lines: &[Line], i: usize) -> usize {
 }
 
 /// Sender and date of an embedded mail, read from its first lines.
-fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
+fn quoted_author(lines: &[Line], subject: &str) -> (Option<String>, Option<String>) {
     let head: Vec<&str> = lines.iter().map(|l| l.head.as_ref()).filter(|t| !t.is_empty()).take(HEADER_LOOKAHEAD + 1).collect();
-    let first = head.iter().position(|t| !BANNER.is_match(t) && !FORWARD.is_match(t) && !t.ends_with(':') && !t.ends_with("---")).unwrap_or(0);
+    let mut first = head.iter().position(|t| !BANNER.is_match(t) && !FORWARD.is_match(t) && !t.ends_with(':') && !t.ends_with("---")).unwrap_or(0);
     let value = |t: &str| t.split_once(':').map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
     let dated = head.iter().position(|t| DATED.is_match(t));
     let date = dated.map(|i| {
@@ -311,17 +317,36 @@ fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
     // Sender first, then the date: the order of every mail program, in every language. A banner
     // says as much; a Lotus block starts with the recipient and has neither.
     let forward = head.first().is_some_and(|t| FORWARD.is_match(t));
+    // Thunderbird and cc:Mail start with the subject, whatever its label says.
+    if head.get(first).and_then(|t| value(t)).is_some_and(|v| same_subject(&v, subject)) {
+        first += 1;
+        first += usize::from(head.get(first).is_some_and(|t| DATED.is_match(t)));
+    }
     let banner = first > 0 && !forward;
     let leads = |t: &&&str| HEADER_LINE.is_match(t) && (banner || dated.is_some_and(|d| d <= first + 1));
-    let named = head.get(first).filter(leads).and_then(|t| value(t));
+    let named = head.get(first).filter(leads).and_then(|t| value(t)).and_then(|t| sender_only(&t));
     // A sender line with the date on it or below it, also under a forward: the text is the sender's.
     let is_sender = |t: &&&str| (first == 0 || forward) && !HEADER_LINE.is_match(t) && !t.starts_with("--") && head[first..].iter().take(2).any(|l| DATED.is_match(l));
     let from = named
-        .or_else(|| head.get(first).filter(is_sender).map(|t| t.to_string()))
+        .or_else(|| head.get(first).filter(is_sender).and_then(|t| sender_only(t)))
         .or_else(|| head.iter().find_map(|t| FORWARD.captures(t).map(|c| c[1].trim().to_string())))
         .or_else(|| head.first().filter(|t| t.ends_with(':')).map(|t| t.trim_end_matches(':').trim().to_string()))
-        .or_else(|| head.get(first).filter(|t| !t.starts_with("--") && !HEADER_LINE.is_match(t)).map(|t| t.to_string()));
+        .or_else(|| head.get(first).filter(|t| !t.starts_with("--") && !HEADER_LINE.is_match(t)).and_then(|t| sender_only(t)));
     (from, date)
+}
+
+/// Whether two subjects are the same but for `Re:` and `Fwd:`, in any language.
+fn same_subject(a: &str, b: &str) -> bool {
+    let bare = |s: &str| s.rsplit([':', '：']).next().unwrap_or("").trim().to_lowercase();
+    !bare(a).is_empty() && bare(a) == bare(b)
+}
+
+/// A sender without what follows the name: Lotus writes date and recipients behind it. One word
+/// before a date is its weekday, not a name.
+fn sender_only(line: &str) -> Option<String> {
+    let Some(date) = DATED.find(line) else { return Some(line.to_string()) };
+    let name = SENDER_LINK.replace(line[..date.start()].trim(), "");
+    (name.contains(char::is_whitespace) || names_address(&name)).then(|| name.to_string())
 }
 
 /// One block as ranges of at most [`MAIL_MAX_CHARS`]: at paragraphs from line `cut_from` on, then like a long line.
@@ -478,7 +503,7 @@ pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk
             meta["chunk_type"] = "mail_message".into();
             meta["heading_path"] = subject.clone().into();
         } else {
-            let (from, date) = quoted_author(&lines[first..end]);
+            let (from, date) = quoted_author(&lines[first..end], &subject);
             let path = [Some(subject.as_str()), from.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(HEADER_SEP);
             meta["chunk_type"] = "mail_quoted".into();
             meta["heading_path"] = path.into();

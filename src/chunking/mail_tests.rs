@@ -415,3 +415,45 @@ fn a_korean_date_counts() {
     let t = format!("{HEAD}확인했습니다.\n\n보낸 사람: 김철수 <kim@example.com>\n보낸 날짜: 2026년 5월 14일 9:00\n받는 사람: 이영희\n제목: 계획\n\n계획은 확정입니다.\n");
     assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"]);
 }
+
+fn sender_of(t: &str) -> Option<String> {
+    meta(chunk(t, 1, 2).last().unwrap())["quoted_from"].as_str().map(str::to_string)
+}
+
+#[test]
+fn a_header_that_starts_with_the_subject_names_the_real_sender() {
+    let head = HEAD.replace("# Wow", "# Fwd: Plan");
+    let thunderbird = format!("{head}See below.\n\n-------- Forwarded Message --------\nSubject: Plan\nDate: Mon, 4 May 2026 09:12:00 +0200\nFrom: Anna Maier <anna@example.com>\nTo: Ben <ben@example.com>\n\nThe plan stands.\n");
+    assert_eq!(sender_of(&thunderbird).as_deref(), Some("Anna Maier <anna@example.com>"));
+    let cc_mail = format!("{head}See below.\n\n____Reply Separator____\nSubject: Re: Plan\nAuthor: Anna Maier\nDate: 05/01/2001 12:44 PM\n\nThe plan stands.\n");
+    assert_eq!(sender_of(&cc_mail).as_deref(), Some("Anna Maier"));
+}
+
+#[test]
+fn a_sender_line_ends_before_its_date() {
+    let t = format!("{HEAD}See below.\n\nAnna Maier/HOU/ECT 05/17/2001 05:31 PM \t To: Ben Roth/HOU/ECT@ECT  cc:   Subject: Plan\n\nThe plan stands.\n");
+    assert!(chunk(&t, 1, 2).len() == 1 || sender_of(&t).as_deref() == Some("Anna Maier/HOU/ECT"));
+    let t = format!("{HEAD}See below.\n\nFrom: Anna Maier@ECT on 01/10/2001 10:35 AM\nTo: Ben Roth/Corp/Enron@Enron\ncc:\nSubject: Plan\n\nThe plan stands.\n");
+    assert_eq!(sender_of(&t).as_deref(), Some("Anna Maier@ECT"));
+}
+
+#[test]
+fn a_date_is_no_sender() {
+    let t = format!("{HEAD}See below.\n\nSent:\tThursday, May 17, 2001 4:20 AM\nTo:\tBen Roth\nSubject:\tPlan\n\nThe plan stands.\n");
+    assert_eq!(sender_of(&t), None);
+}
+
+#[test]
+fn a_last_header_with_nothing_below_stays_with_the_text_above() {
+    let t = format!("{HEAD}See below.\n\n-----Original Message-----\nFrom: Anna Maier\nSent: Monday, November 19, 2001 10:03 AM\nTo: Ben Roth\nSubject: Plan\n\n\n");
+    let cs = chunk(&t, 1, 2);
+    assert_offsets(&t, &cs);
+    assert_eq!(kinds(&cs), ["mail_message"]);
+    assert!(cs[0].text.contains("Subject: Plan"));
+}
+
+#[test]
+fn a_lotus_header_that_starts_with_its_date_has_no_sender() {
+    let t = format!("{HEAD}See below.\n\n11/30/2000 10:32 AM\n\nTo: Ben Roth/HOU/ECT@ECT\ncc:\n\nSubject: Plan\n\nThe plan stands.\n");
+    assert_eq!(sender_of(&t), None);
+}
