@@ -1,11 +1,16 @@
 //! Structural chunking for mails (LLM-free): a mail's own text and every mail embedded in it
 //! (reply, forward, Lotus header block) are separate passages, so a hit belongs to one author.
 //!
-//! The text is the Markdown of `ingest/mail` (subject heading, `**From:**` lines, body). Offsets are
+//! Blocks are found by their form, so any language works: a run of `Label: value` lines with a date,
+//! a line ending in a colon before `>` quotes, a ruled banner before such a run. That covers Outlook,
+//! Gmail, Apple Mail and Thunderbird, also as the bold lines an HTML mail turns into; the English
+//! words below are the banners of older Outlook and Lotus Notes, which stand alone. The text is the
+//! Markdown of `ingest/mail` (subject heading, `**From:**` lines, body). Offsets are
 //! byte offsets and chunks are verbatim slices, as in `markdown.rs`. A block stays whole up to
 //! [`MAIL_MAX_CHARS`], the most one vector can stand for; above that it is cut at paragraphs, then
 //! as `markdown.rs` cuts a long line.
 
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -25,6 +30,17 @@ const HEADER_LOOKAHEAD: usize = 5;
 /// A Lotus block starts at the sender and date lines above its `To:`.
 const MAX_SENDER_LINES: usize = 3;
 const MAX_GAP_ABOVE_TO: usize = 2;
+/// Bold marks, escapes and direction marks of Arabic and Hebrew mails, and the full-width colon of
+/// Japanese and Chinese ones (it becomes a plain colon).
+const MARKS: [char; 12] = ['*', '\\', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2069}'];
+/// Fewest `Label: value` lines in a row that make a mail header.
+const MIN_HEADER_LINES: usize = 3;
+/// Lines of a wrapped recipient list inside such a run.
+const MAX_WRAPPED_LINES: usize = 2;
+/// A line shorter than this is the date as a whole, with its time.
+const MAX_DATE_LINE_CHARS: usize = 40;
+/// Longest line that can announce a block ("On … wrote:", a banner).
+const MAX_INTRO_CHARS: usize = 240;
 /// Longest text behind a rule that still counts as a footer.
 const MAX_FOOTER_CHARS: usize = 2_000;
 /// Shorter passages are not tracked as repeats.
@@ -32,26 +48,34 @@ const MIN_DUPLICATE_CHARS: usize = 200;
 
 static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*original message\s*-{2,}").unwrap());
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());
+/// `Label: value` in any language; the value may be empty (`cc:`). A space before the colon is French.
 static HEADER_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^(from|sent|date|to|cc|bcc|subject|importance|priority|reply-to|sent by):|^please respond to\b|^[ap]m -{3,}").unwrap());
-/// Lines that carry nothing of a mail's own and differ between copies, at its end.
+    LazyLock::new(|| Regex::new(r"^\p{L}[\p{L} -]{0,18}?\s?:(\s+(.*))?$|(?i)^please respond to\b|^[ap]m -{3,}").unwrap());
+/// A ruled line with a few words: `-----Ursprüngliche Nachricht-----`, `---- Forwarded message ----`.
+static BANNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-_=]{2,}\s*\p{L}.{0,50}?\s*[-_=]{2,}$").unwrap());
+/// A date or time in any language.
+static DATED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}:\d{2}|\b\d{1,2}\.?\s\p{L}{3,}\.?\s\d{4}\b|\p{L}{3,}\.?\s\d{1,2},?\s\d{4}\b|\d{4}\s?年\s?\d{1,2}\s?月\s?\d{1,2}\s?日").unwrap()
+});
 static TRAILING_NOISE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^(-{2,}\s*original message\s*-{2,}|<embedded .*>|-+\s*inline attachment follows\s*-+|\(revision: \d+\))$").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)^([-_=]{2,}\s*\p{L}.{0,50}?\s*[-_=]{2,}|<embedded .*>|-+\s*inline attachment follows\s*-+|\(revision: \d+\))$").unwrap());
 /// Where a gateway's or list's footer starts: a ruled line, or its first words.
 static FOOTER_START: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^([*_=-]{20,}|confidentiality notice|this e-?mail is the property|this message (and any attachments )?(is|are|may) .*confidential|to unsubscribe\b|get your free download)").unwrap()
+    Regex::new(r"(?i)^([*_=-]{20,}|confidentiality notice|this e-?mail is the property|this message (and any attachments )?(is|are|may) .*confidential|to unsubscribe\b|get your free download|sent from my |von meinem .* gesendet|diese e-?mail .*(vertraulich|enthält)|gesendet von )").unwrap()
 });
 
 static DATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d{1,2}/\d{1,2}/\d{2,4}(\s+\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?)?").unwrap());
-static FROM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^from:\s*(.+)$").unwrap());
-static SENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(sent|date):\s*(.+)$").unwrap());
 
 struct Line<'a> {
     start: usize,
     end: usize,
     /// Without leading spaces and quote marks.
     text: &'a str,
+    /// `text` without the bold marks and escapes of a converted HTML mail, for finding markers.
+    head: Cow<'a, str>,
+    /// Starts with a `>` quote mark.
+    raw_quoted: bool,
 }
 
 fn scan(text: &str) -> Vec<Line<'_>> {
@@ -59,7 +83,10 @@ fn scan(text: &str) -> Vec<Line<'_>> {
     let mut start = 0;
     for raw in text.split_inclusive('\n') {
         let end = start + raw.len();
-        lines.push(Line { start, end, text: raw.trim_start_matches([' ', '\t', '>']).trim_end() });
+        let text = raw.trim_start_matches([' ', '\t', '>']).trim_end();
+        let head = if text.contains(MARKS) || text.contains('：') { Cow::Owned(text.replace(MARKS, "").replace('：', ":")) } else { Cow::Borrowed(text) };
+        let raw_quoted = raw.trim_start_matches([' ', '\t']).starts_with('>');
+        lines.push(Line { start, end, text, head, raw_quoted });
         start = end;
     }
     lines
@@ -77,12 +104,35 @@ fn body_start(lines: &[Line]) -> usize {
     i
 }
 
-fn starts_with_key(line: &str, key: &str) -> bool {
-    line.get(..key.len()).is_some_and(|p| p.eq_ignore_ascii_case(key))
+/// Number of lines of the `Label: value` run from `i`, wrapped lines included; 0 if it is too short.
+fn header_run(lines: &[Line], i: usize) -> usize {
+    let (mut labels, mut wrapped, mut j) = (0, 0, i);
+    while let Some(l) = lines.get(j).filter(|l| !l.text.is_empty()) {
+        if HEADER_LINE.is_match(&l.head) {
+            labels += 1;
+            wrapped = 0;
+        } else {
+            wrapped += 1;
+            if labels == 0 || wrapped > MAX_WRAPPED_LINES {
+                break;
+            }
+        }
+        j += 1;
+    }
+    if labels >= MIN_HEADER_LINES { j - wrapped - i } else { 0 }
 }
 
-fn followed_by(lines: &[Line], i: usize, keys: &[&str]) -> bool {
-    lines[i + 1..].iter().take(HEADER_LOOKAHEAD).any(|l| keys.iter().any(|k| starts_with_key(l.text, k)))
+/// A line announcing the quote below it: ends in a colon, names a time or an address, `>` follows.
+fn is_reply_line(lines: &[Line], i: usize) -> bool {
+    let t = lines[i].head.as_ref();
+    let next = lines[i + 1..].iter().find(|l| !l.text.is_empty());
+    t.ends_with(':') && (DATED.is_match(t) || t.contains('@')) && next.is_some_and(|l| l.raw_quoted)
+}
+
+/// Start of a header block at line `i`: the banner or announcing line just above it, if any.
+fn with_banner(lines: &[Line], i: usize, floor: usize) -> usize {
+    let above = (floor..i).rev().take(MAX_GAP_ABOVE_TO + 1).find(|&k| !lines[k].text.is_empty());
+    above.filter(|&k| BANNER.is_match(&lines[k].head) || lines[k].head.ends_with(':') && lines[k].head.len() < 60).unwrap_or(i)
 }
 
 /// The Lotus sender and date lines above a `To:` line, if the first of them looks like one. An
@@ -104,14 +154,16 @@ fn lotus_start(lines: &[Line], to: usize, floor: usize) -> usize {
 fn block_starts(lines: &[Line], body: usize) -> Vec<usize> {
     let mut starts: Vec<usize> = Vec::new();
     for i in body..lines.len() {
-        let t = lines[i].text;
+        let t = lines[i].head.as_ref();
+        let floor = starts.last().map_or(body, |&s| s + 1);
+        let run = header_run(lines, i);
         let start = if ORIGINAL.is_match(t) || FORWARD.is_match(t) {
             Some(i)
-        } else if starts_with_key(t, "from:") && followed_by(lines, i, &["sent:", "date:", "to:"]) {
-            Some(i)
-        } else if starts_with_key(t, "to:") && followed_by(lines, i, &["cc:", "subject:"]) {
-            Some(lotus_start(lines, i, starts.last().map_or(body, |&s| s + 1)))
-        } else if t.len() < 160 && t.ends_with("wrote:") {
+        } else if run > 0 && lines[i..i + run].iter().any(|l| DATED.is_match(&l.head)) {
+            Some(with_banner(lines, i, floor))
+        } else if run > 0 {
+            Some(lotus_start(lines, i, floor)).filter(|&s| s < i)
+        } else if t.len() < MAX_INTRO_CHARS && (t.ends_with("wrote:") || is_reply_line(lines, i)) {
             Some(i)
         } else {
             None
@@ -120,7 +172,7 @@ fn block_starts(lines: &[Line], body: usize) -> Vec<usize> {
         let same_block = starts.last().is_some_and(|&prev| {
             let body_lines = lines[prev + 1..s]
                 .iter()
-                .filter(|l| !l.text.is_empty() && !HEADER_LINE.is_match(l.text) && !DATE.is_match(l.text))
+                .filter(|l| !l.text.is_empty() && !HEADER_LINE.is_match(&l.head) && !DATE.is_match(&l.head))
                 .count();
             body_lines <= MAX_LINES_BETWEEN_MARKERS
         });
@@ -133,14 +185,25 @@ fn block_starts(lines: &[Line], body: usize) -> Vec<usize> {
 
 /// Sender and date of an embedded mail, read from its first lines.
 fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
-    let head: Vec<&str> = lines.iter().map(|l| l.text).filter(|t| !t.is_empty()).take(HEADER_LOOKAHEAD + 1).collect();
-    let from = head
-        .iter()
-        .find_map(|t| FROM.captures(t).or_else(|| FORWARD.captures(t)).map(|c| c[1].trim().to_string()))
-        .or_else(|| head.first().filter(|t| !t.starts_with("--") && !HEADER_LINE.is_match(t)).map(|t| t.to_string()));
-    let date = head
-        .iter()
-        .find_map(|t| SENT.captures(t).map(|c| c[2].trim().to_string()).or_else(|| DATE.find(t).map(|m| m.as_str().to_string())));
+    let head: Vec<&str> = lines.iter().map(|l| l.head.as_ref()).filter(|t| !t.is_empty()).take(HEADER_LOOKAHEAD + 1).collect();
+    let first = head.iter().position(|t| !BANNER.is_match(t) && !t.ends_with(':')).unwrap_or(0);
+    let value = |t: &str| t.split_once(':').map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
+    let dated = head.iter().position(|t| DATED.is_match(t));
+    let date = dated.map(|i| {
+        let line = head[i];
+        let short = line.len() < MAX_DATE_LINE_CHARS;
+        value(line).filter(|_| HEADER_LINE.is_match(line)).unwrap_or_else(|| {
+            if short { line.trim().to_string() } else { DATED.find(line).map_or(String::new(), |m| m.as_str().to_string()) }
+        })
+    });
+    // Sender first, then the date: the order of every mail program, in every language. A banner
+    // says as much; a Lotus block starts with the recipient and has neither.
+    let banner = first > 0 && !FORWARD.is_match(head[0]);
+    let leads = |t: &&&str| HEADER_LINE.is_match(t) && (banner || dated.is_some_and(|d| d <= first + 1));
+    let named = head.get(first).filter(leads).and_then(|t| value(t));
+    let from = named
+        .or_else(|| head.iter().find_map(|t| FORWARD.captures(t).map(|c| c[1].trim().to_string())))
+        .or_else(|| head.get(first).filter(|t| !t.starts_with("--") && !HEADER_LINE.is_match(t)).map(|t| t.to_string()));
     (from, date)
 }
 
@@ -186,16 +249,16 @@ fn after_header(lines: &[Line]) -> usize {
     let mut i = 0;
     let mut in_header = false;
     while let Some(l) = lines.get(i) {
-        let t = l.text;
-        let marker = t.is_empty() || t.starts_with("# ") || t.starts_with("**") || ORIGINAL.is_match(t) || FORWARD.is_match(t);
-        let head = HEADER_LINE.is_match(t) || t.starts_with("---") || t.ends_with("wrote:");
+        let t = l.head.as_ref();
+        let marker = t.is_empty() || l.text.starts_with("# ") || l.text.starts_with("**") || ORIGINAL.is_match(t) || FORWARD.is_match(t) || BANNER.is_match(t);
+        let head = HEADER_LINE.is_match(t) || t.starts_with("---") || (t.ends_with(':') && t.len() < MAX_INTRO_CHARS);
         if marker || head {
             in_header |= head;
             i += 1;
             continue;
         }
         // Lotus puts sender and date lines above its `To:`.
-        let lotus = !in_header && i + MAX_SENDER_LINES < lines.len() && lines[i + 1..=i + MAX_SENDER_LINES].iter().any(|l| starts_with_key(l.text, "to:"));
+        let lotus = !in_header && i + MAX_SENDER_LINES < lines.len() && lines[i + 1..=i + MAX_SENDER_LINES].iter().any(|l| HEADER_LINE.is_match(&l.head));
         if !lotus {
             break;
         }
@@ -245,6 +308,16 @@ fn without_footer<'a, 'b>(lines: &'a [Line<'b>]) -> &'a [Line<'b>] {
         }
     }
     &lines[..end]
+}
+
+/// What the search model reads of a passage: an embedded mail with the subject and sender it
+/// lacks itself; a mail's own passage already starts with them.
+pub fn embedding_text<'a>(text: &'a str, metadata: &str) -> Cow<'a, str> {
+    let meta: serde_json::Value = serde_json::from_str(metadata).unwrap_or_default();
+    match (meta["chunk_type"].as_str(), meta["heading_path"].as_str()) {
+        (Some("mail_quoted"), Some(path)) if !path.is_empty() => Cow::Owned(format!("{path}\n\n{text}")),
+        _ => Cow::Borrowed(text),
+    }
 }
 
 /// A header line that says where this copy is filed, not what it says.

@@ -1,6 +1,6 @@
 //! Mail chunker on the block forms found in the Enron corpus.
 
-use super::mail::{chunk_mail as chunk, duplicate_key, MAIL_MAX_CHARS};
+use super::mail::{chunk_mail as chunk, duplicate_key, embedding_text, MAIL_MAX_CHARS};
 use crate::db::models::NewChunk;
 
 const HEAD: &str = "# Wow\n\n**From:** a@example.com  \n**To:** b@example.com  \n**Date:** 2000-09-06 04:46 -07:00\n\n";
@@ -198,4 +198,126 @@ fn lotus_sender_above_a_line_of_tabs_belongs_to_the_block() {
     assert!(cs[0].text.ends_with("Can you confirm that?"), "{}", cs[0].text);
     assert_eq!(meta(&cs[1])["quoted_from"], "John Malowney");
     assert_eq!(meta(&cs[1])["quoted_date"], "07/17/2000 11:25 AM");
+}
+
+#[test]
+fn an_embedded_mail_is_embedded_with_its_subject_and_sender() {
+    let t = format!("{HEAD}Yes.\n\n-----Original Message-----\nFrom: Skilling, Jeff\nSent: Monday\nTo: B\n\nThe plan stands.\n");
+    let cs = chunk(&t, 1, 2);
+    assert_eq!(embedding_text(&cs[0].text, &cs[0].metadata), cs[0].text, "a mail's own passage has its header");
+    assert!(embedding_text(&cs[1].text, &cs[1].metadata).starts_with("Wow › Skilling, Jeff\n\n"));
+    assert_eq!(embedding_text("plain", "{}"), "plain");
+}
+
+fn quoted(t: &str) -> Vec<NewChunk> {
+    let cs = chunk(t, 1, 2);
+    assert_offsets(t, &cs);
+    cs
+}
+
+#[test]
+fn german_outlook_block_is_found_with_its_author() {
+    let t = format!("{HEAD}Passt für mich.\n\nVon: Maier, Anna <anna.maier@example.com>\nGesendet: Montag, 14. Mai 2026 09:00\nAn: Vogt, Ben <ben.vogt@example.com>\nBetreff: Plan\n\nDer Plan steht.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"]);
+    assert_eq!(meta(&cs[1])["quoted_from"], "Maier, Anna <anna.maier@example.com>");
+    assert_eq!(meta(&cs[1])["quoted_date"], "Montag, 14. Mai 2026 09:00");
+}
+
+#[test]
+fn outlook_html_turned_into_bold_lines_is_found() {
+    let t = format!("{HEAD}Passt.\n\n---\n\n**Von:** Maier, Anna <anna.maier@example.com>  \n**Gesendet:** Montag, 14. Mai 2026 09:00  \n**An:** Vogt, Ben  \n**Betreff:** Plan\n\nDer Plan steht.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"]);
+    assert_eq!(meta(&cs[1])["quoted_from"], "Maier, Anna <anna.maier@example.com>");
+}
+
+#[test]
+fn english_and_french_outlook_blocks_are_found() {
+    for block in [
+        "From: Anna\nSent: Monday, May 14, 2026 9:00 AM\nTo: Ben\nSubject: Plan",
+        "De : Anna\nEnvoyé : lundi 14 mai 2026 09:00\nÀ : Ben\nObjet : Plan",
+        "Lähettäjä: Anna\nLähetetty: maanantai 14. toukokuuta 2026 9.00\nVastaanottaja: Ben\nAihe: Plan",
+    ] {
+        let t = format!("{HEAD}Okay.\n\n{block}\n\nThe plan stands.\n");
+        assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"], "{block}");
+    }
+}
+
+#[test]
+fn gmail_and_apple_reply_lines_are_found_in_german_and_english() {
+    for line in ["On Mon, May 14, 2026 at 9:00 AM Anna Maier <anna@example.com> wrote:", "Am 14.05.2026 um 09:00 schrieb Anna Maier <anna@example.com>:", "Am Mo., 14. Mai 2026 um 09:00 Uhr schrieb Anna Maier <anna@example.com>:"] {
+        let t = format!("{HEAD}Okay.\n\n{line}\n> Der Plan steht.\n");
+        assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"], "{line}");
+    }
+}
+
+#[test]
+fn gmail_and_apple_forward_banners_are_found() {
+    for line in ["---------- Forwarded message ---------", "---------- Weitergeleitete Nachricht ---------", "Anfang der weitergeleiteten Nachricht:"] {
+        let t = format!("{HEAD}Zur Info.\n\n{line}\nVon: Anna\nDatum: 14.05.2026\nBetreff: Plan\nAn: Ben\n\nDer Plan steht.\n");
+        assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"], "{line}");
+    }
+}
+
+#[test]
+fn a_phone_signature_does_not_tell_copies_apart() {
+    let text = "Der Plan steht, und wir gehen wie am Montag besprochen vor. Das gilt auch für den zweiten Standort, sobald die Genehmigungen vorliegen und das Team bereitsteht.\nBitte gebt das an alle anderen weiter, die daran mitarbeiten, und meldet euch bei Fragen.";
+    let key = |tail: &str| duplicate_key(&chunk(&format!("{HEAD}{text}\n{tail}"), 1, 2)[0]).unwrap();
+    assert_eq!(key(""), key("\nVon meinem iPhone gesendet\n"));
+}
+
+#[test]
+fn a_german_sentence_with_an_or_von_at_a_line_start_is_no_block() {
+    let t = format!("{HEAD}Bitte beachten:\nVon: hier aus sehe ich nichts.\nDas war alles.\nGruss\nA\nB\nC\nD\n");
+    assert_eq!(chunk(&t, 1, 2).len(), 1);
+}
+
+#[test]
+fn a_signature_with_phone_and_mail_lines_is_no_block() {
+    let t = format!("{HEAD}Bis morgen.\n\nTel.: +49 69 1234-5678\nFax: +49 69 1234-5679\nMail: anna@example.com\nWeb: www.example.com\n");
+    assert_eq!(chunk(&t, 1, 2).len(), 1);
+}
+
+#[test]
+fn a_reply_line_in_a_language_never_seen_is_found_by_its_form() {
+    let t = format!("{HEAD}Dobrze.\n\nW dniu 14.05.2026 o 09:00 Anna Maier <anna@example.com> pisze:\n> Der Plan steht.\n");
+    assert_eq!(kinds(&chunk(&t, 1, 2)), ["mail_message", "mail_quoted"]);
+}
+
+#[test]
+fn japanese_outlook_block_with_a_full_width_colon_is_found() {
+    for block in [
+        "差出人: 山田太郎 <taro@example.com>\n送信日時: 2026年5月14日 9:00\n宛先: 鈴木花子\n件名: 計画",
+        "差出人： 山田太郎 <taro@example.com>\n送信日時： 2026年5月14日\n宛先： 鈴木花子\n件名： 計画",
+    ] {
+        let t = format!("{HEAD}了解しました。\n\n{block}\n\n計画は確定です。\n");
+        let cs = chunk(&t, 1, 2);
+        assert_offsets(&t, &cs);
+        assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"], "{block}");
+        assert_eq!(meta(&cs[1])["quoted_from"], "山田太郎 <taro@example.com>");
+    }
+}
+
+#[test]
+fn a_japanese_reply_line_is_found() {
+    let t = format!("{HEAD}了解。\n\n2026年5月14日(木) 9:00 山田太郎 <taro@example.com>:\n> 計画は確定です。\n");
+    assert_eq!(kinds(&chunk(&t, 1, 2)), ["mail_message", "mail_quoted"]);
+}
+
+#[test]
+fn arabic_outlook_block_with_direction_marks_and_arabic_digits_is_found() {
+    for date in ["الخميس، ١٤ مايو ٢٠٢٦ ٠٩:٠٠", "الخميس، 14 مايو 2026 09:00"] {
+        let t = format!("{HEAD}موافق.\n\n\u{200f}من: أحمد علي <ahmed@example.com>\n\u{200f}أرسلت: {date}\n\u{200f}إلى: سارة\n\u{200f}الموضوع: الخطة\n\nالخطة ثابتة.\n");
+        let cs = chunk(&t, 1, 2);
+        assert_offsets(&t, &cs);
+        assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"], "{date}");
+        assert_eq!(meta(&cs[1])["quoted_from"], "أحمد علي <ahmed@example.com>");
+    }
+}
+
+#[test]
+fn a_mail_in_arabic_or_japanese_without_a_block_stays_whole() {
+    assert_eq!(chunk(&format!("{HEAD}الخطة ثابتة.\n\nسنبدأ يوم الاثنين.\n"), 1, 2).len(), 1);
+    assert_eq!(chunk(&format!("{HEAD}計画は確定です。\n\n月曜日に始めます。\n"), 1, 2).len(), 1);
 }
