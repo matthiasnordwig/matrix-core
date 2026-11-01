@@ -11,12 +11,14 @@
 //! the previous chunk); sections over `max_chars` are split at blank lines
 //! outside code fences; a block still over `max_chars` (typically a long list
 //! without blank lines) is split before its top-level list items, and failing
-//! that at line ends — never inside a code fence (an oversized fence stays
-//! whole); every part
-//! carries the same `heading_path`. Text before the first heading is its own
+//! that at line ends, and a single line still over `max_chars` (a text pasted
+//! without breaks) at sentence ends, then at spaces, then anywhere — never
+//! inside a code fence (an oversized fence stays whole); every part carries
+//! the same `heading_path`. Text before the first heading is its own
 //! section with empty `heading_path`. Setext headings (`===`/`---` underline)
 //! are not recognised.
 
+use super::sentences::split_sentences;
 use crate::db::models::NewChunk;
 
 /// Fallback section size when the caller has no profile value (~3000 chars ≈
@@ -70,11 +72,20 @@ pub fn chunk_markdown_structurally(
             }
         }
         carry = None;
-        let parts = split_range(text, &lines, first, sec.last + 1, max_chars);
+        let parts: Vec<(usize, usize)> = split_range(text, &lines, first, sec.last + 1, max_chars)
+            .into_iter()
+            .flat_map(|(a, b)| {
+                let start = lines[a].start;
+                let end = trimmed_end(text, start, lines[b - 1].end);
+                if (a..b).any(|k| lines[k].in_fence) {
+                    vec![(start, end)]
+                } else {
+                    split_long_text(text, start, end, max_chars)
+                }
+            })
+            .collect();
         let n_parts = parts.len();
-        for (part, (a, b)) in parts.into_iter().enumerate() {
-            let start = lines[a].start;
-            let end = trimmed_end(text, start, lines[b - 1].end);
+        for (part, (start, end)) in parts.into_iter().enumerate() {
             let slice = &text[start..end];
             let mut meta = serde_json::json!({
                 "chunk_type": "markdown_section",
@@ -306,6 +317,54 @@ fn split_range(text: &str, lines: &[Line], a: usize, b: usize, max_chars: usize)
         }
     }
     parts
+}
+
+/// Splits the byte range `[start, end)` into ranges of at most `max_chars`: at
+/// sentence starts, what is still too long at word starts, the rest anywhere.
+fn split_long_text(text: &str, start: usize, end: usize, max_chars: usize) -> Vec<(usize, usize)> {
+    let slice = &text[start..end];
+    if slice.chars().count() <= max_chars {
+        return vec![(start, end)];
+    }
+    let sentences: Vec<usize> = split_sentences(slice).iter().map(|s| start + s.byte_start).collect();
+    pack_at(text, start, end, &sentences, max_chars)
+        .into_iter()
+        .flat_map(|(s, e)| {
+            let words: Vec<usize> = text[s..e]
+                .char_indices()
+                .zip(text[s..e].chars().skip(1))
+                .filter(|((_, c), next)| c.is_whitespace() && !next.is_whitespace())
+                .map(|((i, c), _)| s + i + c.len_utf8())
+                .collect();
+            pack_at(text, s, e, &words, max_chars)
+        })
+        .flat_map(|(s, e)| {
+            let anywhere: Vec<usize> = text[s..e].char_indices().map(|(i, _)| s + i).collect();
+            pack_at(text, s, e, &anywhere, max_chars)
+        })
+        .collect()
+}
+
+/// Cuts `[start, end)` at some of `cuts` (ascending byte offsets), taking as
+/// much as fits into each range; a range without a cut inside may stay too long.
+fn pack_at(text: &str, start: usize, end: usize, cuts: &[usize], max_chars: usize) -> Vec<(usize, usize)> {
+    if text[start..end].chars().count() <= max_chars {
+        return vec![(start, end)];
+    }
+    let mut ranges = Vec::new();
+    let (mut cur, mut last, mut run) = (start, start, 0);
+    for &cut in cuts.iter().filter(|&&c| c > start).chain(std::iter::once(&end)) {
+        let step = text[last..cut].chars().count();
+        if run + step > max_chars && last > cur {
+            ranges.push((cur, trimmed_end(text, cur, last)));
+            cur = last;
+            run = 0;
+        }
+        run += step;
+        last = cut;
+    }
+    ranges.push((cur, end));
+    ranges
 }
 
 /// Cuts lines `[s, e)` before every non-blank line `k > s` with `pred(k)` that

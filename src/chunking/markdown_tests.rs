@@ -96,11 +96,11 @@ fn long_section_splits_at_paragraphs_with_same_path() {
 
 #[test]
 fn heading_stays_with_first_paragraph_when_splitting() {
-    let big = "x".repeat(500);
+    let big = "x".repeat(250);
     let t = format!("# A\n\n{big}\n\n{big}\n");
     let cs = chunk(&t, 1, 1, 300);
     assert_offsets(&t, &cs);
-    assert_eq!(cs.len(), 2); // oversized single paragraph stays whole
+    assert_eq!(cs.len(), 2);
     assert!(cs[0].text.starts_with("# A") && cs[0].text.ends_with(&big));
 }
 
@@ -202,4 +202,42 @@ fn list_cut_never_falls_inside_a_fence() {
     let cs = chunk(&t, 1, 1, 250);
     assert_offsets(&t, &cs);
     assert!(cs.iter().any(|c| c.text.contains(&code)), "fence was split");
+}
+
+#[test]
+fn line_without_breaks_is_cut_at_sentence_ends() {
+    let t = "Prices rose again today. ".repeat(40);
+    let cs = chunk(&t, 1, 2, 200);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() > 1);
+    for c in &cs {
+        assert!(c.text.chars().count() <= 200);
+        assert!(c.text.ends_with("today."), "cut inside a sentence: {:?}", c.text);
+    }
+}
+
+#[test]
+fn sentence_over_the_limit_is_cut_at_a_word() {
+    let t = "word ".repeat(200);
+    let cs = chunk(&t, 1, 2, 100);
+    assert_offsets(&t, &cs);
+    assert!(cs.iter().all(|c| c.text.chars().count() <= 100 && c.text.ends_with("word")));
+}
+
+#[test]
+fn text_without_spaces_is_cut_within_the_limit_on_char_boundaries() {
+    let t = "ä~".repeat(300);
+    let cs = chunk(&t, 1, 2, 100);
+    assert_offsets(&t, &cs);
+    assert!(cs.len() >= 6);
+    assert!(cs.iter().all(|c| c.text.chars().count() <= 100));
+}
+
+#[test]
+fn long_line_inside_a_code_fence_stays_whole() {
+    let line = "x ".repeat(300);
+    let t = format!("```\n{line}\n```\n");
+    let cs = chunk(&t, 1, 2, 100);
+    assert_offsets(&t, &cs);
+    assert_eq!(cs.len(), 1);
 }
