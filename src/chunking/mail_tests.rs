@@ -248,7 +248,9 @@ fn english_and_french_outlook_blocks_are_found() {
 fn gmail_and_apple_reply_lines_are_found_in_german_and_english() {
     for line in ["On Mon, May 14, 2026 at 9:00 AM Anna Maier <anna@example.com> wrote:", "Am 14.05.2026 um 09:00 schrieb Anna Maier <anna@example.com>:", "Am Mo., 14. Mai 2026 um 09:00 Uhr schrieb Anna Maier <anna@example.com>:"] {
         let t = format!("{HEAD}Okay.\n\n{line}\n> Der Plan steht.\n");
-        assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"], "{line}");
+        let cs = quoted(&t);
+        assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"], "{line}");
+        assert!(meta(&cs[1])["quoted_from"].as_str().unwrap().contains("Anna Maier"), "{line}");
     }
 }
 
@@ -320,4 +322,96 @@ fn arabic_outlook_block_with_direction_marks_and_arabic_digits_is_found() {
 fn a_mail_in_arabic_or_japanese_without_a_block_stays_whole() {
     assert_eq!(chunk(&format!("{HEAD}الخطة ثابتة.\n\nسنبدأ يوم الاثنين.\n"), 1, 2).len(), 1);
     assert_eq!(chunk(&format!("{HEAD}計画は確定です。\n\n月曜日に始めます。\n"), 1, 2).len(), 1);
+}
+
+fn starts(t: &str) -> Vec<String> {
+    quoted(t).iter().skip(1).map(|c| c.text.lines().next().unwrap().trim().to_string()).collect()
+}
+
+#[test]
+fn a_one_line_reply_between_two_blocks_keeps_them_apart() {
+    let t = format!("{HEAD}Mine.\n\n-----Original Message-----\nFrom: B\nSent: Monday, May 14, 2001 9:00 AM\nTo: C\nSubject: One\n\nJust this line.\n\n-----Original Message-----\nFrom: D\nSent: Friday, May 11, 2001 8:00 AM\nTo: B\nSubject: Two\n\nThe question.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted", "mail_quoted"]);
+    assert_eq!(meta(&cs[2])["quoted_from"], "D");
+    assert!(cs[1].text.ends_with("Just this line."));
+}
+
+#[test]
+fn text_right_below_a_header_is_body_not_a_wrapped_line() {
+    let t = format!("{HEAD}Mine.\n\nFrom: B\nSent: Monday, May 14, 2001 9:00 AM\nTo: C\nSubject: One\nAre you, by any chance, familiar with it?\n-----Original Message-----\nFrom: D\nSent: Friday, May 11, 2001 8:00 AM\nTo: B\nSubject: Two\n\nThe question.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted", "mail_quoted"]);
+    assert!(cs[1].text.ends_with("familiar with it?"));
+}
+
+#[test]
+fn lotus_header_with_empty_lines_inside_is_found() {
+    let t = format!("{HEAD}See below.\n\nFrom:  Lexi Elliott @ ENRON                           10/16/2000 06:33 PM\n\n\nTo: Mike McConnell/HOU/ECT@ECT\n\ncc:  \n\nbcc:\n\nSubject: Hiring\n\nThe text.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"]);
+    assert!(cs[1].text.starts_with("From:  Lexi") && cs[1].text.contains("The text."));
+}
+
+#[test]
+fn a_recipient_list_may_wrap_over_many_lines() {
+    let list = "Anna Maier/HOU/ECT@ECT, Ben Vogt/HOU/ECT@ECT,\n".repeat(8);
+    let t = format!("{HEAD}See below.\n\n\nJohn Schwartzenburg\n04/10/2001 01:53 PM\nTo: Group\ncc: {list}Subject: Re: Plan\n\nThe text.\n");
+    let cs = quoted(&t);
+    assert_eq!(kinds(&cs), ["mail_message", "mail_quoted"]);
+    assert_eq!(meta(&cs[1])["quoted_from"], "John Schwartzenburg");
+}
+
+#[test]
+fn a_header_without_date_or_sender_counts_by_its_recipients() {
+    for block in ["To: Jim Steffes\ncc:\nSubject: service of process", "To: Fred Mitro/HOU/ECT@ECT, Rusty Stevens/Corp/Enron@ENRON\ncc:  (bcc: Kathleen Carnahan/NA/Enron)\n\nSubject: Options", "An: anna@example.com\nKopie: ben@example.com\nBetreff: Plan"] {
+        let t = format!("{HEAD}Mine.\n\n\n{block}\n\nThe text.\n");
+        assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"], "{block}");
+    }
+}
+
+#[test]
+fn the_text_of_a_forward_chain_belongs_to_the_last_header() {
+    let t = format!("{HEAD}Please look.\n\n---------------------- Forwarded by A/HOU/ECT on 09/06/2000 \n10:49 AM ---------------------------\n\n\nJeff Richter\n09/06/2000 07:39 AM\nTo: A/HOU/ECT@ECT\ncc:  \nSubject: Wow\n\n\n---------------------- Forwarded by Jeff Richter/HOU/ECT on 09/06/2000 09:45 \nAM ---------------------------\n\n\nTommy Hicks\n09/05/2000 10:57 AM\nTo: Jeff Richter/HOU/ECT@ECT\ncc:  \nSubject: Wow\n\nThe text.\n");
+    let cs = quoted(&t);
+    assert_eq!(cs.len(), 2, "{:?}", cs.iter().map(|c| &c.text).collect::<Vec<_>>());
+    assert_eq!(meta(&cs[1])["quoted_from"], "Tommy Hicks");
+    assert!(cs[1].text.contains("The text."));
+}
+
+#[test]
+fn signatures_are_no_blocks_even_with_a_date_or_an_address_above() {
+    for sig in [
+        "Anna Maier\nanna@example.com\nTel: +49 69 1234-5678\nFax: 069 12345679\nWeb: www.example.com",
+        "Sent from the office on 03/12/2001\nPhone: (713) 853-1234\nFax: 713-646-3490\nMail: anna@example.com",
+        "Tel: 069 123456789\nMobil: 0171 1234567\nE-Mail: anna@example.com\nAbteilung: Einkauf\nStandort: Frankfurt\nStand: 12.03.2001",
+    ] {
+        assert_eq!(starts(&format!("{HEAD}Bis morgen.\n\n{sig}\n")), Vec::<String>::new(), "{sig}");
+    }
+}
+
+#[test]
+fn a_reply_line_right_after_a_signature_is_still_found() {
+    let t = format!("{HEAD}Bis morgen.\n\nTel: 069 123456789\nFax: 069 123456780\nMail: anna@example.com\n\nAaron Thomas wrote:\n\nHello all.\n");
+    assert_eq!(starts(&t), ["Aaron Thomas wrote:"]);
+}
+
+#[test]
+fn schedules_and_lists_are_no_blocks() {
+    for list in [
+        "Impact:  EES\nTime:  Sat 10/13/2001 at  2:00:00 PM thru Sat 10/13/2001 at  5:00:00 PM\nOutage:  Upgrade\nPurpose:\nBackout: None",
+        "Impact:  EES\nTime:  Fri 6/1/2001 at 8:00 PM\nFri 6/1/2001 at 6:00 PM PT\nOutage:  Link\nPurpose:\nBackout: None",
+        "Date: Monday, November 27\nTime: 11:00 a.m.\nLocation: Boardroom",
+        "Datum: 12.03.2001\nUhrzeit: 10:00\nOrt: Frankfurt",
+        "Time: 8:25 PM\nActivity: Announce\nEvent: Notice",
+        "Q: What about 12/03/2001?\nA: Fine.\nQ: And then?\nA: Nothing.",
+    ] {
+        assert_eq!(starts(&format!("{HEAD}Here is the plan.\n\n{list}\n\nThat is all.\n")), Vec::<String>::new(), "{list}");
+    }
+}
+
+#[test]
+fn a_korean_date_counts() {
+    let t = format!("{HEAD}확인했습니다.\n\n보낸 사람: 김철수 <kim@example.com>\n보낸 날짜: 2026년 5월 14일 9:00\n받는 사람: 이영희\n제목: 계획\n\n계획은 확정입니다.\n");
+    assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"]);
 }

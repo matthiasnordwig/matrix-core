@@ -10,7 +10,7 @@ zu Line-Gap/Forward-/Backward-Merge).
 `markdown.rs` ist der LLM-freie Überschriften-Chunker für `.md` (Tests: `markdown_tests.rs`).
 `outline.rs` liest die Gliederung (Pfad, ganzer Abschnitt) beim Abruf aus gespeicherten Chunks
 zurück, ohne Neuzerlegung (Tests: `outline_tests.rs`).
-`mail.rs` schneidet Mails je Absender, `topics.rs` liest ihre Absätze zu Themen für die Suche, `kind.rs` erkennt die
+`mail.rs` schneidet Mails je Absender und erkennt eingebettete Mails an ihrer Form, `kind.rs` erkennt die
 Dokumentart, `rules.rs` schneidet nach Zeilenmarken (nur von Hand gewählt). Zeichengrenzen sind nur Rückfall.
 
 **Index-Basis:** `char_start`/`char_end` sind **Byte-Offsets** in den Dokumenttext

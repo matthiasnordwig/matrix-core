@@ -1,10 +1,12 @@
 //! Structural chunking for mails (LLM-free): a mail's own text and every mail embedded in it
 //! (reply, forward, Lotus header block) are separate passages, so a hit belongs to one author.
 //!
-//! Blocks are found by their form, so any language works: a run of `Label: value` lines with a date,
-//! a line ending in a colon before `>` quotes, a ruled banner before such a run. That covers Outlook,
-//! Gmail, Apple Mail and Thunderbird, also as the bold lines an HTML mail turns into; the English
-//! words below are the banners of older Outlook and Lotus Notes, which stand alone. The text is the
+//! Blocks are found by their form, so any language works: a run of `Label: value` lines with one
+//! date, a line ending in a colon before `>` quotes, a ruled banner before such a run. A run without
+//! a date counts with a sender and date above it or with recipients (Lotus Notes); lists, schedules
+//! and signatures do not count, whatever their dates. That covers Outlook, Gmail, Apple Mail and
+//! Thunderbird, also as the bold lines an HTML mail turns into; the English words below are the
+//! banners of older Outlook and Lotus Notes, which stand alone. The text is the
 //! Markdown of `ingest/mail` (subject heading, `**From:**` lines, body). Offsets are
 //! byte offsets and chunks are verbatim slices, as in `markdown.rs`. A block stays whole up to
 //! [`MAIL_MAX_CHARS`], the most one vector can stand for; above that it is cut at paragraphs, then
@@ -23,8 +25,6 @@ use crate::db::models::NewChunk;
 pub const MAIL_MAX_CHARS: usize = 16_000;
 
 const HEADER_SEP: &str = " › ";
-/// Body lines between two markers that still count as one block's header (a wrapped banner line).
-const MAX_LINES_BETWEEN_MARKERS: usize = 1;
 /// How far a marker looks ahead for the rest of its header block.
 const HEADER_LOOKAHEAD: usize = 5;
 /// A Lotus block starts at the sender and date lines above its `To:`.
@@ -35,8 +35,18 @@ const MAX_GAP_ABOVE_TO: usize = 2;
 const MARKS: [char; 12] = ['*', '\\', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2069}'];
 /// Fewest `Label: value` lines in a row that make a mail header.
 const MIN_HEADER_LINES: usize = 3;
-/// Lines of a wrapped recipient list inside such a run.
+/// Lines inside such a run that do not look like a wrapped recipient list.
 const MAX_WRAPPED_LINES: usize = 2;
+/// Empty lines inside such a run, between two of its lines.
+const MAX_HEADER_GAP: usize = 4;
+/// Most lines of a run; raw headers come close to this, tables go beyond it.
+const MAX_HEADER_LABELS: usize = 24;
+/// Without a date and without a sender above it, a run needs this many recipient-like values.
+const MIN_ADDRESSED: usize = 2;
+/// Longest value of a line that holds the date.
+const MAX_DATE_VALUE_CHARS: usize = 60;
+/// A value that starts with a digit and has this many, dates aside, is a phone number.
+const MIN_PHONE_DIGITS: usize = 7;
 /// A line shorter than this is the date as a whole, with its time.
 const MAX_DATE_LINE_CHARS: usize = 40;
 /// Longest line that can announce a block ("On … wrote:", a banner).
@@ -50,13 +60,16 @@ static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*or
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());
 /// `Label: value` in any language; the value may be empty (`cc:`). A space before the colon is French.
 static HEADER_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\p{L}[\p{L} -]{0,18}?\s?:(\s+(.*))?$|(?i)^please respond to\b|^[ap]m -{3,}").unwrap());
+    LazyLock::new(|| Regex::new(r"^\p{L}[\p{L} -]{0,18}?\s?:([\s?]+(.*))?$|(?i)^please respond to\b|^[ap]m -{3,}").unwrap());
 /// A ruled line with a few words: `-----Ursprüngliche Nachricht-----`, `---- Forwarded message ----`.
 static BANNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-_=]{2,}\s*\p{L}.{0,50}?\s*[-_=]{2,}$").unwrap());
 /// A date or time in any language.
 static DATED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}:\d{2}|\b\d{1,2}\.?\s\p{L}{3,}\.?\s\d{4}\b|\p{L}{3,}\.?\s\d{1,2},?\s\d{4}\b|\d{4}\s?年\s?\d{1,2}\s?月\s?\d{1,2}\s?日").unwrap()
+    Regex::new(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}:\d{2}|\b\d{1,2}\.?\s\p{L}{3,}\.?\s\d{4}\b|\p{L}{3,}\.?\s\d{1,2},?\s\d{4}\b|\d{4}\s?[年년]\s?\d{1,2}\s?[月월]\s?\d{1,2}\s?[日일]").unwrap()
 });
+static NOTES_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\p{L}/[\p{L}&_ -]+/\p{L}").unwrap());
+/// A web address as a value.
+static CONTACT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(https?://|www\.)").unwrap());
 static TRAILING_NOISE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([-_=]{2,}\s*\p{L}.{0,50}?\s*[-_=]{2,}|<embedded .*>|-+\s*inline attachment follows\s*-+|\(revision: \d+\))$").unwrap());
 /// Where a gateway's or list's footer starts: a ruled line, or its first words.
@@ -104,22 +117,97 @@ fn body_start(lines: &[Line]) -> usize {
     i
 }
 
-/// Number of lines of the `Label: value` run from `i`, wrapped lines included; 0 if it is too short.
-fn header_run(lines: &[Line], i: usize) -> usize {
-    let (mut labels, mut wrapped, mut j) = (0, 0, i);
-    while let Some(l) = lines.get(j).filter(|l| !l.text.is_empty()) {
-        if HEADER_LINE.is_match(&l.head) {
-            labels += 1;
-            wrapped = 0;
-        } else {
-            wrapped += 1;
-            if labels == 0 || wrapped > MAX_WRAPPED_LINES {
+/// The text behind a line's label.
+fn label_value(head: &str) -> &str {
+    head.split_once(':').map_or("", |(_, v)| v.trim())
+}
+
+/// How many dates and how many clock times a line names.
+fn moments(t: &str) -> (usize, usize) {
+    DATED.find_iter(t).fold((0, 0), |(d, c), m| if m.as_str().contains(':') { (d, c + 1) } else { (d + 1, c) })
+}
+
+/// A phone number or web address, the values of a signature and never those of a mail header.
+fn is_contact(head: &str) -> bool {
+    let value = label_value(head);
+    let digits = DATED.replace_all(value, "").chars().filter(char::is_ascii_digit).count();
+    let leads = value.starts_with(|c: char| c == '+' || c == '(' || c.is_ascii_digit());
+    (leads && digits >= MIN_PHONE_DIGITS) || CONTACT.is_match(value)
+}
+
+/// A mail address, or a Notes name such as `Anna Maier/HOU/ECT`.
+fn names_address(t: &str) -> bool {
+    t.contains('@') || NOTES_NAME.is_match(t)
+}
+
+/// A run of `Label: value` lines: where it ends and what it holds.
+#[derive(Default)]
+struct Run {
+    /// The line after its last label.
+    end: usize,
+    labels: usize,
+    /// A line names the moment of sending.
+    dated: bool,
+    /// A list, not a header: a label comes twice, or moments come in a row or several in a line,
+    /// as in `Time: Fri 6/1 at 8:00 PM thru Sat 6/2 at 1:00 AM`.
+    listing: bool,
+    /// Values that hold an address, as recipients do.
+    addressed: usize,
+    /// Labels without a value, as `cc:` often is.
+    empty: usize,
+    contact: bool,
+}
+
+/// The run from line `i`. Lotus leaves empty lines inside its headers, and long recipient lists wrap
+/// over many lines; a line that looks like neither ends the run after [`MAX_WRAPPED_LINES`].
+fn header_run(lines: &[Line], i: usize) -> Run {
+    let mut run = Run { end: i, ..Run::default() };
+    let mut seen: Vec<String> = Vec::new();
+    let (mut j, mut wrapped, mut after_moment) = (i, 0, false);
+    while let Some(l) = lines.get(j) {
+        let t = l.head.as_ref();
+        if l.text.is_empty() {
+            let next = (j + 1..lines.len()).take(MAX_HEADER_GAP).find(|&k| !lines[k].text.is_empty());
+            let Some(next) = next.filter(|&k| run.labels > 0 && HEADER_LINE.is_match(&lines[k].head)) else { break };
+            j = next;
+            continue;
+        }
+        if HEADER_LINE.is_match(t) {
+            let label = t.split(':').next().unwrap_or(t).trim().to_lowercase();
+            if seen.contains(&label) {
+                run.listing = true;
                 break;
             }
+            if run.labels == MAX_HEADER_LABELS {
+                break;
+            }
+            seen.push(label);
+            run.labels += 1;
+            let (dates, clocks) = moments(t);
+            let moment = dates == 1 && label_value(t).chars().count() <= MAX_DATE_VALUE_CHARS;
+            run.listing |= dates > 1 || clocks > 1 || after_moment && dates + clocks > 0;
+            run.dated |= moment;
+            after_moment = moment;
+            run.empty += usize::from(label_value(t).is_empty());
+            run.addressed += usize::from(names_address(t));
+            run.contact |= is_contact(t);
+            wrapped = 0;
+            j += 1;
+            run.end = j;
+        } else {
+            wrapped += 1;
+            if run.labels == 0 || BANNER.is_match(t) || FORWARD.is_match(t) {
+                break;
+            }
+            run.listing |= after_moment && moments(t).0 > 0;
+            run.addressed += usize::from(names_address(t));
+            if wrapped > MAX_WRAPPED_LINES && !t.contains(['@', ',', ';', '/']) {
+                break;
+            }
+            j += 1;
         }
-        j += 1;
     }
-    if labels >= MIN_HEADER_LINES { j - wrapped - i } else { 0 }
+    run
 }
 
 /// A line announcing the quote below it: ends in a colon, names a time or an address, `>` follows.
@@ -150,43 +238,67 @@ fn lotus_start(lines: &[Line], to: usize, floor: usize) -> usize {
     if above.iter().any(|l| DATE.is_match(l.text) || l.text.contains('@')) { s } else { to }
 }
 
+/// Where the mail starts whose header the run at line `i` is, if it is one. With a date it is one.
+/// Without, it needs a sender above it, or recipients: addresses, or an empty `cc:` among filled lines.
+fn header_start(lines: &[Line], run: &Run, i: usize, floor: usize) -> Option<usize> {
+    if run.contact {
+        return None;
+    }
+    if run.dated && !run.listing {
+        return Some(with_banner(lines, i, floor));
+    }
+    let s = lotus_start(lines, i, floor);
+    let recipients = run.addressed >= MIN_ADDRESSED || !run.listing && (s < i || run.empty > 0 && run.empty * 2 < run.labels);
+    recipients.then_some(s)
+}
+
 /// Lines where an embedded mail starts, in order.
 fn block_starts(lines: &[Line], body: usize) -> Vec<usize> {
     let mut starts: Vec<usize> = Vec::new();
-    for i in body..lines.len() {
+    // End of the last marker, and whether it was a header (a banner still waits for one).
+    let (mut marker_end, mut after_header) = (body, false);
+    let mut i = body;
+    while i < lines.len() {
         let t = lines[i].head.as_ref();
         let floor = starts.last().map_or(body, |&s| s + 1);
         let run = header_run(lines, i);
-        let start = if ORIGINAL.is_match(t) || FORWARD.is_match(t) {
-            Some(i)
-        } else if run > 0 && lines[i..i + run].iter().any(|l| DATED.is_match(&l.head)) {
-            Some(with_banner(lines, i, floor))
-        } else if run > 0 {
-            Some(lotus_start(lines, i, floor)).filter(|&s| s < i)
-        } else if t.len() < MAX_INTRO_CHARS && (t.ends_with("wrote:") || is_reply_line(lines, i)) {
-            Some(i)
+        let found = if ORIGINAL.is_match(t) || FORWARD.is_match(t) {
+            Some((i, banner_end(lines, i), false))
+        } else if run.labels < MIN_HEADER_LINES {
+            (t.len() < MAX_INTRO_CHARS && (t.ends_with("wrote:") || is_reply_line(lines, i))).then_some((i, i + 1, false))
+        } else if let Some(s) = header_start(lines, &run, i, floor) {
+            Some((s, run.end, true))
         } else {
-            None
+            // No part of a list or a signature is a header either.
+            i = lines[i..run.end].iter().position(|l| l.text.is_empty()).map_or(run.end, |n| i + n);
+            continue;
         };
-        let Some(s) = start else { continue };
-        let same_block = starts.last().is_some_and(|&prev| {
-            let body_lines = lines[prev + 1..s]
-                .iter()
-                .filter(|l| !l.text.is_empty() && !HEADER_LINE.is_match(&l.head) && !DATE.is_match(&l.head))
-                .count();
-            body_lines <= MAX_LINES_BETWEEN_MARKERS
-        });
-        if !same_block {
+        let Some((s, end, header)) = found else {
+            i += 1;
+            continue;
+        };
+        let text_above = lines[marker_end.min(s)..s].iter().any(|l| !l.text.is_empty());
+        if starts.is_empty() || text_above {
             starts.push(s);
+        } else if after_header {
+            // A forward without a word of its own: the text below is by the later header.
+            *starts.last_mut().unwrap() = s;
         }
+        (marker_end, after_header) = (end, header);
+        i = end;
     }
     starts
+}
+
+/// First line behind the banner at `i`; a long one wraps, and its last line ends in the rule.
+fn banner_end(lines: &[Line], i: usize) -> usize {
+    if lines[i].head.ends_with("---") || !lines.get(i + 1).is_some_and(|l| l.head.ends_with("---")) { i + 1 } else { i + 2 }
 }
 
 /// Sender and date of an embedded mail, read from its first lines.
 fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
     let head: Vec<&str> = lines.iter().map(|l| l.head.as_ref()).filter(|t| !t.is_empty()).take(HEADER_LOOKAHEAD + 1).collect();
-    let first = head.iter().position(|t| !BANNER.is_match(t) && !t.ends_with(':')).unwrap_or(0);
+    let first = head.iter().position(|t| !BANNER.is_match(t) && !FORWARD.is_match(t) && !t.ends_with(':') && !t.ends_with("---")).unwrap_or(0);
     let value = |t: &str| t.split_once(':').map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
     let dated = head.iter().position(|t| DATED.is_match(t));
     let date = dated.map(|i| {
@@ -198,11 +310,16 @@ fn quoted_author(lines: &[Line]) -> (Option<String>, Option<String>) {
     });
     // Sender first, then the date: the order of every mail program, in every language. A banner
     // says as much; a Lotus block starts with the recipient and has neither.
-    let banner = first > 0 && !FORWARD.is_match(head[0]);
+    let forward = head.first().is_some_and(|t| FORWARD.is_match(t));
+    let banner = first > 0 && !forward;
     let leads = |t: &&&str| HEADER_LINE.is_match(t) && (banner || dated.is_some_and(|d| d <= first + 1));
     let named = head.get(first).filter(leads).and_then(|t| value(t));
+    // A sender line with the date on it or below it, also under a forward: the text is the sender's.
+    let is_sender = |t: &&&str| (first == 0 || forward) && !HEADER_LINE.is_match(t) && !t.starts_with("--") && head[first..].iter().take(2).any(|l| DATED.is_match(l));
     let from = named
+        .or_else(|| head.get(first).filter(is_sender).map(|t| t.to_string()))
         .or_else(|| head.iter().find_map(|t| FORWARD.captures(t).map(|c| c[1].trim().to_string())))
+        .or_else(|| head.first().filter(|t| t.ends_with(':')).map(|t| t.trim_end_matches(':').trim().to_string()))
         .or_else(|| head.get(first).filter(|t| !t.starts_with("--") && !HEADER_LINE.is_match(t)).map(|t| t.to_string()));
     (from, date)
 }
