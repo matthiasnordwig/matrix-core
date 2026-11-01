@@ -59,20 +59,3 @@ fn deleting_the_standing_passage_hands_vector_and_repeats_to_the_next() {
     let d_doc = doc(&db, ctx, "d.eml");
     assert!(db.create_chunk_once(&chunk(ctx, d_doc, "text"), Some("k")).unwrap().is_omitted);
 }
-
-#[test]
-fn a_passage_with_part_vectors_is_found_once_by_its_best_vector() {
-    let (db, ctx, a, _) = setup();
-    let long = db.create_chunk(&chunk(ctx, a, "long")).unwrap();
-    let other = db.create_chunk(&NewChunk { chunk_index: 1, ..chunk(ctx, a, "other") }).unwrap();
-    let model = db.context(ctx).unwrap().unwrap().embedding_model_id.unwrap();
-    let e = |chunk_id, vector: Vec<f32>| NewEmbedding { chunk_id, context_id: ctx, document_id: a, embedding_model_id: model, dim: 2, vector };
-    db.insert_embedding(&e(long.id, vec![0.7, 0.7])).unwrap();
-    db.set_embedding_parts(&e(long.id, vec![0.7, 0.7]), &[vec![1.0, 0.0], vec![0.0, 1.0]]).unwrap();
-    db.insert_embedding(&e(other.id, vec![0.9, 0.4])).unwrap();
-    let hits = db.search_context(ctx, &[1.0, 0.0], 5, None).unwrap();
-    assert_eq!(hits.iter().map(|h| h.chunk_id).collect::<Vec<_>>(), vec![long.id, other.id]);
-    assert!(hits[0].score > 0.99, "the part vector decides, not the mean");
-    assert_eq!(db.delete_embeddings_for_context(ctx).unwrap(), 2);
-    assert!(db.search_context(ctx, &[1.0, 0.0], 5, None).unwrap().is_empty());
-}

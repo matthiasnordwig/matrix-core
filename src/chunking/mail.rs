@@ -4,7 +4,7 @@
 //! The text is the Markdown of `ingest/mail` (subject heading, `**From:**` lines, body). Offsets are
 //! byte offsets and chunks are verbatim slices, as in `markdown.rs`. A block stays whole up to
 //! [`MAIL_MAX_CHARS`], the most one vector can stand for; above that it is cut at paragraphs, then
-//! as `markdown.rs` cuts a long line. Search reaches the topics inside a block through `topics.rs`.
+//! as `markdown.rs` cuts a long line.
 
 use std::sync::LazyLock;
 
@@ -13,8 +13,9 @@ use regex::Regex;
 use super::markdown::{pack_at, split_long_text, trimmed_end};
 use crate::db::models::NewChunk;
 
-/// Longest block in characters, about what the embedder takes in one call.
-pub const MAIL_MAX_CHARS: usize = 30_000;
+/// Longest block in characters. Among 8 000, 16 000 and 30 000 this found most on the mail
+/// measurement, at a third less memory than 30 000 (`handbuch/messen.md`).
+pub const MAIL_MAX_CHARS: usize = 16_000;
 
 const HEADER_SEP: &str = " › ";
 /// Body lines between two markers that still count as one block's header (a wrapped banner line).
