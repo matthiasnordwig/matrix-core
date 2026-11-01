@@ -74,7 +74,7 @@ pub struct OrtEmbedder {
 /// Memory grows faster than the text and the ONNX arena keeps its peak (EmbeddingGemma 2 on CPU,
 /// measured: 2 048 tokens 1.4 GB, 8 192 tokens 7.8 GB, 16 384 tokens 26 GB). The vector of a longer
 /// text stands for its start; keyword search still sees all of it.
-pub(super) const MAX_INPUT_TOKENS: usize = if cfg!(target_os = "ios") { 2048 } else { 8192 };
+pub(super) const MAX_INPUT_TOKENS: usize = if cfg!(any(target_os = "ios", target_os = "android")) { 2048 } else { 8192 };
 
 pub(super) fn cap_input_tokens(tokenizer: &mut Tokenizer) -> Result<()> {
     let limit = TruncationParams { max_length: MAX_INPUT_TOKENS, ..Default::default() };
