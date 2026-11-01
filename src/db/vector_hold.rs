@@ -2,8 +2,7 @@
 //! SQLite once and kept for the next search where that pays.
 //!
 //! Search stays exact: every passage is compared. Held is one collection, the one searched last, and
-//! only from `MIN_HELD_VECTORS` on; below that reading is cheap and the memory is better free. iOS never
-//! holds: its memory budget is small and the system ends an app that goes over it.
+//! only from `MIN_HELD_VECTORS` on; below that reading is cheap and the memory is better free.
 //!
 //! The held block is valid while nothing wrote to `embeddings`: the update hook counts writes of this
 //! connection, cascades included, and `PRAGMA data_version` sees commits of other connections and
@@ -20,7 +19,6 @@ use super::embeddings::dot;
 use super::{CoreError, Database, Result};
 
 const MIN_HELD_VECTORS: i64 = if cfg!(test) { 3 } else { 50_000 };
-const HOLD: bool = cfg!(not(target_os = "ios"));
 
 type Stamp = (i64, u64);
 
@@ -99,7 +97,7 @@ impl Database {
         if let Some(t) = held.filter(|t| t.context_id == context_id && t.stamp == stamp) {
             return Ok(t);
         }
-        let hold = HOLD && self.count_embeddings_for_context(context_id)? >= MIN_HELD_VECTORS;
+        let hold = self.count_embeddings_for_context(context_id)? >= MIN_HELD_VECTORS;
         if hold {
             self.vectors.held.borrow_mut().take(); // free first, or both blocks exist at once
         }
