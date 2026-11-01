@@ -28,7 +28,7 @@ rx!(LEGAL_PART, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:teil|buch|titel|kapitel|abschnitt|u
 rx!(LEGAL_UNIT, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:§§?\s*\d|art\.\s*\d|artikel\s+\d|article\s+\d|artículo\s+\d|section\s+\d+[.:]|ziffer\s+\d)");
 rx!(LEGAL_INNER, r"^\s*\(\d+[a-z]?\)\s");
 rx!(AGENDA, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:top\s*\d|tagesordnungspunkt\s*\d|agenda item\s*\d|item\s+\d+[.:]|point\s+\d+[.:]|punto\s+\d+[.:])");
-rx!(SPEAKER, r"^(?:\*\*)?[A-ZÄÖÜÉ][\p{L}.'\- ]{1,38}(?:\*\*)?:\s+\S");
+rx!(SPEAKER, r"^\s*(?:\d{1,3}\s+)?(?:\*\*)?[A-ZÄÖÜÉ][\p{L}.'\- ]{1,38}(?:\*\*)?:\s+\S");
 rx!(CHAPTER, r"(?i)^(?:#{1,6}\s+)?(?:kapitel|chapter|chapitre|capítulo)\s+(?:\d+|[ivxlc]+|[\p{L}]+)\b|^\p{L}+s\s+kapitel\s*$|^#{1,3}\s+\S");
 rx!(CHAT_LINE, r"^\[?(\d{1,4}[./-]\d{1,2}[./-]\d{1,4}),?\s+(\d{1,2}):(\d{2})");
 rx!(CODE_UNIT, r"^(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+|unsafe\s+|const\s+)*(?:fn|struct|enum|impl|trait|mod)\b|^(?:async\s+)?(?:def|class)\s|^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const)\s|^func\s|^(?:public|private|protected)\s|^CREATE\s|^\[[\w.-]+\]\s*$");
@@ -130,7 +130,7 @@ fn marks_of(lines: &[Line], kind: DocKind, rules: &Rules) -> Vec<Mark> {
 fn title_of(kind: DocKind, line: &str) -> String {
     let t = line.trim().trim_start_matches('#').trim().trim_matches('*').trim();
     match kind {
-        DocKind::Transcript => t.split(':').next().unwrap_or(t).trim_end_matches('*').to_string(),
+        DocKind::Transcript => t.split(':').next().unwrap_or(t).trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ').trim_end_matches('*').to_string(),
         _ => t.chars().take(100).collect(),
     }
 }

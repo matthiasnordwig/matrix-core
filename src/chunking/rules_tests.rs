@@ -171,3 +171,10 @@ fn a_licence_with_numbered_sections_at_the_end_of_a_book_is_no_law() {
     let filler = format!("{}\n\n", prose(5)).repeat(40);
     assert_eq!(kind(&format!("{chapters}{filler}{filler}{licence}"), "book.txt"), DocKind::Book);
 }
+
+#[test]
+fn a_transcript_with_line_numbers_is_told_by_its_speakers() {
+    let t = (1..=30).map(|i| format!("{i:>2} {}: Thank you, and that is exactly the point I wanted to make here.\n", if i % 2 == 0 { "MR. HALL" } else { "JUSTICE KAGAN" })).collect::<String>();
+    assert_eq!(kind(&t, "argument.txt"), DocKind::Transcript);
+    assert_eq!(path(&chunk_by_rules(&t, 1, 2, DocKind::Transcript)[0]), "JUSTICE KAGAN");
+}

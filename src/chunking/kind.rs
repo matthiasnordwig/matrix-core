@@ -105,7 +105,7 @@ macro_rules! rx {
 rx!(LEGAL, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:§§?\s*\d|art\.\s*\d|artikel\s+\d|article\s+\d|artículo\s+\d|section\s+\d+[.:]|ziffer\s+\d|(?-i:AT|BTO?|BTR)\s*\d)");
 rx!(AGENDA, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:top\s*\d|tagesordnungspunkt\s*\d|agenda item\s*\d|item\s+\d+[.:]|point\s+\d+[.:]|punto\s+\d+[.:])");
 rx!(MINUTES_WORD, r"(?i)\b(protokoll|niederschrift|minutes of|anwesend|attendees|beschluss|procès-verbal|acta de)\b");
-rx!(SPEAKER, r"^(?:\*\*)?([A-ZÄÖÜÉ][\p{L}.'\- ]{1,38})(?:\*\*)?:\s+\S");
+rx!(SPEAKER, r"^\s*(?:\d{1,3}\s+)?(?:\*\*)?([A-ZÄÖÜÉ][\p{L}.'\- ]{1,38})(?:\*\*)?:\s+\S");
 rx!(TIMESTAMP, r"^\[?\d{1,2}:\d{2}(:\d{2})?\]?\s|-->");
 rx!(CHAT, r"^\[?\d{1,4}[./-]\d{1,2}[./-]\d{1,4},?\s+\d{1,2}:\d{2}");
 rx!(CHAPTER, r"(?i)^(?:#{1,6}\s+|\*\*)?(?:kapitel|chapter|chapitre|capítulo)\s+(?:\d+|[ivxlc]+|[\p{L}]+)\b|(?i)^\p{L}+s\s+kapitel\s*$");
