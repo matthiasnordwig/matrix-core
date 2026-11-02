@@ -126,48 +126,4 @@ impl Database {
         let n = self.conn.execute(&sql, params)?;
         Ok(n)
     }
-
-    /// Writes a `verification call failed` row the way the removed polarity check
-    /// did (one row per edge, `attempts` bumped). Only the context-transfer test
-    /// fixture still uses it, to cover such rows from older databases — remove it
-    /// together with that use (`ISSUES.md`).
-    pub fn upsert_verification_failure(
-        &self,
-        context_id: i64,
-        edge_id: i64,
-        chunk_id: Option<i64>,
-        relation_type: &str,
-        evidence: Option<&str>,
-        err: &str,
-    ) -> Result<i64> {
-        let reason = format!("verification call failed: {err}");
-        let existing: Option<(i64, i64)> = self
-            .conn
-            .query_row(
-                "SELECT id, attempts FROM ontology_edge_reviews
-                 WHERE edge_id = ?1 AND reason LIKE 'verification call failed:%'
-                 LIMIT 1",
-                [edge_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok();
-        match existing {
-            Some((row_id, attempts)) => {
-                let new_attempts = attempts + 1;
-                self.conn.execute(
-                    "UPDATE ontology_edge_reviews SET attempts = ?1, reason = ?2, chunk_id = ?3, evidence = ?4 WHERE id = ?5",
-                    rusqlite::params![new_attempts, reason, chunk_id, evidence, row_id],
-                )?;
-                Ok(new_attempts)
-            }
-            None => {
-                self.conn.execute(
-                    "INSERT INTO ontology_edge_reviews (context_id, edge_id, chunk_id, relation_type, evidence, reason, attempts)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
-                    rusqlite::params![context_id, edge_id, chunk_id, relation_type, evidence, reason],
-                )?;
-                Ok(1)
-            }
-        }
-    }
 }
