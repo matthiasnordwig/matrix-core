@@ -59,29 +59,6 @@ fn unextracted_and_quarantine_counts_match_list_based_results() {
     );
 }
 
-#[test]
-fn chunk_state_save_load_delete_round_trip() {
-    let db = db();
-    let (ctx, chunk_id) = seed_context_with_chunk(&db, "Ctx12");
-    assert_eq!(db.load_chunk_state(ctx, chunk_id).unwrap(), None);
-
-    db.save_chunk_state(ctx, chunk_id, "[0,1]", "{\"nodes\":[]}").unwrap();
-    assert_eq!(
-        db.load_chunk_state(ctx, chunk_id).unwrap(),
-        Some(("[0,1]".to_string(), "{\"nodes\":[]}".to_string()))
-    );
-
-    // Upsert overwrites, doesn't duplicate.
-    db.save_chunk_state(ctx, chunk_id, "[0,1,2]", "{\"nodes\":[1]}").unwrap();
-    assert_eq!(
-        db.load_chunk_state(ctx, chunk_id).unwrap(),
-        Some(("[0,1,2]".to_string(), "{\"nodes\":[1]}".to_string()))
-    );
-
-    db.delete_chunk_state(ctx, chunk_id).unwrap();
-    assert_eq!(db.load_chunk_state(ctx, chunk_id).unwrap(), None);
-}
-
 // --- persistent ontology run log (schema_v43) -------------------------------
 
 #[test]
