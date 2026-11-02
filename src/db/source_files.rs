@@ -87,7 +87,8 @@ impl Database {
     }
 
     /// Remember the file `document_id` was read from (`missing_since` is ignored:
-    /// a file just read is present). `pending`: see the module comment.
+    /// a file just read is present). `pending`: see the module comment. A document
+    /// without a folder yet gets the file's (`doc_meta.rs`).
     pub fn record_source_file(&self, f: &SourceFile, pending: bool) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO source_files
@@ -95,7 +96,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             params![f.document_id, f.context_id, f.path, f.byte_size, f.mtime_ns, f.sha256, pending],
         )?;
-        Ok(())
+        self.set_folder_from_source(f.document_id, &f.path)
     }
 
     /// The finished source rows of `context_id` (not `pending`), by path and document.

@@ -233,10 +233,10 @@ impl Database {
         }
         let ctx_marks = vec!["?"; context_ids.len()].join(",");
         let mut sql = format!("{SELECT_INFO} WHERE t.context_id IN ({ctx_marks})");
-        let mut args: Vec<i64> = context_ids.to_vec();
+        let mut args: Vec<rusqlite::types::Value> = context_ids.iter().map(|&c| c.into()).collect();
         if let Some(docs) = doc_ids {
-            sql.push_str(&format!(" AND t.document_id IN ({})", vec!["?"; docs.len()].join(",")));
-            args.extend_from_slice(docs);
+            sql.push_str(" AND t.document_id IN (SELECT value FROM json_each(?))");
+            args.push(super::json_ids(docs).into());
         }
         sql.push_str(" ORDER BY t.document_id, t.id");
         let mut stmt = self.conn.prepare(&sql)?;

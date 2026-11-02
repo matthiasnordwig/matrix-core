@@ -34,7 +34,7 @@ fn v73_applies_on_an_existing_v72_database() {
     )
     .unwrap();
     let db = Database::init(conn).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 74);
+    assert_eq!(db.schema_version().unwrap(), super::MIGRATIONS.len() as i64);
     let text: String = db.conn.query_row("SELECT text FROM chunks WHERE id = 7", [], |r| r.get(0)).unwrap();
     assert_eq!(text, "abc");
     assert!(plan(&db.conn, "SELECT * FROM chunks WHERE document_id = 1").contains("idx_chunks_document"));

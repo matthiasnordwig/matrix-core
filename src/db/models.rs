@@ -656,7 +656,7 @@ pub struct NewEmbedding {
 
 // Retrieval hits live in `scored.rs`, spreadsheet-table rows in `sheet_models.rs`,
 // grid-run history types in `grid_run_models.rs`, disk sources in `source_models.rs`.
-pub use super::{grid_run_models::*, scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*, source_models::*};
+pub use super::{doc_meta_models::*, grid_run_models::*, scored::{HitProvenance, ListHit, ScoredChunk}, sheet_models::*, source_models::*};
 
 // --- Page images (schema_v61, image search over graphics pages) --------------
 

@@ -40,7 +40,8 @@ impl VectorTable {
     }
 
     /// Rows without the documents in `gone` and, if given, only those of `allowed`, in table order.
-    pub(crate) fn visible<'a>(&'a self, gone: &'a HashSet<i64>, allowed: Option<&'a [i64]>) -> impl Iterator<Item = usize> + 'a {
+    /// `allowed` is a set: a filtered search can allow hundreds of thousands of documents.
+    pub(crate) fn visible<'a>(&'a self, gone: &'a HashSet<i64>, allowed: Option<&'a HashSet<i64>>) -> impl Iterator<Item = usize> + 'a {
         (0..self.len()).filter(move |&i| {
             let document = self.documents[i];
             !gone.contains(&document) && allowed.is_none_or(|a| a.contains(&document))

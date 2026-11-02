@@ -104,7 +104,7 @@ impl Database {
 
 /// Run a prepared FTS5 MATCH (either the OR-fused keyword expr or a quoted
 /// phrase) scoped to one context, non-omitted, best-first, optionally restricted
-/// to a document set. Uses **anonymous** `?` placeholders throughout (mixing
+/// to a document set (one JSON parameter, `json_ids`). Uses **anonymous** `?` placeholders throughout (mixing
 /// `?N` with a bare `?` collapses SQLite's parameter numbering and undercounts
 /// the binds), bound in textual order.
 fn fts_match_scoped(
@@ -122,12 +122,8 @@ fn fts_match_scoped(
     );
     // Documents whose file is gone from disk are left out (`source_files.rs`).
     sql.push_str(&format!(" AND {}", super::source_files::FILE_PRESENT_SQL));
-    if let Some(allowed) = doc_ids {
-        let placeholders = std::iter::repeat("?")
-            .take(allowed.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        sql.push_str(&format!(" AND c.document_id IN ({placeholders})"));
+    if doc_ids.is_some() {
+        sql.push_str(" AND c.document_id IN (SELECT value FROM json_each(?))");
     }
     sql.push_str(" ORDER BY bm25(chunks_fts) LIMIT ?");
     let mut stmt = conn.prepare(&sql)?;
@@ -135,12 +131,10 @@ fn fts_match_scoped(
     let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::new();
     binds.push(&match_expr);
     binds.push(&context_id);
-    // Doc-id binds come BEFORE the LIMIT bind, matching their textual position
-    // (the IN clause precedes ORDER BY / LIMIT in the SQL above).
-    if let Some(allowed) = doc_ids {
-        for id in allowed {
-            binds.push(id);
-        }
+    // The doc-id list comes BEFORE the LIMIT bind, matching its textual position.
+    let allowed = doc_ids.map(super::json_ids);
+    if let Some(list) = &allowed {
+        binds.push(list);
     }
     binds.push(&n_i64);
     let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| row.get::<_, i64>(0))?;

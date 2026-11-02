@@ -148,6 +148,7 @@ impl Database {
             return Ok(vec![Vec::new(); queries_by_row.len()]);
         }
         let mut row_merged: Vec<Vec<ScoredChunk>> = vec![Vec::new(); queries_by_row.len()];
+        let allowed = crate::db::doc_set(doc_ids);
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
             for cid in ctxs {
                 let table = self.vector_table(cid)?;
@@ -157,7 +158,7 @@ impl Database {
                         continue;
                     };
                     let query_norm = crate::db::embeddings::dot(qvec, qvec).sqrt();
-                    for i in table.visible(&gone, doc_ids) {
+                    for i in table.visible(&gone, allowed.as_ref()) {
                         let (chunk_id, vector) = table.row(i);
                         if vector.len() == qvec.len() {
                             row_merged[row_idx].push(ScoredChunk::new(chunk_id, table.cosine(i, qvec, query_norm)));

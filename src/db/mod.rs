@@ -13,7 +13,8 @@
 //! (structural profiles -> `structural_patterns` rows), v50 (promote the legacy
 //! `reranker_model_dir` setting) and v51/v52 (table rebuilds that widen a
 //! `kind` CHECK, which SQLite cannot ALTER; `schema_v51.sql`/`schema_v52.sql`
-//! are deliberate no-ops). Repository methods live in the sibling files as
+//! are deliberate no-ops); v75 fills sender, date and folder of existing documents
+//! (`doc_meta.rs`). Repository methods live in the sibling files as
 //! `impl Database` blocks; all row types live in `models.rs`.
 
 use std::path::Path;
@@ -50,6 +51,8 @@ pub(crate) mod page_images;
 mod sheet_models;
 mod source_models;
 mod source_files;
+pub mod doc_meta;
+mod doc_meta_models;
 pub mod page_refresh;
 mod grid_run_models;
 pub mod sheet_tables;
@@ -64,6 +67,17 @@ use migration_hooks::{
     migrate_v49_to_v50_reranker, migrate_v50_to_v51_embedding_kind, migrate_v51_to_v52_reranker_kind,
     migrate_v8_to_v9_profiles,
 };
+
+/// A document scope as a set: membership per passage stays cheap however many documents it holds.
+pub(crate) fn doc_set(doc_ids: Option<&[i64]>) -> Option<std::collections::HashSet<i64>> {
+    doc_ids.map(|d| d.iter().copied().collect())
+}
+
+/// Ids as one JSON array, bound to `IN (SELECT value FROM json_each(?))`: one parameter
+/// however long the list (a placeholder per id stops at SQLite's 32 766).
+pub(crate) fn json_ids(ids: &[i64]) -> String {
+    serde_json::to_string(ids).unwrap_or_else(|_| "[]".into())
+}
 
 /// Errors surfaced by the persistence layer.
 #[derive(Debug, thiserror::Error)]
@@ -226,6 +240,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v72.sql"),
     include_str!("schema_v73.sql"),
     include_str!("schema_v74.sql"),
+    include_str!("schema_v75.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -300,6 +315,9 @@ impl Database {
                 if target == 50 {
                     migrate_v49_to_v50_reranker(&tx)?;
                 }
+                if target == 75 {
+                    doc_meta::backfill(&tx)?;
+                }
 
                 tx.pragma_update(None, "user_version", target)?;
                 tx.commit()?;
@@ -363,3 +381,5 @@ mod source_files_tests;
 mod provisional_tests;
 #[cfg(test)]
 mod page_refresh_tests;
+#[cfg(test)]
+mod doc_meta_tests;

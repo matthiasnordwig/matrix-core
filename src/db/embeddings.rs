@@ -150,8 +150,9 @@ impl Database {
         let table = self.vector_table(context_id)?;
         let gone = self.missing_document_ids(context_id)?; // file gone from disk (`source_files.rs`)
         let query_norm = dot(query, query).sqrt();
+        let allowed = super::doc_set(doc_ids);
         let mut scored = Vec::with_capacity(table.len());
-        for i in table.visible(&gone, doc_ids) {
+        for i in table.visible(&gone, allowed.as_ref()) {
             let (chunk_id, vector) = table.row(i);
             if vector.len() != query.len() {
                 return Err(CoreError::DimMismatch { expected: query.len(), got: vector.len() });
