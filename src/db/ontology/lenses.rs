@@ -62,9 +62,8 @@ impl Database {
     }
 
     /// `resolved_relation_type` may be `None` when only the verdict itself
-    /// changes (e.g. `verify_edge_polarity` marking an already-materialized
-    /// edge `deleted`) — in that case the previously-resolved type, if any,
-    /// is preserved rather than clobbered.
+    /// changes — in that case the previously-resolved type, if any, is
+    /// preserved rather than clobbered.
     pub fn upsert_lens_edge_verdict(&self, lens_id: i64, edge_id: i64, verdict: &str, resolved_relation_type: Option<&str>) -> Result<()> {
         self.conn.execute(
             "INSERT INTO ontology_lens_edge_verdicts (lens_id, edge_id, verdict, resolved_relation_type) VALUES (?1, ?2, ?3, ?4)

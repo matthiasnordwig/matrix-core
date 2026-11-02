@@ -41,16 +41,9 @@ impl Database {
     /// `materialize_lens`) and node type rows are always present once a lens
     /// is materialized (exhaustive resolution, see `sanitize.rs`).
     ///
-    /// Deliberately NOT restricted to constraint-caused deletions: a `deleted`
-    /// verdict can also come from `verify_edge_polarity`'s negation check
-    /// (`upsert_lens_edge_verdict(..., "deleted", None)`), and the two causes
-    /// aren't distinguishable from the verdict row alone (no `reason`/source
-    /// column on `ontology_lens_edge_verdicts`). Grouping by
-    /// (relation_type, source_type, target_type) is still meaningful either
-    /// way — it surfaces exactly the "this type combination keeps getting
-    /// dropped" signal the suggestion is meant to catch — but a high count
-    /// here does not guarantee every one of those edges failed on a
-    /// constraint rather than a negation verdict.
+    /// Lenses of older databases may also hold `deleted` verdicts of a removed
+    /// polarity check (indistinguishable from the verdict row alone); they
+    /// count here like constraint misses.
     pub fn deleted_relation_constraint_frequencies(&self, context_id: i64, min_count: i64) -> Result<Vec<(String, String, String, i64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT

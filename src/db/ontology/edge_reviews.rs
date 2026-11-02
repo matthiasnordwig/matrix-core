@@ -1,12 +1,11 @@
-//! CRUD for `ontology_edge_reviews` — the non-blocking review list for edges
-//! flagged by the stage-2 negation/polarity verification (see
-//! `app/crates/services/src/ontology/extract/verify.rs`) as "unclear" or whose
-//! verification call failed outright. Unlike `ontology_quarantine` (s.
-//! `quarantine.rs`), rows here never block the pipeline.
+//! CRUD for `ontology_edge_reviews` — the non-blocking review list for edges the
+//! pipeline's structural lints flagged (`lint: <rule>: …`, see
+//! `app/crates/services/src/ontology/extract/lint.rs`). Unlike
+//! `ontology_quarantine` (s. `quarantine.rs`), rows here never block the pipeline.
 //!
-//! `attempts` counts failed verification calls only: `upsert_verification_failure`
-//! dedups per edge (one row, `attempts` bumped) so the re-verify logic can
-//! auto-eject after `MAX_VERIFY_ATTEMPTS` (`extract/verify.rs`).
+//! Older databases also hold `LLM verdict: …`/`verification call failed: …` rows
+//! of a removed polarity check; they stay ordinary review rows. `attempts` only
+//! counted that check's failed calls (0 otherwise) and is carried along unchanged.
 use crate::db::{Database, Result};
 use crate::db::models::OntologyEdgeReview;
 
@@ -128,14 +127,10 @@ impl Database {
         Ok(n)
     }
 
-    /// Records (or re-records) a failed polarity verification for an edge and
-    /// returns the resulting `attempts` count. Unlike `insert_ontology_edge_review`,
-    /// this **dedups per edge**: if a `verification call failed` row already
-    /// exists for `edge_id`, it bumps `attempts` and refreshes the reason/error
-    /// instead of inserting a duplicate — so re-running the pipeline (or a manual
-    /// re-verify) accumulates attempts on one row rather than piling up copies.
-    /// Only the `verification call failed:%` class is matched; an `LLM verdict`
-    /// row for the same edge is left untouched.
+    /// Writes a `verification call failed` row the way the removed polarity check
+    /// did (one row per edge, `attempts` bumped). Only the context-transfer test
+    /// fixture still uses it, to cover such rows from older databases — remove it
+    /// together with that use (`ISSUES.md`).
     pub fn upsert_verification_failure(
         &self,
         context_id: i64,
@@ -174,18 +169,5 @@ impl Database {
                 Ok(1)
             }
         }
-    }
-
-    /// Updates a review row's `reason` + `attempts` in place. Used by the
-    /// re-verify command when an edge still can't be resolved: bump `attempts`
-    /// and refresh the error, or convert a `verification call failed` row into a
-    /// genuine `LLM verdict: unclear` once the model finally returns a verdict.
-    /// Resolved edges are removed via `delete_ontology_edge_review` instead.
-    pub fn update_edge_review(&self, id: i64, reason: &str, attempts: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE ontology_edge_reviews SET reason = ?1, attempts = ?2 WHERE id = ?3",
-            rusqlite::params![reason, attempts, id],
-        )?;
-        Ok(())
     }
 }

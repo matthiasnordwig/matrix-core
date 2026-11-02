@@ -490,7 +490,7 @@ pub struct Context {
     /// (previously only ephemeral frontend state, see ISSUES.md).
     pub ontology_pool_id: Option<i64>,
     /// Optional dedicated endpoint/pool used ONLY for the extraction +
-    /// polarity-verification phases (see `handbuch/ontology.md`
+    /// evidence-repair phases (see `handbuch/ontology.md`
     /// "Modellauswahl, Pools, Fallback", `schema_v36.sql`) — the judgment-critical phases where a
     /// stronger/different model plausibly helps most. Dedup/community keep
     /// using the main source (`llm_id`/`ontology_pool_id`) regardless. At
@@ -1017,11 +1017,9 @@ pub struct OntologyQuarantineChunk {
     pub created_at: String,
 }
 
-/// Non-blocking counterpart to `OntologyQuarantineChunk`: an edge whose
-/// evidence hinted at a possible negation/polarity error, but stage-2 LLM
-/// verification came back "unclear" or failed — see
-/// `ontology/extract/verify.rs`. Doesn't block the pipeline, just flags the
-/// edge for later human review.
+/// Non-blocking counterpart to `OntologyQuarantineChunk`: an edge a structural
+/// lint flagged (`ontology/extract/lint.rs`). Doesn't block the pipeline, just
+/// flags the edge for later human review.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OntologyEdgeReview {
     pub id: i64,
@@ -1032,10 +1030,8 @@ pub struct OntologyEdgeReview {
     pub evidence: Option<String>,
     pub reason: String,
     pub created_at: i64,
-    /// How many times verification has been attempted for this edge (0 for
-    /// non-verification reviews). Bumped by `upsert_verification_failure`; once
-    /// it reaches `MAX_VERIFY_ATTEMPTS` the review is auto-ejected. See
-    /// `ontology/extract/verify.rs`.
+    /// Failed calls of the removed polarity check (rows of older databases);
+    /// 0 for every other review. Kept so export/import stay lossless.
     pub attempts: i64,
     /// Denormalized from the edge's source/target nodes at read time (see
     /// `list_ontology_edge_reviews`) so the UI viewer doesn't need a second
