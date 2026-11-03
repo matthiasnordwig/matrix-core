@@ -93,3 +93,14 @@ impl HitProvenance {
         (total > 0.0).then(|| img.share / total)
     }
 }
+
+/// The search vector of one paragraph of a passage (`embedding_paragraphs`, schema_v77):
+/// `start..end` = its byte range in the chunk text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParagraphVector {
+    pub chunk_id: i64,
+    pub embedding_model_id: i64,
+    pub start: usize,
+    pub end: usize,
+    pub vector: Vec<f32>,
+}

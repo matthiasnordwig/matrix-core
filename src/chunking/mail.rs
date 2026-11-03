@@ -47,6 +47,8 @@ const MIN_ADDRESSED: usize = 2;
 const MAX_DATE_VALUE_CHARS: usize = 60;
 /// A value that starts with a digit and has this many, dates aside, is a phone number.
 const MIN_PHONE_DIGITS: usize = 7;
+/// Most words on a line of a signature (name, title, company, phone).
+const MAX_SIGNATURE_LINE_WORDS: usize = 8;
 /// A line shorter than this is the date as a whole, with its time.
 const MAX_DATE_LINE_CHARS: usize = 40;
 /// Longest line that can announce a block ("On … wrote:", a banner).
@@ -460,6 +462,29 @@ pub fn embedding_text<'a>(text: &'a str, metadata: &str) -> Cow<'a, str> {
         (Some("mail_quoted"), Some(path)) if !path.is_empty() => Cow::Owned(format!("{path}\n\n{text}")),
         _ => Cow::Borrowed(text),
     }
+}
+
+/// A paragraph that is no text of its own (`paragraphs.rs` gives it no vector): mostly header lines
+/// (subject heading, `**From:**` lines, banners, at least [`MIN_HEADER_LINES`] `Label: value` lines),
+/// a signature (short lines with a phone number, web or mail address) or the start of a footer.
+pub(crate) fn is_boilerplate(paragraph: &str) -> bool {
+    let all = scan(paragraph);
+    let lines: Vec<&Line> = all.iter().filter(|l| !l.text.is_empty()).collect();
+    let Some(first) = lines.first() else { return true };
+    if FOOTER_START.is_match(first.text) || TRAILING_NOISE.is_match(first.text) {
+        return true;
+    }
+    let marked = |l: &Line| {
+        let t = l.head.as_ref();
+        l.text.starts_with("# ") || l.text.starts_with("**") || ORIGINAL.is_match(t) || FORWARD.is_match(t) || BANNER.is_match(t)
+    };
+    let labelled = lines.iter().filter(|l| HEADER_LINE.is_match(&l.head)).count();
+    let header = lines.iter().filter(|l| marked(l) || (labelled >= MIN_HEADER_LINES && HEADER_LINE.is_match(&l.head))).count();
+    if header * 2 >= lines.len() {
+        return true;
+    }
+    let short = lines.iter().all(|l| l.text.split_whitespace().count() <= MAX_SIGNATURE_LINE_WORDS);
+    short && lines.iter().any(|l| is_contact(&l.head) || is_contact(&format!(":{}", l.head)) || names_address(l.text))
 }
 
 /// A header line that says where this copy is filed, not what it says.

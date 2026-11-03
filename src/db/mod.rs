@@ -35,6 +35,9 @@ pub mod collection_summary;
 mod contexts;
 mod provisional;
 pub mod embeddings;
+mod paragraph_vectors;
+#[cfg(test)]
+mod paragraph_vectors_tests;
 mod fts;
 mod grid;
 mod structural_profiles;
@@ -242,6 +245,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v74.sql"),
     include_str!("schema_v75.sql"),
     include_str!("schema_v76.sql"),
+    include_str!("schema_v77.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the

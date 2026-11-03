@@ -27,6 +27,6 @@ dazu `*_tests.rs` je Thema (FTS, chunk_refs, chunks, chat_sessions, ref_abbrevia
 reranker, rename, embedding_kind, page_images, transfer, context_copy, secret_fields,
 llm_endpoint = Endpunkt-Flags/Pool-Invariante/Reasoning-Listen, vision = schema_v62, mmproj = schema_v65, grid_run_info = schema_v66 (+ v70: tote Grid-Tabellen weg), grid_cell_sources = schema_v76, graph_vector_migration = schema_v67 (Herkunft der Graph-Vektoren; Leser-Filter in `ontology/tests/graph_vectors.rs`), sample_key = schema_v69, provisional = schema_v72 (vorläufige Sammlungen, Lösch-Invariante), chunks_index = schema_v73 (Passagen je Dokument über Index), vector_math = `dot`, vector_hold = Vektorblock (gleiche Treffer, ungültig nach Schreiben, Schwelle),
 sheet_tables = schema_v63/Anlage/Löschen, sheet_query = Sperren/Zeitlimit/Deckel, source_files = schema_v71 Quellen/fehlt/Lease,
-page_refresh = ältere PDFs ohne `page_breaks`, doc_meta = schema_v75 Suchfilter: Mail-Kopf, Datumsgrenzen, Deckindex, Nachfüllen, lange Dokumentlisten).
+page_refresh = ältere PDFs ohne `page_breaks`, paragraph_vectors = schema_v77 Absatzvektoren von Mails (Auszug des Rerankers, nie Vektorsuche), doc_meta = schema_v75 Suchfilter: Mail-Kopf, Datumsgrenzen, Deckindex, Nachfüllen, lange Dokumentlisten).
 Test-`NewContext` am besten als `NewContext { …, ..Default::default() }`. Bei Änderungen `cargo test --lib db` laufen lassen, bei
 neuer CRUD-Logik ergänzen.

@@ -16,6 +16,7 @@ pub mod kind;
 pub mod mail;
 pub mod markdown;
 pub mod outline;
+pub mod paragraphs;
 pub mod rules;
 pub mod text_repair;
 
@@ -43,3 +44,5 @@ mod rules_tests;
 mod outline_tests;
 #[cfg(test)]
 mod pages_tests;
+#[cfg(test)]
+mod paragraphs_tests;

@@ -99,6 +99,7 @@ impl Database {
     /// otherwise be compared (meaninglessly) against new-model query vectors.
     /// Returns the number of rows removed.
     pub fn delete_embeddings_for_context(&self, context_id: i64) -> Result<usize> {
+        self.delete_paragraph_vectors_for_context(context_id)?;
         Ok(self
             .conn
             .execute("DELETE FROM embeddings WHERE context_id = ?1", [context_id])?)
