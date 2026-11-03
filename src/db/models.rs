@@ -506,7 +506,6 @@ pub struct Context {
     #[serde(default)]
     pub ontology_extract_reasoning_effort: Option<String>,
     pub extract_title_llm: bool,
-    pub auto_merge_ontology: bool,
     /// The lens (see `OntologyLens`) currently used to filter/relabel this
     /// context's graph for retrieval/dedup/community — `None` means "show raw,
     /// unfiltered" (the only possible state for a pre-Lens context, and the
@@ -546,7 +545,6 @@ pub struct NewContext {
     #[serde(default)]
     pub ontology_extract_reasoning_effort: Option<String>,
     pub extract_title_llm: bool,
-    pub auto_merge_ontology: bool,
     /// schema_v62; `#[serde(default)]` = older bodies/bundles write `None`.
     #[serde(default)]
     pub image_llm_id: Option<i64>,

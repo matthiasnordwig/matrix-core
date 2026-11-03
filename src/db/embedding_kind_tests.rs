@@ -249,7 +249,6 @@ fn deleting_embedding_model_unmarks_embedded_contexts() {
             ontology_extract_pool_id: None,
             ontology_extract_reasoning_effort: None,
             extract_title_llm: false,
-            auto_merge_ontology: false,
             image_llm_id: None,
         })
         .unwrap();
