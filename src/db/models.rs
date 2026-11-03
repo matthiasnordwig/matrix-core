@@ -838,6 +838,8 @@ pub struct GridChatResult {
     /// loading can rebuild a synthetic `Chunk` without a real `chunks` row.
     /// `NULL` for chunk-backed rows (schema_v42).
     pub row_source_text: Option<String>,
+    /// Origin of each answer cell (schema_v76, `grid_cell_sources` in services); `NULL` = not computed.
+    pub cell_sources: Option<String>,
     pub updated_at: i64,
 }
 

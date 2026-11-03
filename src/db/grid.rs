@@ -43,6 +43,7 @@ fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
         error: row.get("error")?,
         prompt_snapshot: row.get("prompt_snapshot")?,
         row_source_text: row.get("row_source_text")?,
+        cell_sources: row.get("cell_sources")?,
         updated_at: row.get("updated_at")?,
     })
 }
@@ -68,6 +69,7 @@ impl Database {
                 error = excluded.error,
                 prompt_snapshot = excluded.prompt_snapshot,
                 row_source_text = excluded.row_source_text,
+                cell_sources = NULL,
                 updated_at = unixepoch()",
             params![
                 r.run_id,
@@ -92,6 +94,15 @@ impl Database {
                 params![r.run_id, r.row_uid],
                 row_to_chat_result,
             )?)
+    }
+
+    /// Stores where the answer cells of `(run_id, row_uid)` came from (schema_v76); the next upsert of the row clears it.
+    pub fn set_grid_cell_sources(&self, run_id: &str, row_uid: &str, cell_sources: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE grid_chat_results SET cell_sources = ?3 WHERE run_id = ?1 AND row_uid = ?2",
+            params![run_id, row_uid, cell_sources],
+        )?;
+        Ok(())
     }
 
     /// All chat cells for a run, ordered by row.
