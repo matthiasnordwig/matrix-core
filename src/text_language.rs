@@ -4,11 +4,13 @@
 //! Users: the hybrid fusion (`embedding/retrieval.rs` — the keyword list gets less weight when the
 //! question's language differs from the language of the passages the vector search found, see
 //! `embedding/fusion.rs`), and the app via `matrix_services::text_language` (language of each
-//! search hit and document in the MCP results, function words of the search snippet).
+//! search hit and document in the MCP results, function words of the search snippet). Only prose
+//! counts: mail address headers, addresses, URLs, domains and paths are stripped first (`prose.rs`).
 
 /// Function words that tell the common document languages apart. No word stands in two lists
 /// (test `passage_word_lists_are_disjoint`), so a word counts for one language only — words
-/// several of them share ("de", "la", "que", "ou", …) are left out.
+/// several of them share ("de", "la", "que", "ou", …) are left out. "com" is not Portuguese here:
+/// it ends every `….com` address (`prose.rs` strips those, a stray ".com" in the text would count).
 const PASSAGE_WORDS: &[(&str, &[&str])] = &[
     ("de", &["der", "die", "das", "und", "nicht", "mit", "für", "auf", "ist", "sind", "wird", "werden", "eine", "einer", "dem", "den", "von", "zu", "sich", "oder"]),
     ("en", &["the", "and", "of", "to", "is", "are", "for", "with", "that", "this", "which", "shall", "be", "by", "from", "or"]),
@@ -16,7 +18,7 @@ const PASSAGE_WORDS: &[(&str, &[&str])] = &[
     ("es", &["el", "los", "las", "del", "y", "es", "por", "lo", "su", "sus", "o", "como", "este", "esta"]),
     ("it", &["il", "gli", "della", "delle", "dei", "che", "è", "per", "non", "sono", "nel", "alla", "degli", "nella"]),
     ("nl", &["het", "een", "van", "en", "niet", "zijn", "wordt", "worden", "voor", "met", "op", "dat", "aan", "bij"]),
-    ("pt", &["os", "dos", "não", "uma", "com", "em", "ao", "pelo", "pela", "são", "às", "seu"]),
+    ("pt", &["os", "dos", "não", "uma", "em", "ao", "pelo", "pela", "são", "às", "seu"]),
 ];
 
 /// `word` (lower case) is a function word of one of the document languages above (`der`, `the`,
@@ -25,11 +27,12 @@ pub fn is_function_word(word: &str) -> bool {
     PASSAGE_WORDS.iter().any(|(_, words)| words.contains(&word))
 }
 
-/// The language whose function words occur most in the first 4,000 characters of `text`, at least
+/// The language whose function words occur most in the first 4,000 characters of the prose of `text`
+/// (no address headers, addresses, URLs, domains, paths: `prose.rs`), at least
 /// `min_hits` times and 1.5× the runner-up; else `None`.
 fn by_function_words(text: &str, min_hits: usize) -> Option<&'static str> {
     let mut score = [0usize; PASSAGE_WORDS.len()];
-    let sample: String = text.chars().take(4000).collect();
+    let sample = prose::prose(text, 4000);
     for raw in sample.split(|c: char| !c.is_alphabetic()).filter(|w| !w.is_empty()) {
         let w = raw.to_lowercase();
         if let Some(i) = PASSAGE_WORDS.iter().position(|(_, words)| words.contains(&w.as_str())) {
@@ -77,6 +80,8 @@ pub fn document_language(text: &str) -> Option<&'static str> {
     let known: Vec<&str> = samples.iter().flatten().copied().collect();
     known.iter().find(|l| known.iter().filter(|m| m == l).count() >= 2).or(known.first()).copied()
 }
+
+mod prose;
 
 #[cfg(test)]
 mod tests;

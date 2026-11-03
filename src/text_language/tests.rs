@@ -40,3 +40,45 @@ fn passage_word_lists_are_disjoint() {
         }
     }
 }
+
+#[test]
+fn mail_with_a_long_distribution_list_is_english() {
+    let to: Vec<String> = (0..30).map(|i| format!("person{i}.name@enron.com")).collect();
+    let cc: Vec<String> = (0..10).map(|i| format!("Name{i}/HOU/ECT@ECT")).collect();
+    let mail = format!(
+        "From: jeff.skilling@enron.com\nTo: {}\n\t{}\nCc: {}\nSubject: Press review\n\n**To:** a@enron.com, b@enron.com\n\nThe press review is attached and the energy services unit is on the front page of the paper, which shall be read by all of us. Visit www.enron.com/news or https://enron.com/x for the rest.",
+        to.join(", "),
+        to.join(", "),
+        cc.join(", ")
+    );
+    assert_eq!(passage_language(&mail), Some("en"));
+    // The same list without the header lines (a forwarded list inside the text) is no Portuguese either.
+    let inline = format!("Please send this to {} and keep it short for the whole team and for the rest of the unit.", to.join(" "));
+    assert_ne!(passage_language(&inline), Some("pt"));
+    assert_eq!(passage_language(&to.join(" ")), None);
+}
+
+#[test]
+fn portuguese_stays_portuguese() {
+    let pt = "Os fabricantes não devem colocar no mercado produtos com vulnerabilidades conhecidas, e os dados em causa são tratados pelo responsável ao longo de uma vida útil, às vezes até ao seu fim, pela empresa.";
+    assert_eq!(passage_language(pt), Some("pt"));
+    // With an address and a header in front.
+    assert_eq!(passage_language(&format!("From: ana.silva@empresa.com.br\nTo: rui@empresa.com\n\n{pt}")), Some("pt"));
+}
+
+#[test]
+fn german_text_with_urls_stays_german() {
+    let de = "Der Verantwortliche und der Auftragsverarbeiter benennen auf jeden Fall einen Datenschutzbeauftragten, wenn die Verarbeitung von einer Behörde durchgeführt wird, siehe https://www.example.org/dsgvo/art-37 oder www.datenschutz.de und /usr/local/share/doc/dsgvo.txt.";
+    assert_eq!(passage_language(de), Some("de"));
+    assert_eq!(passage_language(&format!("{de} {}", "www.a.com b.net c.org ".repeat(30))), Some("de"));
+}
+
+#[test]
+fn prose_keeps_ordinary_words_with_dots_and_slashes() {
+    let kept = prose::prose("and/or e.g. i.e. end.Die Dr. Müller 24/7 Mr. Smith", 4000);
+    for w in ["and/or", "e.g.", "i.e.", "end.Die", "Müller", "24/7"] {
+        assert!(kept.contains(w), "{w} missing in {kept:?}");
+    }
+    let dropped = prose::prose("see x.com, (www.y.de) <a@b.org> /usr/bin/ls ~/doc C:\\Temp\\a.txt http://z", 4000);
+    assert_eq!(dropped.trim(), "see");
+}
