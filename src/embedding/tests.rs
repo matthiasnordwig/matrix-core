@@ -164,6 +164,8 @@ fn hybrid_fanout_is_max_50_5x() {
     assert_eq!(hybrid_fanout(1), 50);
     assert_eq!(hybrid_fanout(10), 50);
     assert_eq!(hybrid_fanout(20), 100);
+    // search_context's `rerank_candidates` (up to 200) is the top_k here: the lists grow with it.
+    assert_eq!(hybrid_fanout(200), 1000);
 }
 
 #[test]
