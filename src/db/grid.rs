@@ -105,6 +105,17 @@ impl Database {
         Ok(())
     }
 
+    /// Ends the rows of `run_id` that never reached a final status (`queued`, `retrieving`, `llm`) as
+    /// errors with `message` — the run they belonged to is gone (process ended mid-run). Rows already
+    /// done or failed stay as they are. Returns the number of rows changed.
+    pub fn interrupt_open_grid_rows(&self, run_id: &str, message: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE grid_chat_results SET status = 'error', error = ?2, updated_at = unixepoch()
+             WHERE run_id = ?1 AND status IN ('queued', 'retrieving', 'llm')",
+            params![run_id, message],
+        )?)
+    }
+
     /// All chat cells for a run, ordered by row.
     pub fn list_grid_chat_results(&self, run_id: &str) -> Result<Vec<GridChatResult>> {
         let mut stmt = self.conn.prepare(
