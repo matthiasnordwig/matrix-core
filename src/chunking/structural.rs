@@ -1,5 +1,7 @@
 //! Structural chunking for PDFs (LLM-free): `chunk_pdf_structurally` reads the
-//! characters with `pdf_oxide` (incl. x/y position and font size) and cuts by
+//! characters with `pdf_oxide` (incl. x/y position and font size), joins them
+//! into lines in their own reading direction (`pdf_lines.rs`, also for text
+//! printed sideways) and cuts by
 //! the administrable regex roles of a `StructuralProfile` (headings,
 //! definitions, ignore patterns). Heuristics that get it close to LLM quality:
 //! - line-gap detection: enumerations are recognised by conspicuous vertical
@@ -25,9 +27,10 @@
 
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use super::pages::ChunkPages;
+use super::pdf_lines::{page_lines, Glyph};
 use super::sentences::split_sentences;
 use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
@@ -42,7 +45,9 @@ struct CompiledPattern {
 #[derive(Debug, Clone)]
 struct ClassifiedLine {
     text: String,
-    y: i32,
+    /// Line frame from `pdf_lines::page_lines`: rotation and position across the lines.
+    quarter: u8,
+    across: i32,
     page_idx: usize,
     max_font_size: f32,
     matched_role: Option<String>,
@@ -192,40 +197,28 @@ pub fn chunk_pdf_structurally(
         let chars = doc.extract_chars(page_idx).unwrap_or_default();
         if chars.is_empty() { continue; }
 
-        let mut lines_by_y: BTreeMap<i32, Vec<&pdf_oxide::layout::TextChar>> = BTreeMap::new();
-        for ch in &chars {
-            let y_key = (ch.bbox.y * 10.0).round() as i32;
-            lines_by_y.entry(y_key).or_default().push(ch);
-        }
-
-        let mut keys: Vec<i32> = lines_by_y.keys().copied().collect();
-        if keys.is_empty() { continue; }
-        keys.reverse();
-
-        for &y in &keys {
-            let mut line_chars = lines_by_y[&y].clone();
-            line_chars.sort_by(|a, b| a.bbox.x.partial_cmp(&b.bbox.x).unwrap());
-            
+        let glyphs: Vec<Glyph> = chars.iter().map(Glyph::from_text_char).collect();
+        for line in page_lines(&glyphs) {
             let mut line_text = String::new();
             let mut bold_chars = 0;
             let mut max_font_size = 0.0_f32;
-            let mut prev_x = -1.0;
+            let mut prev_end: Option<f32> = None;
 
-            for ch in &line_chars {
-                if prev_x >= 0.0 && ch.bbox.x - prev_x > ch.font_size * 3.0 {
-                    line_text.push_str("    "); 
+            for ch in &line.glyphs {
+                if prev_end.is_some_and(|end| ch.along - end > ch.font_size * 3.0) {
+                    line_text.push_str("    ");
                 }
-                line_text.push(ch.char);
-                if ch.font_name.to_lowercase().contains("bold") {
+                line_text.push(ch.ch);
+                if ch.bold {
                     bold_chars += 1;
                 }
                 if ch.font_size > max_font_size {
                     max_font_size = ch.font_size;
                 }
-                prev_x = ch.bbox.x + ch.bbox.width;
+                prev_end = Some(ch.end);
             }
 
-            let is_mostly_bold = bold_chars > line_chars.len() / 2;
+            let is_mostly_bold = bold_chars > line.glyphs.len() / 2;
             let line_text = repair_mojibake(&line_text);
             let line_text_trimmed = line_text.trim();
             if line_text_trimmed.is_empty() {
@@ -263,7 +256,8 @@ pub fn chunk_pdf_structurally(
 
             classified_lines.push(ClassifiedLine {
                 text: line_text_trimmed.to_string(),
-                y,
+                quarter: line.quarter,
+                across: line.across,
                 page_idx,
                 max_font_size,
                 matched_role,
@@ -282,21 +276,19 @@ pub fn chunk_pdf_structurally(
     let running_min = (page_count / 4).max(3);
     let running: HashSet<&str> = pages_of.into_iter().filter(|(_, p)| p.len() >= running_min).map(|(t, _)| t).collect();
 
-    let mut prev_y = -1;
-    let mut prev_page = 0;
+    let mut prev_line: Option<(usize, u8, i32)> = None;
 
     for line in classified_lines.iter() {
         let line_text_trimmed = line.text.trim();
         
-        let is_new_paragraph = if prev_y >= 0 && line.page_idx == prev_page {
-            let delta_y = (prev_y - line.y).abs() as f32 / 10.0;
-            delta_y > line.max_font_size * 1.5
-        } else {
-            true // Start of document or start of a new page is always a potential new paragraph
+        let is_new_paragraph = match prev_line {
+            Some((page, quarter, across)) if page == line.page_idx && quarter == line.quarter => {
+                (line.across - across).abs() as f32 / 10.0 > line.max_font_size * 1.5
+            }
+            // Start of document, a new page or a change of text direction is always a potential new paragraph.
+            _ => true,
         };
-        
-        prev_y = line.y;
-        prev_page = line.page_idx;
+        prev_line = Some((line.page_idx, line.quarter, line.across));
 
         let mut matched_role = line.matched_role.clone();
         let mut extracted_abschnitt = line.extracted_abschnitt.clone();

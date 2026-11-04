@@ -12,6 +12,7 @@ pub mod signatures;
 pub mod window;
 pub mod structural;
 pub mod pages;
+mod pdf_lines;
 pub mod kind;
 pub mod mail;
 pub mod markdown;
@@ -44,5 +45,7 @@ mod rules_tests;
 mod outline_tests;
 #[cfg(test)]
 mod pages_tests;
+#[cfg(test)]
+mod pdf_lines_tests;
 #[cfg(test)]
 mod paragraphs_tests;
