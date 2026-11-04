@@ -158,16 +158,31 @@ fn empty_or_missing_section_yields_empty_result() {
 }
 
 #[test]
-fn omitted_chunk_in_the_chain_stops_continuation() {
+fn omitted_chunks_in_the_chain_are_read_across_but_not_returned() {
     let db = db();
     let (ctx, doc) = seed(&db);
     let a = mk_section_chunk(&db, ctx, doc, 0, Some("Artikel 395 (1)"), false);
-    let _b_omitted = mk_section_chunk(&db, ctx, doc, 1, Some("Artikel 395 (1)"), true);
-    mk_section_chunk(&db, ctx, doc, 2, Some("Artikel 395 (1)"), false);
+    mk_section_chunk(&db, ctx, doc, 1, Some("Artikel 395 (1)"), true);
+    mk_section_chunk(&db, ctx, doc, 2, Some("Artikel 395 (1)"), true);
+    let c = mk_section_chunk(&db, ctx, doc, 3, Some("Artikel 395 (1)"), false);
+    mk_section_chunk(&db, ctx, doc, 4, Some("Artikel 396"), false);
 
     let result = db.complete_section_chunks(a, 5).unwrap();
-    assert!(result.chunks.is_empty(), "omitted chunk must end the run immediately");
+    assert_eq!(chunk_ids(&result), vec![c]);
     assert_eq!(result.continues_at, None);
+}
+
+#[test]
+fn a_long_run_of_omitted_chunks_ends_the_continuation() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let a = mk_section_chunk(&db, ctx, doc, 0, Some("Artikel 395 (1)"), false);
+    for i in 1..=(super::MAX_OMITTED_SKIP as i64 + 1) {
+        mk_section_chunk(&db, ctx, doc, i, Some("Artikel 395 (1)"), true);
+    }
+    mk_section_chunk(&db, ctx, doc, super::MAX_OMITTED_SKIP as i64 + 2, Some("Artikel 395 (1)"), false);
+
+    assert!(db.complete_section_chunks(a, 5).unwrap().chunks.is_empty());
 }
 
 #[test]
@@ -240,7 +255,7 @@ fn continuation_ends_at_the_next_article_of_the_outline() {
 }
 
 #[test]
-fn outline_continuation_stops_at_an_omitted_chunk_and_outside_every_section() {
+fn outline_continuation_reads_across_an_omitted_chunk_and_stops_outside_every_section() {
     let db = db();
     let (ctx, doc) = seed(&db);
     let ids = mk_act(
@@ -259,7 +274,8 @@ fn outline_continuation_stops_at_an_omitted_chunk_and_outside_every_section() {
     let r = db.complete_section_chunks(ids[0], 5).unwrap();
     assert!(r.chunks.is_empty() && r.continues_at.is_none(), "the chunker section is not followed in an act with an outline");
     let r = db.complete_section_chunks(ids[1], 5).unwrap();
-    assert!(r.chunks.is_empty() && r.continues_at.is_none(), "an omitted chunk ends the run");
+    assert_eq!(chunk_ids(&r), vec![ids[3]], "an omitted chunk is skipped, the next real one continues");
+    assert_eq!(r.continues_at, None);
 }
 
 #[test]

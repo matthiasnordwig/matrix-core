@@ -90,3 +90,29 @@ pub(crate) fn page_lines(glyphs: &[Glyph]) -> Vec<PageLine> {
         })
         .collect()
 }
+
+/// Metadata key of a chunk cut from lines built by this module, and the version of
+/// that line building. A PDF chunk without it was cut before sideways text was
+/// followed in reading direction (`db/page_refresh.rs` looks for letter salad only there).
+pub const LINES_KEY: &str = "line_rev";
+pub const LINES_REV: u32 = 1;
+
+/// Whether `text` is the letter salad the old line building made of sideways text:
+/// at least [`SALAD_MIN_LINES`] lines, nearly all of them one or two characters, and
+/// mostly letters. Chart axes (digits, short ticks among longer lines) stay below this.
+pub fn looks_like_letter_salad(text: &str) -> bool {
+    let (mut lines, mut short, mut letters) = (0usize, 0usize, 0usize);
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        lines += 1;
+        let n = line.chars().count();
+        if n <= 2 {
+            short += 1;
+            if line.chars().all(char::is_alphabetic) {
+                letters += 1;
+            }
+        }
+    }
+    lines >= SALAD_MIN_LINES && short * 10 >= lines * 9 && letters * 10 >= short * 8
+}
+
+const SALAD_MIN_LINES: usize = 40;

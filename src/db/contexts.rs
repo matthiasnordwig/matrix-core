@@ -222,6 +222,21 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Like [`Self::list_documents`] without the document texts: `extracted_text` is `None`, or, with
+    /// `head_chars > 0`, only the first `head_chars` characters (enough to tell a document's
+    /// language). Lists for the UI and agents use this one — a collection of 500 000 mails must
+    /// not be read in full just to show its names.
+    pub fn list_documents_light(&self, context_id: i64, head_chars: usize) -> Result<Vec<Document>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, context_id, name, description, zip_entry, byte_size, page_count, content_hash,
+                    CASE WHEN ?2 > 0 THEN substr(extracted_text, 1, ?2) END AS extracted_text,
+                    ingested_at, chunker
+             FROM documents WHERE context_id = ?1 ORDER BY name",
+        )?;
+        let rows = stmt.query_map(params![context_id, head_chars as i64], row_to_document)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn count_documents(&self, context_id: i64) -> Result<i64> {
         Ok(self
             .conn
@@ -333,6 +348,7 @@ impl Database {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let mut copied = 0usize;
+        let mut chunk_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
         for doc_id in doc_ids {
             tx.execute(
                 "INSERT INTO documents
@@ -347,13 +363,23 @@ impl Database {
             copied += tx.execute(
                 "INSERT INTO chunks
                     (context_id, document_id, chunk_index, char_start, char_end, text,
-                     signature, is_omitted, metadata, created_at)
+                     signature, is_omitted, metadata, created_at, text_key)
                  SELECT ?2, ?3, chunk_index, char_start, char_end, text,
-                        signature, is_omitted, metadata, created_at
+                        signature, is_omitted, metadata, created_at, text_key
                  FROM chunks WHERE document_id = ?1 AND context_id = ?4
                  ORDER BY chunk_index",
                 params![doc_id, dst, new_doc, src],
             )?;
+            // Old → new chunk id (same document, same index), to point the repeats at the copies.
+            let mut stmt = tx.prepare(
+                "SELECT o.id, n.id FROM chunks o JOIN chunks n ON n.document_id = ?3 AND n.chunk_index = o.chunk_index \
+                 WHERE o.document_id = ?1 AND o.context_id = ?2",
+            )?;
+            let pairs = stmt.query_map(params![doc_id, src, new_doc], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+            for pair in pairs {
+                let (old, new) = pair?;
+                chunk_map.insert(old, new);
+            }
             tx.execute(
                 "INSERT INTO page_images
                     (context_id, document_id, page, char_start, char_end, width, height, image, created_at,
@@ -363,6 +389,17 @@ impl Database {
                  FROM page_images WHERE document_id = ?1 ORDER BY page",
                 params![doc_id, dst, new_doc],
             )?;
+        }
+        // `duplicate_of` names a chunk of the source; the copy's repeats name the copied chunk.
+        let repeats: Vec<(i64, i64)> = {
+            let mut stmt = tx.prepare("SELECT id, duplicate_of FROM chunks WHERE context_id = ?1 AND duplicate_of IS NOT NULL")?;
+            let rows = stmt.query_map([src], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (old, held) in repeats {
+            if let (Some(new), Some(new_held)) = (chunk_map.get(&old), chunk_map.get(&held)) {
+                tx.execute("UPDATE chunks SET duplicate_of = ?2 WHERE id = ?1", params![new, new_held])?;
+            }
         }
         tx.commit()?;
         Ok(copied)

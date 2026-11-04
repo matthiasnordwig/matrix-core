@@ -32,6 +32,23 @@ impl Database {
         Ok(self.chunk(id)?.expect("row just inserted must exist"))
     }
 
+    /// `(chunk id, duplicate_of, text_key)` of every passage of the context that is a repeat or
+    /// stands for repeats, for the export bundle.
+    pub fn chunk_duplicate_rows(&self, context_id: i64) -> Result<Vec<(i64, Option<i64>, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, duplicate_of, text_key FROM chunks WHERE context_id = ?1 \
+             AND (duplicate_of IS NOT NULL OR text_key IS NOT NULL) ORDER BY id",
+        )?;
+        let rows = stmt.query_map([context_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Sets the repeat link and key of an imported passage (`duplicate_of` already remapped).
+    pub fn set_chunk_duplicate(&self, id: i64, duplicate_of: Option<i64>, text_key: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE chunks SET duplicate_of = ?2, text_key = ?3 WHERE id = ?1", params![id, duplicate_of, text_key])?;
+        Ok(())
+    }
+
     /// Where else each passage is filed: document names by chunk id, for hits to name all of them.
     pub fn duplicate_homes(&self, chunk_ids: &[i64]) -> Result<HashMap<i64, Vec<String>>> {
         let mut stmt = self.conn.prepare(

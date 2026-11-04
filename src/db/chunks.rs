@@ -70,6 +70,9 @@ pub(super) fn row_to_chunk(row: &Row<'_>) -> rusqlite::Result<Chunk> {
     })
 }
 
+/// Most omitted passages in a row that a section continuation reads across.
+const MAX_OMITTED_SKIP: usize = 20;
+
 impl Database {
     // --- prechunks ---------------------------------------------------------
 
@@ -293,9 +296,10 @@ impl Database {
     }
 
     /// The chunks that continue `chunk_id`'s section: walks `chunk_index + 1, + 2, …` of the same
-    /// document while each next chunk exists, is not omitted and belongs to the same section — a
-    /// gap ends the run. Sections come from the document's outline read from the chunk texts
-    /// (`chunking/outline.rs`, the article or numbered section up to the next heading of the same
+    /// document while each next chunk exists and belongs to the same section — a gap ends the run.
+    /// Omitted passages (repeats held in another document) are skipped over, at most
+    /// `MAX_OMITTED_SKIP` in a row, and never returned. Sections come from the document's outline read
+    /// from the chunk texts (`chunking/outline.rs`, the article or numbered section up to the next heading of the same
     /// or a higher rank), so a run never crosses into the next article. Only in a document where
     /// the outline knows no heading at all does it follow the structural chunker's
     /// `metadata.section` (string-equal, non-empty); a chunk outside every outline section, or
@@ -338,7 +342,15 @@ impl Database {
         };
         let mut chunks = Vec::new();
         let mut next_index = start.chunk_index + 1;
+        let mut skipped = 0;
         while let Some(candidate) = self.chunk_by_document_index(start.document_id, next_index)? {
+            // A repeat held elsewhere is no end of the section: read on to the next real passage.
+            if candidate.is_omitted && skipped < MAX_OMITTED_SKIP {
+                skipped += 1;
+                next_index += 1;
+                continue;
+            }
+            skipped = 0;
             let belongs = !candidate.is_omitted
                 && match &same {
                     Same::Outline(ids) => ids.contains(&candidate.id),

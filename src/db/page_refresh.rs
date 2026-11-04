@@ -21,8 +21,16 @@
 //! again once. A document without chunks gains no pages and stays out. Missing page
 //! pictures are no criterion of their own: whether a document has graphics pages
 //! cannot be told without its file.
+//!
+//! **Second rule, letter salad:** chunks of the structural chunker carry `line_rev`
+//! (`chunking/pdf_lines.rs`) since it follows sideways text in reading direction. A PDF
+//! with `page_breaks` but no chunk with `line_rev` was cut before; it counts as outdated
+//! only when one of its chunks is letter salad (`looks_like_letter_salad`: nearly all lines
+//! one or two letters) — the file is not at hand, so the content decides, and the pattern
+//! is kept narrow so chart axes and ordinary short lines do not trigger it.
 use rusqlite::params;
 
+use crate::chunking::pdf_lines::looks_like_letter_salad;
 use crate::db::{Database, Result};
 
 /// What [`is_outdated_pdf`] looks at for one document.
@@ -34,13 +42,18 @@ pub struct PdfFacts<'a> {
     pub chunks: i64,
     /// Some chunk of the document carries the key `page_breaks`.
     pub has_page_breaks: bool,
+    /// Some chunk of the document carries `line_rev` (cut by the current line building).
+    pub has_line_rev: bool,
+    /// Some chunk is letter salad (only asked of documents without `line_rev`).
+    pub has_salad: bool,
     /// The collection chunks structurally.
     pub structural: bool,
 }
 
 /// Whether reading the file again would give the document its page changes (module comment).
 pub fn is_outdated_pdf(f: &PdfFacts) -> bool {
-    f.structural && f.file_name.to_ascii_lowercase().ends_with(".pdf") && f.chunks > 0 && !f.has_page_breaks
+    f.structural && f.file_name.to_ascii_lowercase().ends_with(".pdf") && f.chunks > 0
+        && (!f.has_page_breaks || (!f.has_line_rev && f.has_salad))
 }
 
 impl Database {
@@ -52,22 +65,42 @@ impl Database {
                     EXISTS (SELECT 1 FROM chunks c
                              WHERE c.context_id = d.context_id AND c.document_id = d.id
                                AND c.metadata LIKE '%\"page_breaks\"%'),
-                    x.chunking_strategy = 'structural'
+                    x.chunking_strategy = 'structural',
+                    EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.context_id = d.context_id AND c.document_id = d.id
+                               AND c.metadata LIKE '%\"line_rev\"%')
                FROM documents d JOIN contexts x ON x.id = d.context_id
               WHERE d.context_id = ?1
               ORDER BY d.id",
         )?;
         let rows = stmt.query_map(params![context_id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, bool>(5)?))
         })?;
+        let rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         let mut out = Vec::new();
-        for row in rows {
-            let (id, file_name, chunks, has_page_breaks, structural) = row?;
-            let facts = PdfFacts { file_name: &file_name, chunks, has_page_breaks, structural };
+        for (id, file_name, chunks, has_page_breaks, structural, has_line_rev) in rows {
+            let candidate = structural && has_page_breaks && !has_line_rev && file_name.to_ascii_lowercase().ends_with(".pdf");
+            let has_salad = candidate && self.has_salad_chunk(context_id, id)?;
+            let facts = PdfFacts { file_name: &file_name, chunks, has_page_breaks, has_line_rev, has_salad, structural };
             if is_outdated_pdf(&facts) {
                 out.push((id, file_name));
             }
         }
         Ok(out)
+    }
+
+    /// Whether a chunk of the document is letter salad; only chunks with many lines are read.
+    fn has_salad_chunk(&self, context_id: i64, document_id: i64) -> Result<bool> {
+        let mut stmt = self.conn.prepare(
+            "SELECT text FROM chunks WHERE context_id = ?1 AND document_id = ?2
+                AND length(text) - length(replace(text, char(10), '')) >= 39",
+        )?;
+        let texts = stmt.query_map(params![context_id, document_id], |r| r.get::<_, String>(0))?;
+        for t in texts {
+            if looks_like_letter_salad(&t?) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

@@ -56,7 +56,7 @@ const MAX_INTRO_CHARS: usize = 240;
 /// Longest text behind a rule that still counts as a footer.
 const MAX_FOOTER_CHARS: usize = 2_000;
 /// Shorter passages are not tracked as repeats.
-const MIN_DUPLICATE_CHARS: usize = 200;
+pub(super) const MIN_DUPLICATE_CHARS: usize = 200;
 
 static ORIGINAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*original message\s*-{2,}").unwrap());
 static FORWARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^-{2,}\s*forwarded by\s+(.+?)(\s+on\s|$)").unwrap());

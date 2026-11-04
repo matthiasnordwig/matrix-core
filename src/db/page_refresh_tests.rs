@@ -6,7 +6,7 @@ use crate::db::models::*;
 use crate::db::Database;
 
 fn facts(file_name: &str) -> PdfFacts<'_> {
-    PdfFacts { file_name, chunks: 4, has_page_breaks: false, structural: true }
+    PdfFacts { file_name, chunks: 4, has_page_breaks: false, has_line_rev: false, has_salad: false, structural: true }
 }
 
 #[test]
@@ -71,4 +71,33 @@ fn collection_lists_only_its_outdated_pdfs() {
 
     assert_eq!(db.outdated_pdf_documents(ctx).unwrap(), vec![(a, "bericht.pdf".to_string())]);
     assert!(db.outdated_pdf_documents(llm).unwrap().is_empty());
+}
+
+#[test]
+fn salad_rule_needs_no_line_rev_and_salad_text() {
+    let old = PdfFacts { has_page_breaks: true, has_salad: true, ..facts("a.pdf") };
+    assert!(is_outdated_pdf(&old));
+    assert!(!is_outdated_pdf(&PdfFacts { has_line_rev: true, ..old.clone() }), "cut by the current line building");
+    assert!(!is_outdated_pdf(&PdfFacts { has_salad: false, ..old }), "page_breaks and no salad = fine");
+}
+
+#[test]
+fn collection_lists_pdf_with_salad_chunks_but_not_stamped_or_clean_ones() {
+    let db = Database::open_in_memory().unwrap();
+    let ctx = db.create_context(&NewContext { name: "s".into(), chunking_strategy: "structural".into(), ..Default::default() }).unwrap().id;
+    let salad = "t\ne\nx\nt\n".repeat(15);
+    let put = |doc: i64, text: &str, meta: &str| {
+        db.create_chunk(&NewChunk {
+            context_id: ctx, document_id: doc, chunk_index: 0, char_start: 0, char_end: 4,
+            text: text.into(), signature: None, is_omitted: false, metadata: meta.into(),
+        })
+        .unwrap();
+    };
+    let old = document(&db, ctx, "x", Some("quer.pdf"));
+    put(old, &salad, r#"{"page":1,"page_breaks":[]}"#);
+    let stamped = document(&db, ctx, "y", Some("neu.pdf"));
+    put(stamped, &salad, r#"{"page":1,"page_breaks":[],"line_rev":1}"#);
+    let axis = document(&db, ctx, "z", Some("achse.pdf"));
+    put(axis, &"1\n2\n3\n".repeat(20), r#"{"page":1,"page_breaks":[]}"#);
+    assert_eq!(db.outdated_pdf_documents(ctx).unwrap(), vec![(old, "quer.pdf".to_string())]);
 }

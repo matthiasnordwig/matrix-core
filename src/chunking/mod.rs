@@ -12,12 +12,13 @@ pub mod signatures;
 pub mod window;
 pub mod structural;
 pub mod pages;
-mod pdf_lines;
+pub mod pdf_lines;
 pub mod kind;
 pub mod mail;
 pub mod markdown;
 pub mod outline;
 pub mod paragraphs;
+pub mod repeats;
 pub mod rules;
 pub mod text_repair;
 
@@ -49,3 +50,5 @@ mod pages_tests;
 mod pdf_lines_tests;
 #[cfg(test)]
 mod paragraphs_tests;
+#[cfg(test)]
+mod repeats_tests;

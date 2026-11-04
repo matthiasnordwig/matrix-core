@@ -404,6 +404,7 @@ pub fn chunk_pdf_structurally(
     for (chunk, pages) in all_chunks.iter_mut().zip(&all_pages) {
         if let Ok(serde_json::Value::Object(mut meta)) = serde_json::from_str(&chunk.metadata) {
             pages.stamp(&mut meta);
+            meta.insert(super::pdf_lines::LINES_KEY.into(), super::pdf_lines::LINES_REV.into());
             chunk.metadata = serde_json::Value::Object(meta).to_string();
         }
     }

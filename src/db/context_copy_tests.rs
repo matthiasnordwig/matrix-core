@@ -118,3 +118,22 @@ fn refuses_non_empty_or_same_target() {
     // No duplicate rows from the refused second copy.
     assert_eq!(db.list_chunks(dst, true).unwrap().len(), 3);
 }
+
+#[test]
+fn repeat_links_and_keys_follow_the_copy() {
+    let (db, src) = seeded();
+    let chunks = db.list_chunks(src, true).unwrap();
+    db.set_chunk_duplicate(chunks[0].id, None, Some("k1")).unwrap();
+    db.set_chunk_duplicate(chunks[2].id, Some(chunks[0].id), None).unwrap();
+    let dst = ctx(&db, "Src [copy]");
+    db.copy_context_chunks(src, dst).unwrap();
+
+    let rows = db.chunk_duplicate_rows(dst).unwrap();
+    assert_eq!(rows.len(), 2);
+    let held = rows.iter().find(|r| r.2.as_deref() == Some("k1")).unwrap().0;
+    let repeat = rows.iter().find(|r| r.1.is_some()).unwrap();
+    assert_eq!(repeat.1, Some(held), "the copy's repeat names the copied passage");
+    assert!(![chunks[0].id, chunks[2].id].contains(&held));
+    // The source keeps its own links.
+    assert_eq!(db.chunk_duplicate_rows(src).unwrap().len(), 2);
+}

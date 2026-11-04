@@ -77,3 +77,15 @@ fn wide_gap_on_a_rotated_line_is_kept_measurable() {
     let gap = l.glyphs[4].along - l.glyphs[3].end;
     assert!(gap > 12.0 * 3.0, "gap {gap}");
 }
+
+#[test]
+fn letter_salad_is_told_from_chart_axes_and_prose() {
+    use super::pdf_lines::looks_like_letter_salad;
+    let salad = "T\nh\ne\n \nf\nl\ni\ng\nh\nt\n".repeat(6);
+    assert!(looks_like_letter_salad(&salad));
+    let axis: String = (0..60).map(|i| format!("{}\n", i % 10)).collect();
+    assert!(!looks_like_letter_salad(&axis), "digit ticks are no letters");
+    let ticks_in_prose = format!("{}{}", "A\nB\nC\nD\n".repeat(3), "A normal line of text that goes on for a while.\n".repeat(20));
+    assert!(!looks_like_letter_salad(&ticks_in_prose));
+    assert!(!looks_like_letter_salad("a\nb\nc\n"), "too short to tell");
+}
