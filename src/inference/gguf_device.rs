@@ -73,9 +73,9 @@ pub fn probe(gpu_engine: &GgufEngine, model_path: &str, n_ctx: u32) -> Probe {
     };
     let gpu = (|| -> Result<(Vec<LlamaToken>, f64), String> {
         let mut ctx = context(model, n_ctx)?;
-        let continued = run(&mut ctx, model, &counting, None)?.0;
-        run(&mut ctx, model, &passage, None)?;
-        Ok((continued, run(&mut ctx, model, &passage, None)?.1))
+        let continued = run(&mut ctx, &counting, None)?.0;
+        run(&mut ctx, &passage, None)?;
+        Ok((continued, run(&mut ctx, &passage, None)?.1))
     })();
     let Ok((gpu_tokens, gpu_ms)) = gpu else {
         return Probe { gpu: None, cpu: None, agree: false };
@@ -84,8 +84,8 @@ pub fn probe(gpu_engine: &GgufEngine, model_path: &str, n_ctx: u32) -> Probe {
         let twin = LlamaModel::load_from_file(backend()?, model_path, &model_params_on(Unit::Cpu))
             .map_err(|e| format!("model load {model_path}: {e}"))?;
         let mut ctx = context(&twin, (PROMPT_TOKENS + 2 * GEN_TOKENS + 64) as u32)?;
-        let continued = run(&mut ctx, &twin, &counting, None)?.0;
-        let (_, ms) = run(&mut ctx, &twin, &passage, Some(gpu_ms))?;
+        let continued = run(&mut ctx, &counting, None)?.0;
+        let (_, ms) = run(&mut ctx, &passage, Some(gpu_ms))?;
         Ok((continued, ms.is_finite().then_some(ms)))
     })();
     match cpu {
@@ -118,7 +118,7 @@ fn context(model: &LlamaModel, n_ctx: u32) -> Result<LlamaContext<'_>, String> {
 /// Reads `prompt` from an empty context and greedily generates [`GEN_TOKENS`] tokens; returns
 /// them and the milliseconds taken. `stop_after`: the graphics unit's time — read in pieces and
 /// give up (time `INFINITY`) once projected [`compute::CLEARLY_SLOWER`].
-fn run(ctx: &mut LlamaContext<'_>, model: &LlamaModel, prompt: &[LlamaToken], stop_after: Option<f64>) -> Result<(Vec<LlamaToken>, f64), String> {
+fn run(ctx: &mut LlamaContext<'_>, prompt: &[LlamaToken], stop_after: Option<f64>) -> Result<(Vec<LlamaToken>, f64), String> {
     ctx.clear_kv_cache();
     let started = Instant::now();
     let piece = if stop_after.is_some() { CPU_PIECE } else { prompt.len() };
