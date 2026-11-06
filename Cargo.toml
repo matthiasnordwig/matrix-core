@@ -27,7 +27,12 @@ pdf-render = ["pdf_oxide/rendering"]
 # that builds llama.cpp (macOS, iOS device, iOS simulator), so no extra feature.
 gguf = ["dep:llama-cpp-2", "llama-cpp-2/mtmd"]
 gguf-metal = ["gguf", "llama-cpp-2/metal"]
-gguf-cuda = ["gguf", "llama-cpp-2/cuda"]
+# Windows GPU (AMD, NVIDIA, Intel) via Vulkan; needs the Vulkan SDK at build time
+# (VULKAN_SDK). llama.cpp's backends become DLLs (ggml-vulkan, ggml-cpu-<CPU generation>)
+# loaded at runtime from beside the exe (`llama_backend::backend`): a PC without a Vulkan
+# driver skips ggml-vulkan and runs on the best CPU variant; another backend (CUDA) would
+# be one more DLL.
+gguf-vulkan = ["gguf", "llama-cpp-2/vulkan", "llama-cpp-2/dynamic-backends", "dep:windows-sys"]
 
 [dependencies]
 # hooks + limits: the read-only sheet-table query connection (db/sheet_query.rs)
@@ -59,6 +64,10 @@ llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 # This target-specific entry is unified with the base `ort` above → apple gets
 # coreml+ndarray, non-apple stays CPU-only. Keeps the apple build byte-identical
 # to before the split while letting Linux type-check without the coreml feature.
+# gguf-vulkan on Windows: the graphics driver's version from the registry (`compute::driver_version`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Registry"] }
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "coreml", "ndarray"] }

@@ -1,6 +1,7 @@
 // matrix/core/src/lib.rs
 
 pub mod chunking;
+pub mod compute;
 pub mod db;
 pub mod device_memory;
 pub mod embedding;

@@ -23,7 +23,6 @@
 use llama_cpp_2::context::session::LlamaStateSeqFlags;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
 use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
@@ -31,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, TryLockError};
 
 use super::prefix_reuse::{self, Reuse};
+use crate::compute::Unit;
 
 // Process-global backend shared with the GGUF embedder/reranker — a
 // module-local singleton here caused `BackendAlreadyInitialized` for
@@ -38,7 +38,7 @@ use super::prefix_reuse::{self, Reuse};
 use crate::llama_backend::backend as get_backend;
 
 /// Tokens read per decode call.
-const CHUNK: usize = 512;
+pub(super) const CHUNK: usize = 512;
 
 pub struct GgufEngine {
     // Declared before `model`: fields drop in order, and the session's context borrows it.
@@ -47,6 +47,7 @@ pub struct GgufEngine {
     n_ctx: u32,
     /// Memory that cannot be cut back to any position (recurrent part, sliding window).
     partial_memory: bool,
+    unit: Unit,
 }
 
 /// Context settings a session was made with; another call with other settings starts a new one.
@@ -93,7 +94,9 @@ fn has_sliding_window(model: &LlamaModel) -> bool {
 }
 
 impl GgufEngine {
-    pub fn load(model_path: &str, n_ctx: u32) -> Result<Self, String> {
+    /// Loads the model on `unit` (which one: `gguf_device.rs`); on the graphics unit with as
+    /// many layers as fit beside a context of `n_ctx` tokens (`llama_backend::fit_to_gpu_memory`).
+    pub fn load(model_path: &str, n_ctx: u32, unit: Unit) -> Result<Self, String> {
         // `n_ctx: 0` doesn't fail here — `with_n_ctx(NonZeroU32::new(0))` becomes
         // `None`, which llama.cpp silently interprets as "use the model's own
         // trained context length" — but the prompt-fits check in `generate()`
@@ -105,31 +108,29 @@ impl GgufEngine {
             return Err("Endpoint has no Context Window configured (0) — set a real Context Window value for this local model in Settings → Endpoints before using it.".to_string());
         }
         let backend = get_backend()?;
-        #[allow(unused_mut)]
-        let mut model_params = LlamaModelParams::default();
-        
-        model_params = model_params.with_use_mmap(true);
-        
-        #[cfg(feature = "gguf-metal")]
-        {
-            model_params = model_params.with_n_gpu_layers(999);
-        }
-        // The iOS Simulator's Metal runs llama.cpp's kernels wrongly (garbage
-        // tokens, no error) — real devices are fine. CPU there; llama.cpp's own
-        // default would otherwise offload everything.
-        #[cfg(all(target_os = "ios", target_abi = "sim"))]
-        {
-            model_params = model_params.with_n_gpu_layers(0);
-        }
         if !std::path::Path::new(model_path).exists() {
             return Err(format!("Model file not found: {}", model_path));
         }
 
+        let mut model_params = std::pin::pin!(crate::llama_backend::model_params_on(unit));
+        if unit == Unit::Gpu {
+            crate::llama_backend::fit_to_gpu_memory(model_params.as_mut(), model_path, n_ctx, CHUNK as u32);
+        }
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| format!("model load {model_path}: {e}"))?;
-            
+
         let partial_memory = model.is_recurrent() || model.is_hybrid() || has_sliding_window(&model);
-        Ok(Self { session: Mutex::new(None), model: Box::new(model), n_ctx, partial_memory })
+        Ok(Self { session: Mutex::new(None), model: Box::new(model), n_ctx, partial_memory, unit })
+    }
+
+    /// Where this engine runs.
+    pub fn unit(&self) -> Unit {
+        self.unit
+    }
+
+    /// The loaded model, for the quick test (`gguf_device.rs`).
+    pub(super) fn model(&self) -> &LlamaModel {
+        &self.model
     }
 
     /// Tokens of `text` in this model's vocabulary (no BOS, no chat template) — the exact

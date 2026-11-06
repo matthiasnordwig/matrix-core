@@ -17,10 +17,8 @@
 //! and projector are loaded once per engine; every call builds a fresh
 //! context. mtmd's encoder keeps per-context output buffers, so calls on one
 //! engine are serialized by an internal lock (callers run us inside
-//! `spawn_blocking`). GPU (Metal) for both parts, except in the iOS Simulator:
-//! there llama.cpp's Metal kernels produce garbage without an error, so the
-//! model gets `n_gpu_layers(0)` and the projector `use_gpu = false` (same rule
-//! as `gguf.rs`).
+//! `spawn_blocking`). Both parts on the same unit (`crate::llama_backend::rule_unit`); in the
+//! iOS Simulator the CPU: there llama.cpp's Metal kernels produce garbage without an error.
 
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -28,7 +26,6 @@ use std::sync::Mutex;
 
 use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText};
 use llama_cpp_2::sampling::LlamaSampler;
@@ -55,9 +52,9 @@ pub struct GgufVisionEngine {
     busy: Mutex<()>,
 }
 
-/// GPU only off the iOS Simulator (see the module comment).
-const fn use_gpu() -> bool {
-    !cfg!(all(target_os = "ios", target_abi = "sim"))
+/// Whether the projector runs on the graphics unit: with the model, never in the iOS Simulator.
+fn use_gpu() -> bool {
+    !cfg!(all(target_os = "ios", target_abi = "sim")) && crate::llama_backend::rule_unit() == crate::compute::Unit::Gpu
 }
 
 impl GgufVisionEngine {
@@ -72,16 +69,7 @@ impl GgufVisionEngine {
             }
         }
         let backend = get_backend()?;
-        #[allow(unused_mut)]
-        let mut model_params = LlamaModelParams::default().with_use_mmap(true);
-        #[cfg(feature = "gguf-metal")]
-        {
-            model_params = model_params.with_n_gpu_layers(999);
-        }
-        #[cfg(all(target_os = "ios", target_abi = "sim"))]
-        {
-            model_params = model_params.with_n_gpu_layers(0);
-        }
+        let model_params = crate::llama_backend::model_params_on(crate::llama_backend::rule_unit());
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| format!("model load {model_path}: {e}"))?;
         let params = MtmdContextParams {

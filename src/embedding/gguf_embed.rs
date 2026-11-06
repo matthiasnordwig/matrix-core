@@ -1,5 +1,5 @@
 //! Local GGUF embedder running the llama.cpp backend (MODEL_INFRA_PLAN.md AP4b).
-//! Compiled only under the `gguf` feature (Metal via `gguf-metal`).
+//! Compiled only under the `gguf` feature (unit: `crate::llama_backend::rule_unit`).
 //!
 //! Counterpart to [`super::onnx::OrtEmbedder`], but a *distinct embedding space*
 //! even for the identical model: the GGUF/quantized/llama.cpp representation of
@@ -64,7 +64,6 @@ mod imp {
     use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
     use llama_cpp_2::llama_backend::LlamaBackend;
     use llama_cpp_2::llama_batch::LlamaBatch;
-    use llama_cpp_2::model::params::LlamaModelParams;
     use llama_cpp_2::model::{AddBos, LlamaModel};
 
     use crate::db::models::EmbeddingModel;
@@ -101,17 +100,7 @@ mod imp {
                 )));
             }
             let backend = backend()?;
-            #[allow(unused_mut)]
-            let mut params = LlamaModelParams::default().with_use_mmap(true);
-            #[cfg(feature = "gguf-metal")]
-            {
-                params = params.with_n_gpu_layers(999);
-            }
-            // iOS Simulator: Metal runs llama.cpp's kernels wrongly (see inference/gguf.rs).
-            #[cfg(all(target_os = "ios", target_abi = "sim"))]
-            {
-                params = params.with_n_gpu_layers(0);
-            }
+            let params = crate::llama_backend::model_params_on(crate::llama_backend::rule_unit());
             let m = LlamaModel::load_from_file(backend, model_path, &params)
                 .map_err(|e| CoreError::Embedding(format!("GGUF load {model_path}: {e}")))?;
             Ok(Self {
