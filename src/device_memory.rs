@@ -105,7 +105,7 @@ pub fn available_bytes() -> Option<u64> {
 }
 
 #[cfg(target_os = "ios")]
-extern "C" {
+unsafe extern "C" {
     fn os_proc_available_memory() -> usize;
 }
 
