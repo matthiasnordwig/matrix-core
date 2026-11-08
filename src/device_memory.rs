@@ -15,6 +15,12 @@
 //! Unix — the test names every system that must answer). The parsers are separate so they are
 //! unit-testable.
 //!
+//! [`gpu_dedicated_used_bytes`] (Windows): dedicated graphics memory all programs use now, from the
+//! performance counter `\GPU Adapter Memory(*)\Dedicated Usage` (the largest adapter). Needed because
+//! Vulkan's memory budget on Windows (AMD, measured) does not shrink when another program holds the card:
+//! with 7.2 GiB taken by a second model llama.cpp still reported the card as free. Elsewhere `None`
+//! (Metal and Linux Vulkan budgets see the others; Apple shares main memory).
+//!
 //! [`file_resident_bytes`]: how much of a file is in the page cache now (`mmap` + `mincore`, macOS,
 //! iOS, Linux, Android) — a memory-mapped model whose pages are already cached needs no new memory
 //! for them. Windows: `None` (callers count the whole file).
@@ -137,6 +143,53 @@ pub fn available_bytes() -> Option<u64> {
     None
 }
 
+/// Dedicated graphics memory all programs use now, largest adapter (Windows; see the module comment).
+#[cfg(windows)]
+pub fn gpu_dedicated_used_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::Performance::{
+        PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
+        PDH_FMT_LARGE, PDH_MORE_DATA,
+    };
+    let path: Vec<u16> = "\\GPU Adapter Memory(*)\\Dedicated Usage\0".encode_utf16().collect();
+    let mut query = std::ptr::null_mut();
+    // SAFETY: out-pointers to locals; the query is closed below on every path.
+    if unsafe { windows_sys::Win32::System::Performance::PdhOpenQueryW(std::ptr::null(), 0, &mut query) } != 0 {
+        return None;
+    }
+    let used = (|| {
+        let mut counter = std::ptr::null_mut();
+        // SAFETY: `query` is open, `path` NUL-terminated UTF-16, `counter` a local.
+        if unsafe { PdhAddEnglishCounterW(query, path.as_ptr(), 0, &mut counter) } != 0 {
+            return None;
+        }
+        // SAFETY: as above.
+        if unsafe { PdhCollectQueryData(query) } != 0 {
+            return None;
+        }
+        let (mut size, mut count) = (0u32, 0u32);
+        // SAFETY: size query with a null buffer, as documented.
+        if unsafe { PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, std::ptr::null_mut()) } != PDH_MORE_DATA {
+            return None;
+        }
+        let item = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+        let mut buf: Vec<PDH_FMT_COUNTERVALUE_ITEM_W> = vec![Default::default(); (size as usize).div_ceil(item)];
+        // SAFETY: `buf` holds at least `size` bytes, aligned for the items.
+        if unsafe { PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, buf.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: PDH_FMT_LARGE fills `largeValue` of every item it returns.
+        buf.iter().take(count as usize).map(|i| unsafe { i.FmtValue.Anonymous.largeValue }).max().and_then(|v| u64::try_from(v).ok())
+    })();
+    // SAFETY: closes the query opened above.
+    unsafe { PdhCloseQuery(query) };
+    used
+}
+
+#[cfg(not(windows))]
+pub fn gpu_dedicated_used_bytes() -> Option<u64> {
+    None
+}
+
 /// Bytes of the file at `path` that sit in the page cache now; `None` where the system cannot say.
 #[cfg(unix)]
 pub fn file_resident_bytes(path: &str) -> Option<u64> {
@@ -214,6 +267,17 @@ mod tests {
             assert_eq!(resident, None, "Windows: unknown, callers count the whole file");
         }
         assert_eq!(file_resident_bytes("/no/such/file"), None);
+    }
+
+    #[test]
+    fn graphics_memory_in_use_is_known_on_windows_only() {
+        let used = gpu_dedicated_used_bytes();
+        if cfg!(windows) {
+            // The counter exists on every Windows 10/11 with a display driver (the build PC has one).
+            assert!(used.is_some());
+        } else {
+            assert_eq!(used, None, "Metal and Linux Vulkan budgets already count other programs");
+        }
     }
 
     /// Every system the app ships on must answer both queries (no silent "unknown").

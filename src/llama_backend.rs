@@ -139,7 +139,7 @@ pub fn fit_to_gpu_memory(
         let mut cparams = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx))
             .with_n_batch(n_batch);
-        let mut margins = vec![GPU_MARGIN as usize; llama_cpp_2::max_devices()];
+        let mut margins = vec![gpu_margin() as usize; llama_cpp_2::max_devices()];
         match params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _) {
             Err(FitError::Failure) => {
                 params.set(model_params_on(Unit::Cpu));
@@ -198,16 +198,44 @@ pub fn gpu_shares_ram() -> bool {
 }
 
 /// Free memory of the dedicated graphics units now (bytes; integrated units and Apple's GPU share
-/// main memory and do not count). 0 without one.
+/// main memory and do not count), less what other programs hold that the backend does not see
+/// ([`hidden_gpu_use`]). 0 without one.
 pub fn dedicated_free_bytes() -> u64 {
     if cfg!(feature = "gguf-metal") || backend().is_err() {
         return 0;
     }
+    let free: u64 = dedicated_cards().iter().map(|&(free, _)| free).sum();
+    free.saturating_sub(hidden_gpu_use())
+}
+
+/// (free, total) of every dedicated graphics unit as llama.cpp reports it.
+fn dedicated_cards() -> Vec<(u64, u64)> {
     llama_cpp_2::list_llama_ggml_backend_devices()
         .into_iter()
         .filter(|d| d.device_type == LlamaBackendDeviceType::Gpu)
-        .map(|d| d.memory_free as u64)
-        .sum()
+        .map(|d| (d.memory_free as u64, d.memory_total as u64))
+        .collect()
+}
+
+/// Graphics memory to keep free when a model is placed: [`GPU_MARGIN`] plus what other programs hold
+/// that the backend's free count misses ([`hidden_gpu_use`]). Used by [`fit_to_gpu_memory`] and the
+/// services' context choice (`context_on_gpu`).
+pub fn gpu_margin() -> u64 {
+    GPU_MARGIN + hidden_gpu_use()
+}
+
+/// Memory of the largest dedicated card that other programs hold but llama.cpp counts as free:
+/// its free minus (total − what all programs use, `device_memory::gpu_dedicated_used_bytes`). Only
+/// Windows reports the latter; 0 elsewhere and without a dedicated card.
+fn hidden_gpu_use() -> u64 {
+    let Some(used) = crate::device_memory::gpu_dedicated_used_bytes() else { return 0 };
+    if cfg!(feature = "gguf-metal") || backend().is_err() {
+        return 0;
+    }
+    dedicated_cards()
+        .into_iter()
+        .max_by_key(|&(_, total)| total)
+        .map_or(0, |(free, total)| free.saturating_sub(total.saturating_sub(used)))
 }
 
 #[cfg(test)]
