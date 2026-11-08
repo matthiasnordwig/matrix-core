@@ -74,6 +74,12 @@ pub fn gguf_verdict(metal: bool, gpus: &[Gpu], fit: Option<Fit>) -> Verdict {
     }
 }
 
+/// Memory of the largest dedicated card among `gpus`; `None` without one (integrated units share
+/// the main memory, so they do not count).
+pub fn dedicated_memory(gpus: &[Gpu]) -> Option<u64> {
+    gpus.iter().filter(|g| !g.integrated).map(|g| g.memory_total).max()
+}
+
 /// Smallest gain (CPU time / graphics time) for which the graphics unit is chosen.
 pub const MIN_SPEEDUP: f64 = 1.3;
 

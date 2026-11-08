@@ -53,3 +53,14 @@ fn key_changes_with_device_driver_model_and_build() {
     assert_ne!(a, probe_key("chat", "/m/Qwen3-4B.gguf", 101, &[gpu("iGPU", true)], "0.2.7"));
     assert_ne!(a, probe_key("chat", "/m/Qwen3-4B.gguf", 100, &[gpu("iGPU", true)], "0.2.8"));
 }
+
+#[test]
+fn dedicated_memory_is_the_largest_card_and_ignores_integrated_units() {
+    let mut big = gpu("Radeon RX 7900 XTX", false);
+    big.memory_total = 24 << 30;
+    let mut igpu = gpu("Radeon Graphics", true);
+    igpu.memory_total = 64 << 30;
+    assert_eq!(dedicated_memory(&[]), None);
+    assert_eq!(dedicated_memory(&[igpu.clone()]), None);
+    assert_eq!(dedicated_memory(&[gpu("GeForce", false), big, igpu]), Some(24 << 30));
+}
