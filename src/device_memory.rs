@@ -3,9 +3,9 @@
 //! (`visionModelPresets.ts`), sizes the context estimate
 //! (`discovery::context_window`, on iOS the app budget instead) and the longest
 //! input of the search model (`embedding/onnx.rs`). `None` where it cannot be
-//! read (Windows, other Unix). Pure Rust: `sysctlbyname("hw.memsize")` on
-//! macOS/iOS, `/proc/meminfo` (`MemTotal`) on Linux and Android; the parser is
-//! separate so it is unit-testable.
+//! read (other Unix). `sysctlbyname("hw.memsize")` on macOS/iOS, `/proc/meminfo`
+//! (`MemTotal`) on Linux and Android, `GlobalMemoryStatusEx` (`ullTotalPhys`) on
+//! Windows; the meminfo parser is separate so it is unit-testable.
 
 /// Parse the `MemTotal:` line of `/proc/meminfo` (value in kB) into bytes.
 pub fn parse_meminfo_total(text: &str) -> Option<u64> {
@@ -43,7 +43,18 @@ pub fn device_memory_bytes() -> Option<u64> {
     parse_meminfo_total(&std::fs::read_to_string("/proc/meminfo").ok()?)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
+#[cfg(windows)]
+pub fn device_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX is plain data; the call requires `dwLength` set to its size.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` is a valid, initialised MEMORYSTATUSEX that outlives the call.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0 && status.ullTotalPhys > 0).then_some(status.ullTotalPhys)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
 pub fn device_memory_bytes() -> Option<u64> {
     None
 }
@@ -69,7 +80,7 @@ mod tests {
 
     #[test]
     fn host_reports_some_memory_where_supported() {
-        if cfg!(any(target_os = "macos", target_os = "linux")) {
+        if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
             assert!(device_memory_bytes().unwrap() > 64 * 1024 * 1024);
         }
     }
