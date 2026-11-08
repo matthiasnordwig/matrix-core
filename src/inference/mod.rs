@@ -2,11 +2,12 @@
 //! chat model runs, quick test), `gguf_vlm` (picture + instruction via mtmd) and their shared
 //! prompt builder `chat_template` —
 //! behind the `gguf` feature — plus the llama.cpp-free text helpers
-//! (`chat_text`: template route + Harmony answer, `prefix_reuse`: what of the last
+//! (`chat_text`: template route + Harmony answer, `generation`: answer text with token counts and times, `prefix_reuse`: what of the last
 //! call the chat engine keeps, `vlm_prompt`).
 #[cfg(feature = "gguf")]
 mod chat_template;
 pub mod chat_text;
+pub mod generation;
 pub mod prefix_reuse;
 pub mod seed;
 #[cfg(feature = "gguf")]

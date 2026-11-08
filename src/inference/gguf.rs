@@ -31,6 +31,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, TryLockError};
 
+use super::generation::Generation;
 use super::prefix_reuse::{self, Reuse};
 use super::seed::{sampler_seed, SEED_ENV};
 use crate::compute::Unit;
@@ -145,9 +146,10 @@ impl GgufEngine {
 
     /// One chat completion. `stop` is checked before every prompt chunk and every generated
     /// token: once set (the caller stopped waiting — a stopped chat), generation ends with
-    /// `Err("cancelled")` instead of running to the end of the answer.
+    /// `Err("cancelled")` instead of running to the end of the answer. The answer comes with its
+    /// token counts and times (`generation.rs`).
     #[allow(clippy::too_many_arguments)]
-    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>, stop: &AtomicBool) -> Result<String, String> {
+    pub fn generate(&self, messages: &[(&str, &str)], max_tokens: u32, _is_reasoning: bool, json_schema: Option<&str>, kv_quantization: Option<&str>, cpu_threads: Option<i64>, stop: &AtomicBool) -> Result<Generation, String> {
         // 1. Template: built-in list or the model's Jinja template (`chat_template.rs`).
         let formatted_prompt = super::chat_template::render(&self.model, messages)?;
 
@@ -315,7 +317,7 @@ impl GgufEngine {
     }
 
     /// Reads the prompt (from what `reuse` kept on) and samples the answer into `ctx`.
-    fn complete(&self, ctx: &mut LlamaContext<'_>, memory: &mut Memory, tokens: &[LlamaToken], turn_start: Option<usize>, max_tokens: u32, stop: &AtomicBool) -> Result<String, String> {
+    fn complete(&self, ctx: &mut LlamaContext<'_>, memory: &mut Memory, tokens: &[LlamaToken], turn_start: Option<usize>, max_tokens: u32, stop: &AtomicBool) -> Result<Generation, String> {
         let stopped = || stop.load(Ordering::Relaxed);
         let started = std::time::Instant::now();
         let (keep, snapshot_at) = self.reuse(ctx, memory, tokens);
@@ -400,13 +402,10 @@ impl GgufEngine {
             memory.tokens.push(next_token);
         }
 
-        eprintln!(
-            "gguf: prompt {} tokens ({keep} kept from earlier calls) read in {read:.2} s, answer {} tokens in {:.2} s",
-            tokens.len(),
-            n_past as usize - tokens.len(),
-            started.elapsed().as_secs_f64() - read
-        );
+        let (answer_tokens, answer_secs) = (n_past as usize - tokens.len(), started.elapsed().as_secs_f64() - read);
+        eprintln!("gguf: prompt {} tokens ({keep} kept from earlier calls) read in {read:.2} s, answer {answer_tokens} tokens in {answer_secs:.2} s", tokens.len());
         // gpt-oss: only the Harmony `final` channel is the answer.
-        super::chat_text::harmony_final(&String::from_utf8_lossy(&output))
+        let text = super::chat_text::harmony_final(&String::from_utf8_lossy(&output))?;
+        Ok(Generation { text, prompt_tokens: tokens.len(), kept_tokens: keep, prompt_secs: read, answer_tokens, answer_secs })
     }
 }

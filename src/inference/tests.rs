@@ -1,4 +1,4 @@
-//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse`).
+//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse`, `generation`).
 use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
 
 #[test]
@@ -196,4 +196,22 @@ fn sampler_seed_is_1337_unless_the_variable_holds_a_number() {
     assert_eq!(sampler_seed(None), 1337);
     assert_eq!(sampler_seed(Some("abc")), 1337);
     assert_eq!(sampler_seed(Some(" 42 ")), 42);
+}
+
+// --- generation ---------------------------------------------------------------
+
+use super::generation::{per_second, Generation};
+
+#[test]
+fn read_tokens_leave_out_the_kept_ones() {
+    let g = Generation { prompt_tokens: 9000, kept_tokens: 8000, ..Default::default() };
+    assert_eq!(g.read_tokens(), 1000);
+    assert_eq!(Generation { kept_tokens: 5, ..Default::default() }.read_tokens(), 0, "never below zero");
+}
+
+#[test]
+fn per_second_needs_time_and_tokens() {
+    assert_eq!(per_second(1000.0, 2.0), Some(500.0));
+    assert_eq!(per_second(1000.0, 0.0), None);
+    assert_eq!(per_second(0.0, 2.0), None);
 }
