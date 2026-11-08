@@ -1,5 +1,5 @@
 //! schema_v78: every local GGUF chat model starts on the automatic context (0), other providers
-//! keep theirs; the chat's search-call budget setting is gone.
+//! keep theirs; the chat's search-call budget setting is gone. schema_v79: the tables' one too.
 
 use super::llm_endpoint_tests::seed_endpoint;
 use super::Database;
@@ -18,5 +18,5 @@ fn local_models_start_on_automatic_and_the_chat_budget_setting_goes() {
     let window = |id| db.llm_endpoint(id).unwrap().unwrap().context_window;
     assert_eq!((window(local), window(hosted)), (0, 8192));
     assert_eq!(db.get_setting::<i64>("chat_tool_call_budget_default").unwrap(), None);
-    assert_eq!(db.get_setting::<i64>("grid_tool_call_budget_default").unwrap(), Some(4));
+    assert_eq!(db.get_setting::<i64>("grid_tool_call_budget_default").unwrap(), None);
 }

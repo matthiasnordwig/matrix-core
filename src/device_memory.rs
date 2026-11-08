@@ -14,6 +14,10 @@
 //! `MemAvailable`, Windows `ullAvailPhys`. Both are `None` only where nothing can be read (other
 //! Unix — the test names every system that must answer). The parsers are separate so they are
 //! unit-testable.
+//!
+//! [`file_resident_bytes`]: how much of a file is in the page cache now (`mmap` + `mincore`, macOS,
+//! iOS, Linux, Android) — a memory-mapped model whose pages are already cached needs no new memory
+//! for them. Windows: `None` (callers count the whole file).
 
 /// Parse the `MemTotal:` line of `/proc/meminfo` (value in kB) into bytes.
 pub fn parse_meminfo_total(text: &str) -> Option<u64> {
@@ -133,6 +137,35 @@ pub fn available_bytes() -> Option<u64> {
     None
 }
 
+/// Bytes of the file at `path` that sit in the page cache now; `None` where the system cannot say.
+#[cfg(unix)]
+pub fn file_resident_bytes(path: &str) -> Option<u64> {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::File::open(path).ok()?;
+    let len = usize::try_from(file.metadata().ok()?.len()).ok()?;
+    if len == 0 {
+        return Some(0);
+    }
+    // SAFETY: plain query without arguments.
+    let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok().filter(|&p| p > 0)?;
+    // SAFETY: a read-only shared mapping of a file we hold open; unmapped below, never dereferenced.
+    let addr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+    if addr == libc::MAP_FAILED {
+        return None;
+    }
+    let mut pages = vec![0u8; len.div_ceil(page)];
+    // SAFETY: `addr`/`len` is the mapping above; `pages` has one byte per page of it.
+    let rc = unsafe { libc::mincore(addr, len, pages.as_mut_ptr() as _) };
+    // SAFETY: unmaps exactly the mapping made above.
+    unsafe { libc::munmap(addr, len) };
+    (rc == 0).then(|| (pages.iter().filter(|&&p| p & 1 != 0).count() * page).min(len) as u64)
+}
+
+#[cfg(not(unix))]
+pub fn file_resident_bytes(_path: &str) -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +198,22 @@ mod tests {
         assert_eq!(vm_available(1, 2, 3, 4, 16384), Some(10 * 16384));
         assert_eq!(vm_available(0, 0, 0, 0, 16384), None);
         assert_eq!(vm_available(u64::MAX, 1, 0, 0, 1), None);
+    }
+
+    #[test]
+    fn a_file_just_read_is_in_the_page_cache() {
+        let path = std::env::temp_dir().join(format!("matrix-resident-{}", std::process::id()));
+        std::fs::write(&path, vec![7u8; 1 << 20]).unwrap();
+        let _ = std::fs::read(&path).unwrap();
+        let resident = file_resident_bytes(path.to_str().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        if cfg!(unix) {
+            // Just written and read: in the cache, never more than the file.
+            assert!(resident.unwrap() > 0 && resident.unwrap() <= 1 << 20, "{resident:?}");
+        } else {
+            assert_eq!(resident, None, "Windows: unknown, callers count the whole file");
+        }
+        assert_eq!(file_resident_bytes("/no/such/file"), None);
     }
 
     /// Every system the app ships on must answer both queries (no silent "unknown").
