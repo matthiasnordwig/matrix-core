@@ -8,10 +8,12 @@
 //!
 //! [`available_bytes`] (free now, what a model loading now could take without pushing other
 //! programs out) sizes the context of a local chat model at every load (services
-//! `local_context.rs`): macOS `host_statistics64` free + inactive + speculative + purgeable pages
-//! (inactive pages are file cache the system drops first, [`vm_available`]), iOS
-//! `os_proc_available_memory` (the app's own limit), Linux and Android `/proc/meminfo`
-//! `MemAvailable`, Windows `ullAvailPhys`. Both are `None` only where nothing can be read (other
+//! `local_context.rs`): macOS `host_statistics64` free + file-backed + purgeable pages ([`vm_available`],
+//! what Activity Monitor shows as total minus "Memory Used"), iOS `os_proc_available_memory` (the
+//! app's own limit), Linux and Android `/proc/meminfo` `MemAvailable`, Windows `ullAvailPhys`. Outside
+//! iOS this includes the file cache the system drops when a program needs memory — also the pages of a
+//! model file read before, so callers count a model's weights whole whether it is cached or not (a
+//! cold and a warm load get the same context). Both are `None` only where nothing can be read (other
 //! Unix — the test names every system that must answer). The parsers are separate so they are
 //! unit-testable.
 //!
@@ -20,10 +22,7 @@
 //! Vulkan's memory budget on Windows (AMD, measured) does not shrink when another program holds the card:
 //! with 7.2 GiB taken by a second model llama.cpp still reported the card as free. Elsewhere `None`
 //! (Metal and Linux Vulkan budgets see the others; Apple shares main memory).
-//!
-//! [`file_resident_bytes`]: how much of a file is in the page cache now (`mmap` + `mincore`, macOS,
-//! iOS, Linux, Android) — a memory-mapped model whose pages are already cached needs no new memory
-//! for them. Windows: `None` (callers count the whole file).
+
 
 /// Parse the `MemTotal:` line of `/proc/meminfo` (value in kB) into bytes.
 pub fn parse_meminfo_total(text: &str) -> Option<u64> {
@@ -86,10 +85,15 @@ pub fn device_memory_bytes() -> Option<u64> {
     None
 }
 
-/// macOS: bytes free now from page counts of `host_statistics64` — free, inactive (file cache
-/// dropped first), speculative (read ahead) and purgeable pages.
-pub fn vm_available(free: u64, inactive: u64, speculative: u64, purgeable: u64, page_size: u64) -> Option<u64> {
-    free.checked_add(inactive)?.checked_add(speculative)?.checked_add(purgeable)?.checked_mul(page_size).filter(|&b| b > 0)
+/// macOS: bytes a program could take now, from page counts of `host_statistics64` — free pages
+/// (`free_count` includes the speculative read-ahead pages, which are file-backed and counted there,
+/// so they are taken out once), file-backed pages (the file cache, active or not: clean pages the
+/// system drops under pressure) and purgeable pages. Not inactive pages: anonymous ones among them
+/// leave only by compression or swap, and active file cache is missing from them. Measured on a
+/// 24 GB Mac with a cold 12.3 GiB model file: free + inactive gave 11.6 GiB (the model got the
+/// minimum context), this 14.4 GiB.
+pub fn vm_available(free: u64, speculative: u64, file_backed: u64, purgeable: u64, page_size: u64) -> Option<u64> {
+    free.saturating_sub(speculative).checked_add(file_backed)?.checked_add(purgeable)?.checked_mul(page_size).filter(|&b| b > 0)
 }
 
 #[cfg(target_os = "macos")]
@@ -107,7 +111,7 @@ pub fn available_bytes() -> Option<u64> {
         return None;
     }
     let pages = |n: u32| u64::from(n);
-    vm_available(pages(stats.free_count), pages(stats.inactive_count), pages(stats.speculative_count), pages(stats.purgeable_count), page as u64)
+    vm_available(pages(stats.free_count), pages(stats.speculative_count), pages(stats.external_page_count), pages(stats.purgeable_count), page as u64)
 }
 
 #[cfg(target_os = "ios")]
@@ -190,35 +194,6 @@ pub fn gpu_dedicated_used_bytes() -> Option<u64> {
     None
 }
 
-/// Bytes of the file at `path` that sit in the page cache now; `None` where the system cannot say.
-#[cfg(unix)]
-pub fn file_resident_bytes(path: &str) -> Option<u64> {
-    use std::os::fd::AsRawFd;
-    let file = std::fs::File::open(path).ok()?;
-    let len = usize::try_from(file.metadata().ok()?.len()).ok()?;
-    if len == 0 {
-        return Some(0);
-    }
-    // SAFETY: plain query without arguments.
-    let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok().filter(|&p| p > 0)?;
-    // SAFETY: a read-only shared mapping of a file we hold open; unmapped below, never dereferenced.
-    let addr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
-    if addr == libc::MAP_FAILED {
-        return None;
-    }
-    let mut pages = vec![0u8; len.div_ceil(page)];
-    // SAFETY: `addr`/`len` is the mapping above; `pages` has one byte per page of it.
-    let rc = unsafe { libc::mincore(addr, len, pages.as_mut_ptr() as _) };
-    // SAFETY: unmaps exactly the mapping made above.
-    unsafe { libc::munmap(addr, len) };
-    (rc == 0).then(|| (pages.iter().filter(|&&p| p & 1 != 0).count() * page).min(len) as u64)
-}
-
-#[cfg(not(unix))]
-pub fn file_resident_bytes(_path: &str) -> Option<u64> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,25 +223,24 @@ mod tests {
 
     #[test]
     fn vm_pages_add_up_and_overflow_is_unknown() {
-        assert_eq!(vm_available(1, 2, 3, 4, 16384), Some(10 * 16384));
+        // free 10 (2 of them speculative, counted among the 30 file-backed) + 30 + 4 purgeable.
+        assert_eq!(vm_available(10, 2, 30, 4, 16384), Some(42 * 16384));
         assert_eq!(vm_available(0, 0, 0, 0, 16384), None);
-        assert_eq!(vm_available(u64::MAX, 1, 0, 0, 1), None);
+        assert_eq!(vm_available(u64::MAX, 0, 1, 0, 1), None);
     }
 
+    /// The case from the 24 GB Mac (page counts of 16 KiB): a cold model file of 12.3 GiB next to
+    /// 13 GiB of other file cache. Free + inactive alone left less than the weights; the file
+    /// cache the system drops makes room, as it does once the model is cached (then its own pages
+    /// are the file-backed ones).
     #[test]
-    fn a_file_just_read_is_in_the_page_cache() {
-        let path = std::env::temp_dir().join(format!("matrix-resident-{}", std::process::id()));
-        std::fs::write(&path, vec![7u8; 1 << 20]).unwrap();
-        let _ = std::fs::read(&path).unwrap();
-        let resident = file_resident_bytes(path.to_str().unwrap());
-        std::fs::remove_file(&path).unwrap();
-        if cfg!(unix) {
-            // Just written and read: in the cache, never more than the file.
-            assert!(resident.unwrap() > 0 && resident.unwrap() <= 1 << 20, "{resident:?}");
-        } else {
-            assert_eq!(resident, None, "Windows: unknown, callers count the whole file");
-        }
-        assert_eq!(file_resident_bytes("/no/such/file"), None);
+    fn file_cache_counts_as_available_so_a_cold_model_fits() {
+        let cold = vm_available(100_807, 1_789, 840_818, 3_524, 16384).unwrap();
+        assert_eq!(cold >> 30, 14);
+        assert!(cold > (12.3 * (1u64 << 30) as f64) as u64 + (1 << 30));
+        // Free + inactive + speculative + purgeable of the same moment: below weights + buffers.
+        let old = (99_018u64 + 653_671 + 1_789 + 3_524) * 16384;
+        assert!(old < (12.3 * (1u64 << 30) as f64) as u64 + (1 << 30) + (384 << 20));
     }
 
     #[test]
