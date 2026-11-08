@@ -2,6 +2,7 @@
 [package]
 name = "matrix_core"
 version = "0.1.0"
+license = "MIT"
 edition = "2024"
 
 # 💡 DAS HIER JETZT EINTRAGEN:
