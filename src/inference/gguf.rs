@@ -38,7 +38,7 @@ use crate::compute::Unit;
 use crate::llama_backend::backend as get_backend;
 
 /// Tokens read per decode call.
-pub(super) const CHUNK: usize = 512;
+pub const CHUNK: usize = 512;
 
 pub struct GgufEngine {
     // Declared before `model`: fields drop in order, and the session's context borrows it.
@@ -97,15 +97,12 @@ impl GgufEngine {
     /// Loads the model on `unit` (which one: `gguf_device.rs`); on the graphics unit with as
     /// many layers as fit beside a context of `n_ctx` tokens (`llama_backend::fit_to_gpu_memory`).
     pub fn load(model_path: &str, n_ctx: u32, unit: Unit) -> Result<Self, String> {
-        // `n_ctx: 0` doesn't fail here — `with_n_ctx(NonZeroU32::new(0))` becomes
-        // `None`, which llama.cpp silently interprets as "use the model's own
-        // trained context length" — but the prompt-fits check in `generate()`
-        // below uses the *stored* `n_ctx` (still 0), so `available_ctx` computes
-        // to 0 and every single request fails with a confusing "Prompt zu lang:
-        // N Tokens (Verfügbar: 0 Kontext...)" forever, regardless of how small
-        // the prompt is. Fail loudly once here instead, with an actionable message.
+        // 0 would make llama.cpp take the model's trained length while the prompt check in
+        // `generate()` uses the stored 0 ("Prompt zu lang … Verfügbar: 0") on every request. The
+        // app decides a size before every load (services `local_context.rs`, "automatic"); 0 here
+        // means a caller skipped that.
         if n_ctx == 0 {
-            return Err("Endpoint has no Context Window configured (0) — set a real Context Window value for this local model in Settings → Endpoints before using it.".to_string());
+            return Err("No context size was chosen for this local model (0). Pick a fixed context size under Settings → Models → Advanced, or leave it on automatic and report this as a bug.".to_string());
         }
         let backend = get_backend()?;
         if !std::path::Path::new(model_path).exists() {

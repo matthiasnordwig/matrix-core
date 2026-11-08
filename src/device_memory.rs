@@ -1,16 +1,33 @@
-//! Total physical memory of the device (bytes): picks the chat-model tier
-//! (`localModelPresets.ts`), blocks the image-model presets on small iPhones
-//! (`visionModelPresets.ts`), sizes the context estimate
-//! (`discovery::context_window`, on iOS the app budget instead) and the longest
-//! input of the search model (`embedding/onnx.rs`). `None` where it cannot be
-//! read (other Unix). `sysctlbyname("hw.memsize")` on macOS/iOS, `/proc/meminfo`
-//! (`MemTotal`) on Linux and Android, `GlobalMemoryStatusEx` (`ullTotalPhys`) on
-//! Windows; the meminfo parser is separate so it is unit-testable.
+//! Physical memory of the device (bytes), total and free now.
+//!
+//! [`device_memory_bytes`] (total) picks the chat-model tier (`localModelPresets.ts`), blocks the
+//! image-model presets on small iPhones (`visionModelPresets.ts`), sizes the "fits this device"
+//! check (`discovery::context_window`, on iOS the app budget instead) and the longest input of the
+//! search model (`embedding/onnx.rs`): `sysctlbyname("hw.memsize")` on macOS/iOS, `/proc/meminfo`
+//! (`MemTotal`) on Linux and Android, `GlobalMemoryStatusEx` (`ullTotalPhys`) on Windows.
+//!
+//! [`available_bytes`] (free now, what a model loading now could take without pushing other
+//! programs out) sizes the context of a local chat model at every load (services
+//! `local_context.rs`): macOS `host_statistics64` free + inactive + speculative + purgeable pages
+//! (inactive pages are file cache the system drops first, [`vm_available`]), iOS
+//! `os_proc_available_memory` (the app's own limit), Linux and Android `/proc/meminfo`
+//! `MemAvailable`, Windows `ullAvailPhys`. Both are `None` only where nothing can be read (other
+//! Unix — the test names every system that must answer). The parsers are separate so they are
+//! unit-testable.
 
 /// Parse the `MemTotal:` line of `/proc/meminfo` (value in kB) into bytes.
 pub fn parse_meminfo_total(text: &str) -> Option<u64> {
-    let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
-    let mut parts = line["MemTotal:".len()..].split_whitespace();
+    parse_meminfo(text, "MemTotal:")
+}
+
+/// Parse the `MemAvailable:` line of `/proc/meminfo` (value in kB) into bytes.
+pub fn parse_meminfo_available(text: &str) -> Option<u64> {
+    parse_meminfo(text, "MemAvailable:")
+}
+
+fn parse_meminfo(text: &str, key: &str) -> Option<u64> {
+    let line = text.lines().find(|l| l.starts_with(key))?;
+    let mut parts = line[key.len()..].split_whitespace();
     let value: u64 = parts.next()?.parse().ok()?;
     let factor = match parts.next() {
         Some("kB") | Some("KB") | Some("kb") | None => 1024,
@@ -59,6 +76,63 @@ pub fn device_memory_bytes() -> Option<u64> {
     None
 }
 
+/// macOS: bytes free now from page counts of `host_statistics64` — free, inactive (file cache
+/// dropped first), speculative (read ahead) and purgeable pages.
+pub fn vm_available(free: u64, inactive: u64, speculative: u64, purgeable: u64, page_size: u64) -> Option<u64> {
+    free.checked_add(inactive)?.checked_add(speculative)?.checked_add(purgeable)?.checked_mul(page_size).filter(|&b| b > 0)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // `mach_host_self`: libc points to the mach2 crate; the call is the same.
+pub fn available_bytes() -> Option<u64> {
+    // SAFETY: `stats`/`count` outlive the call; `count` is the size of `stats` in `integer_t`s.
+    let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    let rc = unsafe {
+        libc::host_statistics64(libc::mach_host_self(), libc::HOST_VM_INFO64, &mut stats as *mut _ as libc::host_info64_t, &mut count)
+    };
+    // SAFETY: plain libSystem query without arguments.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if rc != libc::KERN_SUCCESS || page <= 0 {
+        return None;
+    }
+    let pages = |n: u32| u64::from(n);
+    vm_available(pages(stats.free_count), pages(stats.inactive_count), pages(stats.speculative_count), pages(stats.purgeable_count), page as u64)
+}
+
+#[cfg(target_os = "ios")]
+extern "C" {
+    fn os_proc_available_memory() -> usize;
+}
+
+#[cfg(target_os = "ios")]
+pub fn available_bytes() -> Option<u64> {
+    // SAFETY: plain libSystem query without arguments.
+    let b = unsafe { os_proc_available_memory() } as u64;
+    (b > 0).then_some(b)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn available_bytes() -> Option<u64> {
+    parse_meminfo_available(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+#[cfg(windows)]
+pub fn available_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: as in `device_memory_bytes`.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` is a valid, initialised MEMORYSTATUSEX that outlives the call.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0 && status.ullAvailPhys > 0).then_some(status.ullAvailPhys)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
+pub fn available_bytes() -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,9 +153,28 @@ mod tests {
     }
 
     #[test]
-    fn host_reports_some_memory_where_supported() {
+    fn parses_memavailable_and_not_memfree() {
+        let t = "MemTotal: 16318412 kB\nMemFree: 1234 kB\nMemAvailable: 8000000 kB\n";
+        assert_eq!(parse_meminfo_available(t), Some(8_000_000 * 1024));
+        // An old kernel without MemAvailable: unknown, never MemFree in its place.
+        assert_eq!(parse_meminfo_available("MemTotal: 1 kB\nMemFree: 1234 kB\n"), None);
+    }
+
+    #[test]
+    fn vm_pages_add_up_and_overflow_is_unknown() {
+        assert_eq!(vm_available(1, 2, 3, 4, 16384), Some(10 * 16384));
+        assert_eq!(vm_available(0, 0, 0, 0, 16384), None);
+        assert_eq!(vm_available(u64::MAX, 1, 0, 0, 1), None);
+    }
+
+    /// Every system the app ships on must answer both queries (no silent "unknown").
+    #[test]
+    fn host_reports_total_and_free_memory_where_supported() {
         if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
-            assert!(device_memory_bytes().unwrap() > 64 * 1024 * 1024);
+            let total = device_memory_bytes().unwrap();
+            assert!(total > 64 * 1024 * 1024);
+            let free = available_bytes().unwrap();
+            assert!(free > 0 && free <= total, "free {free} of {total}");
         }
     }
 }

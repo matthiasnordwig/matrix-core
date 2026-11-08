@@ -11,6 +11,12 @@
 //! The same goes for where a model's layers run ([`model_params_on`]): every GGUF consumer
 //! loads with these parameters; which unit (graphics or CPU) is `crate::compute`'s rule
 //! ([`rule_unit`] for the small models, `inference/gguf_device.rs` for the chat model).
+//!
+//! How large a context fits on the graphics unit next to the whole model ([`context_on_gpu`]) is
+//! llama.cpp's own projection (`llama_params_fit` with the context left open): Metal counts what
+//! the system lets the GPU take minus what is allocated, Vulkan only device-local heaps (budget −
+//! usage; shared graphics memory never counts). The services choose the chat context with it
+//! (`local_context.rs`).
 
 use std::sync::{Mutex, OnceLock};
 
@@ -109,10 +115,14 @@ pub fn rule_unit() -> Unit {
     }
 }
 
+/// Graphics memory kept free for the desktop and other programs when a model is placed on the
+/// graphics unit ([`fit_to_gpu_memory`], [`context_on_gpu`]); llama.cpp's own tools keep 1 GiB.
+/// Measured against the real use (`handbuch/chat-messungen.md` "Speichergrenze").
+pub const GPU_MARGIN: u64 = 1 << 30;
+
 /// Vulkan: fewer layers on the graphics unit where the model plus a context of `n_ctx` tokens
-/// (F16 memory, the largest the chat engine makes) would not fit its free memory, keeping 1 GiB
-/// for the desktop and other programs (llama.cpp's `llama_params_fit`, the margin of its own
-/// tools). Fills `params` in place and says how much fits; a hard error (unreadable file) leaves
+/// (F16 memory, the largest the chat engine makes) would not fit its free memory, keeping
+/// [`GPU_MARGIN`] (llama.cpp's `llama_params_fit`). Fills `params` in place and says how much fits; a hard error (unreadable file) leaves
 /// `params` for the load to report. Other builds: nothing to fit.
 pub fn fit_to_gpu_memory(
     #[allow(unused_mut)] mut params: std::pin::Pin<&mut LlamaModelParams>,
@@ -129,7 +139,7 @@ pub fn fit_to_gpu_memory(
         let mut cparams = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx))
             .with_n_batch(n_batch);
-        let mut margins = vec![1usize << 30; llama_cpp_2::max_devices()];
+        let mut margins = vec![GPU_MARGIN as usize; llama_cpp_2::max_devices()];
         match params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _) {
             Err(FitError::Failure) => {
                 params.set(model_params_on(Unit::Cpu));
@@ -149,6 +159,55 @@ pub fn fit_to_gpu_memory(
         let _ = (params, model_path, n_ctx, n_batch);
         None
     }
+}
+
+/// The largest context (tokens) with which the whole model at `model_path` fits the graphics unit,
+/// keeping `margin` bytes free per device: llama.cpp projects weights, KV cache (`kv`: `Q8_0`,
+/// `Q4_0`, else F16 — as the chat engine sets it) and compute buffers for a batch of `n_batch`,
+/// and shrinks the context from the model's trained length down to `n_ctx_min` until all of it
+/// fits. `Some(0)`: the model's whole trained length fits. `None` when not even `n_ctx_min` fits
+/// next to every layer, without a graphics unit, or when the file cannot be read.
+pub fn context_on_gpu(model_path: &str, n_batch: u32, kv: Option<&str>, n_ctx_min: u32, margin: u64) -> Option<u32> {
+    use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
+    const GGML_LOG_LEVEL_WARN: u32 = 3;
+    let metal = cfg!(feature = "gguf-metal") && !cfg!(all(target_os = "ios", target_abi = "sim"));
+    if !metal && gpus().is_empty() {
+        return None; // CPU build: llama.cpp would report "no device" as a fit.
+    }
+    let path = std::ffi::CString::new(model_path).ok()?;
+    let mut cparams = LlamaContextParams::default().with_n_ctx(None).with_n_batch(n_batch);
+    if let Some(t) = kv.and_then(|q| match q {
+        "Q8_0" => Some(KvCacheType::Q8_0),
+        "Q4_0" => Some(KvCacheType::Q4_0),
+        _ => None,
+    }) {
+        cparams = cparams.with_type_k(t).with_type_v(t);
+    }
+    // llama.cpp's defaults (every layer on the graphics unit): fit refuses parameters it did not set.
+    let mut params = std::pin::pin!(LlamaModelParams::default().with_use_mmap(true));
+    let mut margins = vec![usize::try_from(margin).unwrap_or(usize::MAX); llama_cpp_2::max_devices()];
+    let fit = params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx_min, GGML_LOG_LEVEL_WARN as _).ok()?;
+    // Fewer layers on the unit = the model does not fit whole even at `n_ctx_min`.
+    (params.n_gpu_layers() < 0).then_some(fit.n_ctx)
+}
+
+/// Whether the graphics unit takes its memory from main memory: Apple's GPU, or only integrated
+/// units (a dedicated card has its own). Also true without any graphics unit.
+pub fn gpu_shares_ram() -> bool {
+    cfg!(feature = "gguf-metal") || gpus().iter().all(|g| g.integrated)
+}
+
+/// Free memory of the dedicated graphics units now (bytes; integrated units and Apple's GPU share
+/// main memory and do not count). 0 without one.
+pub fn dedicated_free_bytes() -> u64 {
+    if cfg!(feature = "gguf-metal") || backend().is_err() {
+        return 0;
+    }
+    llama_cpp_2::list_llama_ggml_backend_devices()
+        .into_iter()
+        .filter(|d| d.device_type == LlamaBackendDeviceType::Gpu)
+        .map(|d| d.memory_free as u64)
+        .sum()
 }
 
 #[cfg(test)]
