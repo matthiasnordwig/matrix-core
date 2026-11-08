@@ -188,3 +188,12 @@ fn snapshots_are_bounded_by_count_and_bytes_oldest_first() {
     assert_eq!(snapshots_to_drop(&[half, half, 1]), 1, "the oldest goes first");
     assert_eq!(snapshots_to_drop(&[1, SNAPSHOT_BYTES + 1]), 2, "one that alone is too big is not kept");
 }
+
+use super::seed::sampler_seed;
+
+#[test]
+fn sampler_seed_is_1337_unless_the_variable_holds_a_number() {
+    assert_eq!(sampler_seed(None), 1337);
+    assert_eq!(sampler_seed(Some("abc")), 1337);
+    assert_eq!(sampler_seed(Some(" 42 ")), 42);
+}

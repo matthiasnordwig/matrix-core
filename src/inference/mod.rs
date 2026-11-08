@@ -8,6 +8,7 @@
 mod chat_template;
 pub mod chat_text;
 pub mod prefix_reuse;
+pub mod seed;
 #[cfg(feature = "gguf")]
 pub mod gguf;
 #[cfg(feature = "gguf")]

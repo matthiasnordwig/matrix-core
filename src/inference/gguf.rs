@@ -1,6 +1,8 @@
 //! Local chat engine: one GGUF chat model through llama.cpp, messages in, answer
 //! text out. The prompt comes from the model's chat template (`chat_template.rs`),
-//! sampling is temperature 0.7 with a mild repetition penalty, and a gpt-oss
+//! sampling is temperature 0.7 with a mild repetition penalty (fixed seed 1337; the
+//! environment variable `MATRIX_GGUF_SEED` overrides it, set only by the `model_compare`
+//! example for repeat measurements), and a gpt-oss
 //! Harmony reply is cut to its `final` channel (`chat_text::harmony_final`).
 //!
 //! The engine keeps one llama.cpp context with the tokens of its last call in memory
@@ -30,6 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, TryLockError};
 
 use super::prefix_reuse::{self, Reuse};
+use super::seed::{sampler_seed, SEED_ENV};
 use crate::compute::Unit;
 
 // Process-global backend shared with the GGUF embedder/reranker — a
@@ -358,7 +361,7 @@ impl GgufEngine {
             llama_cpp_2::sampling::LlamaSampler::top_k(40),
             llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
             llama_cpp_2::sampling::LlamaSampler::temp(0.7),
-            llama_cpp_2::sampling::LlamaSampler::dist(1337),
+            llama_cpp_2::sampling::LlamaSampler::dist(sampler_seed(std::env::var(SEED_ENV).ok().as_deref())),
         ];
         let mut chain = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
 
