@@ -1,11 +1,14 @@
 //! A graphics card the system shows, but the chat engine cannot use: no graphics driver with
 //! Vulkan, so llama.cpp (`gguf-vulkan`, the Windows app) loads only its CPU backend and every local
 //! model runs on the processor (`super::gguf_verdict`: "no graphics unit"). The app then tells the
-//! user once per start, with a link to the maker's driver page (services `commands/health.rs`
-//! `gpu_driver_notice`, the app's line `components/ComputeLine.tsx`); it installs nothing itself.
+//! user, with a link to the maker's driver page (services `compute_choice.rs`, where the chat model
+//! loads, and `commands/health.rs` `gpu_driver_notice`; the app's line `components/ComputeLine.tsx`);
+//! it installs nothing itself.
 //!
-//! [`notice`] decides (pure, tested): the system lists a physical display device ([`Adapter`],
-//! from [`system_adapters`]) while llama.cpp reports no graphics unit. The maker comes from the PCI
+//! [`notice`] decides (pure, tested): a local GGUF chat model is set up — someone using only a
+//! hosted model is not told, and llama.cpp is not even started for him — and the system lists a
+//! physical display device ([`Adapter`], from [`system_adapters`]) while llama.cpp reports no
+//! graphics unit. The maker comes from the PCI
 //! vendor id of the device's hardware id ([`pci_vendor`], [`vendor`]), not from its name — a card
 //! without its driver shows as "Microsoft Basic Display Adapter" and only the id still says whose it
 //! is. Virtual adapters (Hyper-V, VMware, VirtualBox, QEMU …) and the display chips of server boards
@@ -79,17 +82,21 @@ pub fn driver_page(vendor: Vendor) -> Option<&'static str> {
     }
 }
 
-/// The notice where the system shows a graphics card but llama.cpp found no graphics unit
-/// (`backend_gpus` empty); `None` otherwise. With several cards a dedicated maker's goes first
-/// (NVIDIA, AMD), then Intel, then any other.
-pub fn notice(backend_gpus: &[Gpu], adapters: &[Adapter]) -> Option<DriverNotice> {
-    if !backend_gpus.is_empty() {
+/// The notice where a local chat model is set up (`local_chat`) and the system shows a graphics
+/// card, but llama.cpp found no graphics unit; `None` otherwise. `backend_gpus` (llama.cpp's
+/// devices; starts it) is asked only when both hold. With several cards a dedicated maker's goes
+/// first (NVIDIA, AMD), then Intel, then any other.
+pub fn notice(local_chat: bool, adapters: &[Adapter], backend_gpus: impl FnOnce() -> Vec<Gpu>) -> Option<DriverNotice> {
+    if !local_chat {
         return None;
     }
     let (vendor, adapter) = adapters
         .iter()
         .filter_map(|a| vendor(a.vendor_id).map(|v| (v, a)))
         .min_by_key(|(v, _)| *v)?;
+    if !backend_gpus().is_empty() {
+        return None;
+    }
     let generic = adapter.name.trim().is_empty() || adapter.name.starts_with("Microsoft ");
     Some(DriverNotice { gpu: (!generic).then(|| adapter.name.trim().to_string()), vendor, driver_url: driver_page(vendor) })
 }

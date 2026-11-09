@@ -97,37 +97,56 @@ mod driver_notice {
         assert_eq!(driver_page(Vendor::Other), None);
     }
 
+    fn none() -> Vec<crate::compute::Gpu> {
+        Vec::new()
+    }
+
+    fn never() -> Vec<crate::compute::Gpu> {
+        panic!("llama.cpp must not be started")
+    }
+
+    /// The rule: local chat model × graphics unit through Vulkan or not (regression: a hosted
+    /// model never gets the notice and never starts llama.cpp).
+    #[test]
+    fn notice_only_for_a_local_chat_model_without_vulkan() {
+        let card = [adapter("NVIDIA GeForce RTX 4070", r"PCI\VEN_10DE&DEV_2786")];
+        let works = || vec![gpu("NVIDIA GeForce RTX 4070", false)];
+        assert!(notice(true, &card, none).is_some(), "local, no Vulkan");
+        assert_eq!(notice(true, &card, works), None, "local, Vulkan works");
+        assert_eq!(notice(false, &card, never), None, "hosted, no Vulkan");
+        assert_eq!(notice(false, &card, never), None, "hosted, Vulkan works");
+        // No card at all: llama.cpp is not asked either.
+        assert_eq!(notice(true, &[], never), None);
+    }
+
     #[test]
     fn a_card_without_vulkan_gets_the_notice() {
         let card = [adapter("NVIDIA GeForce RTX 4070", r"PCI\VEN_10DE&DEV_2786")];
-        let n = notice(&[], &card).expect("notice");
+        let n = notice(true, &card, none).expect("notice");
         assert_eq!(n.gpu.as_deref(), Some("NVIDIA GeForce RTX 4070"));
         assert_eq!(n.vendor, Vendor::Nvidia);
         assert_eq!(n.driver_url, driver_page(Vendor::Nvidia));
-        // The card already works through Vulkan: nothing to say.
-        assert_eq!(notice(&[gpu("NVIDIA GeForce RTX 4070", false)], &card), None);
     }
 
     #[test]
     fn a_card_without_any_driver_is_named_by_its_maker() {
         let basic = [adapter("Microsoft Basic Display Adapter", r"PCI\VEN_1002&DEV_744C")];
-        let n = notice(&[], &basic).expect("notice");
+        let n = notice(true, &basic, none).expect("notice");
         assert_eq!((n.gpu, n.vendor), (None, Vendor::Amd));
     }
 
     #[test]
     fn no_card_virtual_or_server_chips_give_no_notice() {
-        assert_eq!(notice(&[], &[]), None);
         let vm = [adapter("Microsoft Hyper-V Video", r"PCI\VEN_1414&DEV_5353"), adapter("ASPEED Graphics Family", r"PCI\VEN_1A03&DEV_2000")];
-        assert_eq!(notice(&[], &vm), None);
+        assert_eq!(notice(true, &vm, never), None);
     }
 
     #[test]
     fn dedicated_maker_first_unknown_maker_without_link() {
         let both = [adapter("Intel(R) UHD Graphics 770", r"PCI\VEN_8086&DEV_4680"), adapter("AMD Radeon RX 7900 XTX", r"PCI\VEN_1002&DEV_744C")];
-        assert_eq!(notice(&[], &both).map(|n| n.vendor), Some(Vendor::Amd));
+        assert_eq!(notice(true, &both, none).map(|n| n.vendor), Some(Vendor::Amd));
         let other = [adapter("Some Graphics", r"PCI\VEN_5143&DEV_0001")];
-        let n = notice(&[], &other).expect("notice");
+        let n = notice(true, &other, none).expect("notice");
         assert_eq!((n.vendor, n.driver_url), (Vendor::Other, None));
     }
 }
