@@ -17,11 +17,14 @@
 //! Unix — the test names every system that must answer). The parsers are separate so they are
 //! unit-testable.
 //!
-//! [`gpu_dedicated_used_bytes`] (Windows): dedicated graphics memory all programs use now, from the
-//! performance counter `\GPU Adapter Memory(*)\Dedicated Usage` (the largest adapter). Needed because
+//! [`gpu_dedicated_use`] (Windows): dedicated graphics memory in use now on the adapter that uses
+//! most, by all programs (`\GPU Adapter Memory(*)\Dedicated Usage`) and by this process
+//! (`\GPU Process Memory(pid_<pid>_<adapter>)\Dedicated Usage`), read in one sample. Needed because
 //! Vulkan's memory budget on Windows (AMD, measured) does not shrink when another program holds the card:
-//! with 7.2 GiB taken by a second model llama.cpp still reported the card as free. Elsewhere `None`
-//! (Metal and Linux Vulkan budgets see the others; Apple shares main memory).
+//! with 7.2 GiB taken by a second model llama.cpp still reported the card as free. [`foreign_gpu_use`]
+//! (pure) turns it into what other programs hold and the backend misses — never this process's own
+//! memory, also not while the driver still books a model just freed. Elsewhere `None` (Metal and
+//! Linux Vulkan budgets see the others; Apple shares main memory).
 
 
 /// Parse the `MemTotal:` line of `/proc/meminfo` (value in kB) into bytes.
@@ -147,29 +150,55 @@ pub fn available_bytes() -> Option<u64> {
     None
 }
 
-/// Dedicated graphics memory all programs use now, largest adapter (Windows; see the module comment).
+/// Dedicated graphics memory in use on one adapter: by every program, and by this process.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuUse {
+    pub all: u64,
+    pub own: u64,
+}
+
+/// What other programs hold on a card that a backend reporting `reported_free` of `total` bytes
+/// counts as free: the backend's free beyond what the system leaves free (`total − all`), at most
+/// what the system books for other programs (`all − own`). The cap keeps this process's memory
+/// out of it: a model just freed leaves the backend's count at once, the system counter (process
+/// and adapter alike) a moment later or once the driver gives back its pool.
+pub fn foreign_gpu_use(reported_free: u64, total: u64, used: GpuUse) -> u64 {
+    let missed = reported_free.saturating_sub(total.saturating_sub(used.all));
+    missed.min(used.all.saturating_sub(used.own))
+}
+
+/// [`GpuUse`] from the instances of the two counters (name, bytes): the adapter that uses most,
+/// and the instances of process `pid` on it (`pid_<pid>_<adapter instance>`). `None` without an
+/// adapter.
+pub fn pick_gpu_use(adapters: &[(String, u64)], processes: &[(String, u64)], pid: u32) -> Option<GpuUse> {
+    let (adapter, all) = adapters.iter().max_by_key(|(_, b)| *b)?;
+    let prefix = format!("pid_{pid}_");
+    let own = processes
+        .iter()
+        .filter(|(name, _)| name.strip_prefix(&prefix) == Some(adapter.as_str()))
+        .map(|(_, b)| *b)
+        .sum::<u64>();
+    Some(GpuUse { all: *all, own: own.min(*all) })
+}
+
+/// Dedicated graphics memory in use now, by all programs and by this process (Windows; see the
+/// module comment).
 #[cfg(windows)]
-pub fn gpu_dedicated_used_bytes() -> Option<u64> {
+pub fn gpu_dedicated_use() -> Option<GpuUse> {
     use windows_sys::Win32::System::Performance::{
         PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
-        PDH_FMT_LARGE, PDH_MORE_DATA,
+        PDH_FMT_LARGE, PDH_HCOUNTER, PDH_MORE_DATA,
     };
-    let path: Vec<u16> = "\\GPU Adapter Memory(*)\\Dedicated Usage\0".encode_utf16().collect();
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let adapter_path = wide("\\GPU Adapter Memory(*)\\Dedicated Usage");
+    let process_path = wide("\\GPU Process Memory(*)\\Dedicated Usage");
     let mut query = std::ptr::null_mut();
     // SAFETY: out-pointers to locals; the query is closed below on every path.
     if unsafe { windows_sys::Win32::System::Performance::PdhOpenQueryW(std::ptr::null(), 0, &mut query) } != 0 {
         return None;
     }
-    let used = (|| {
-        let mut counter = std::ptr::null_mut();
-        // SAFETY: `query` is open, `path` NUL-terminated UTF-16, `counter` a local.
-        if unsafe { PdhAddEnglishCounterW(query, path.as_ptr(), 0, &mut counter) } != 0 {
-            return None;
-        }
-        // SAFETY: as above.
-        if unsafe { PdhCollectQueryData(query) } != 0 {
-            return None;
-        }
+    // Every instance of one counter as (name, bytes), from the sample collected last.
+    let read = |counter: PDH_HCOUNTER| -> Option<Vec<(String, u64)>> {
         let (mut size, mut count) = (0u32, 0u32);
         // SAFETY: size query with a null buffer, as documented.
         if unsafe { PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, std::ptr::null_mut()) } != PDH_MORE_DATA {
@@ -181,8 +210,32 @@ pub fn gpu_dedicated_used_bytes() -> Option<u64> {
         if unsafe { PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, buf.as_mut_ptr()) } != 0 {
             return None;
         }
-        // SAFETY: PDH_FMT_LARGE fills `largeValue` of every item it returns.
-        buf.iter().take(count as usize).map(|i| unsafe { i.FmtValue.Anonymous.largeValue }).max().and_then(|v| u64::try_from(v).ok())
+        let items = buf.iter().take(count as usize).map(|i| {
+            // SAFETY: `szName` points to a NUL-terminated name inside `buf` (PDH puts the names
+            // after the items); PDH_FMT_LARGE fills `largeValue` of every item it returns.
+            let name = unsafe {
+                let len = (0..).take_while(|&n| *i.szName.add(n) != 0).count();
+                String::from_utf16_lossy(std::slice::from_raw_parts(i.szName, len))
+            };
+            (name, u64::try_from(unsafe { i.FmtValue.Anonymous.largeValue }).unwrap_or(0))
+        });
+        Some(items.collect())
+    };
+    let used = (|| {
+        let (mut adapter, mut process) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: `query` is open, the paths NUL-terminated UTF-16, the counters locals.
+        if unsafe { PdhAddEnglishCounterW(query, adapter_path.as_ptr(), 0, &mut adapter) } != 0 {
+            return None;
+        }
+        // Without the process counter (older Windows) the own share stays unknown: 0.
+        // SAFETY: as above.
+        let with_process = unsafe { PdhAddEnglishCounterW(query, process_path.as_ptr(), 0, &mut process) } == 0;
+        // SAFETY: as above; one sample for both counters.
+        if unsafe { PdhCollectQueryData(query) } != 0 {
+            return None;
+        }
+        let processes = if with_process { read(process).unwrap_or_default() } else { Vec::new() };
+        pick_gpu_use(&read(adapter)?, &processes, std::process::id())
     })();
     // SAFETY: closes the query opened above.
     unsafe { PdhCloseQuery(query) };
@@ -190,7 +243,7 @@ pub fn gpu_dedicated_used_bytes() -> Option<u64> {
 }
 
 #[cfg(not(windows))]
-pub fn gpu_dedicated_used_bytes() -> Option<u64> {
+pub fn gpu_dedicated_use() -> Option<GpuUse> {
     None
 }
 
@@ -245,13 +298,58 @@ mod tests {
 
     #[test]
     fn graphics_memory_in_use_is_known_on_windows_only() {
-        let used = gpu_dedicated_used_bytes();
+        let used = gpu_dedicated_use();
         if cfg!(windows) {
             // The counter exists on every Windows 10/11 with a display driver (the build PC has one).
-            assert!(used.is_some());
+            let u = used.unwrap();
+            assert!(u.own <= u.all);
         } else {
             assert_eq!(used, None, "Metal and Linux Vulkan budgets already count other programs");
         }
+    }
+
+    const GIB: u64 = 1 << 30;
+
+    /// The PC's card (24 GiB, Vulkan counts only this process's memory as used).
+    #[test]
+    fn foreign_use_is_what_other_programs_hold() {
+        let total = 24 * GIB;
+        // A second model of 7 GiB in another program, nothing of ours: Vulkan says all free.
+        assert_eq!(foreign_gpu_use(total, total, GpuUse { all: 8 * GIB, own: 0 }), 8 * GIB);
+        // Our model of 21 GiB and 1 GiB of desktop: Vulkan already counts ours; only the desktop is foreign.
+        assert_eq!(foreign_gpu_use(3 * GIB, total, GpuUse { all: 22 * GIB, own: 21 * GIB }), GIB);
+        // Nothing foreign: never below 0.
+        assert_eq!(foreign_gpu_use(4 * GIB, total, GpuUse { all: 20 * GIB, own: 20 * GIB }), 0);
+    }
+
+    /// Regression (model switch MoE → 27B, PC): right after our 21 GiB model was freed Vulkan reports
+    /// the card free while the system counter still books it to this process. Our own memory must
+    /// not count as another program's, or the next model lands on the CPU.
+    #[test]
+    fn own_memory_just_freed_is_never_foreign() {
+        let total = 24 * GIB;
+        let stale = GpuUse { all: 22 * GIB, own: 21 * GIB };
+        assert_eq!(foreign_gpu_use(total, total, stale), GIB);
+        // Without the cap (backend free − system free) it would have been 22 GiB.
+        assert_eq!(total - (total - stale.all), 22 * GIB);
+    }
+
+    #[test]
+    fn own_use_is_read_on_the_adapter_that_uses_most() {
+        let card = "luid_0x00000000_0x0000D1B4_phys_0".to_string();
+        let igpu = "luid_0x00000000_0x0000E2C1_phys_0".to_string();
+        let adapters = vec![(igpu.clone(), GIB / 4), (card.clone(), 22 * GIB)];
+        let processes = vec![
+            (format!("pid_4711_{card}"), 21 * GIB),
+            (format!("pid_4711_{igpu}"), GIB / 8),
+            (format!("pid_99_{card}"), GIB),
+            // Another pid that starts with ours.
+            (format!("pid_47110_{card}"), GIB / 2),
+        ];
+        assert_eq!(pick_gpu_use(&adapters, &processes, 4711), Some(GpuUse { all: 22 * GIB, own: 21 * GIB }));
+        // Unknown own share (no process counter): 0, the old reading.
+        assert_eq!(pick_gpu_use(&adapters, &[], 4711), Some(GpuUse { all: 22 * GIB, own: 0 }));
+        assert_eq!(pick_gpu_use(&[], &processes, 4711), None);
     }
 
     /// Every system the app ships on must answer both queries (no silent "unknown").

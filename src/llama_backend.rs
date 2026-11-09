@@ -224,18 +224,19 @@ pub fn gpu_margin() -> u64 {
     GPU_MARGIN + hidden_gpu_use()
 }
 
-/// Memory of the largest dedicated card that other programs hold but llama.cpp counts as free:
-/// its free minus (total − what all programs use, `device_memory::gpu_dedicated_used_bytes`). Only
-/// Windows reports the latter; 0 elsewhere and without a dedicated card.
+/// Memory of the largest dedicated card that other programs hold but llama.cpp counts as free
+/// (`device_memory::foreign_gpu_use` over the system counter, `gpu_dedicated_use`): never this
+/// process's own, so a model just freed for the next one does not count against it. Only Windows
+/// reports the counter; 0 elsewhere and without a dedicated card.
 fn hidden_gpu_use() -> u64 {
-    let Some(used) = crate::device_memory::gpu_dedicated_used_bytes() else { return 0 };
+    let Some(used) = crate::device_memory::gpu_dedicated_use() else { return 0 };
     if cfg!(feature = "gguf-metal") || backend().is_err() {
         return 0;
     }
     dedicated_cards()
         .into_iter()
         .max_by_key(|&(_, total)| total)
-        .map_or(0, |(free, total)| free.saturating_sub(total.saturating_sub(used)))
+        .map_or(0, |(free, total)| crate::device_memory::foreign_gpu_use(free, total, used))
 }
 
 #[cfg(test)]
