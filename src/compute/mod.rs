@@ -14,7 +14,10 @@
 //!
 //! [`judge`] errs towards the CPU: a failed or deviating graphics run, or a gain below
 //! [`MIN_SPEEDUP`] (noise, other load, power saving), keeps the CPU.
+//!
+//! A graphics card the system shows but llama.cpp cannot use (no Vulkan driver): [`driver`].
 
+pub mod driver;
 #[cfg(test)]
 mod tests;
 

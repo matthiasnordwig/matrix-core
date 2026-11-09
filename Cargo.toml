@@ -69,9 +69,10 @@ llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false }
 # to before the split while letting Linux type-check without the coreml feature.
 # Windows: the device's physical memory and the graphics memory every program uses (`device_memory.rs`,
 # every build) and, with
-# gguf-vulkan, the graphics driver's version from the registry (`compute::driver_version`).
+# gguf-vulkan, the graphics driver's version from the registry (`compute::driver_version`) and the
+# display devices present (`compute::driver`, SetupAPI).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Performance"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_Devices_DeviceAndDriverInstallation"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # Memory queries of `device_memory.rs` (sysctl, host_statistics64, os_proc_available_memory).
