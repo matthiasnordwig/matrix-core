@@ -377,15 +377,15 @@ impl GgufEngine {
         // no-break space in "z. B.") can be split across two tokens, and decoding each
         // piece on its own turned it into U+FFFD pairs.
         let mut output: Vec<u8> = Vec::new();
-        for _ in 0..max_tokens {
+        let hit_limit = super::generation::write_until_limit(max_tokens, || {
             if stopped() {
                 return Err("cancelled".to_string());
             }
             let next_token = chain.sample(ctx, batch.n_tokens() - 1);
-            
+
             // Check EOS/EOG (handles ChatML <|im_end|>, Llama <|eot_id|>, etc automatically)
             if self.model.is_eog_token(next_token) {
-                break;
+                return Ok(false);
             }
 
             chain.accept(next_token);
@@ -400,12 +400,13 @@ impl GgufEngine {
 
             ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
             memory.tokens.push(next_token);
-        }
+            Ok(true)
+        })?;
 
         let (answer_tokens, answer_secs) = (n_past as usize - tokens.len(), started.elapsed().as_secs_f64() - read);
-        eprintln!("gguf: prompt {} tokens ({keep} kept from earlier calls) read in {read:.2} s, answer {answer_tokens} tokens in {answer_secs:.2} s", tokens.len());
+        eprintln!("gguf: prompt {} tokens ({keep} kept from earlier calls) read in {read:.2} s, answer {answer_tokens} tokens in {answer_secs:.2} s{}", tokens.len(), if hit_limit { " (stopped at the answer limit)" } else { "" });
         // gpt-oss: only the Harmony `final` channel is the answer.
         let text = super::chat_text::harmony_final(&String::from_utf8_lossy(&output))?;
-        Ok(Generation { text, prompt_tokens: tokens.len(), kept_tokens: keep, prompt_secs: read, answer_tokens, answer_secs })
+        Ok(Generation { text, prompt_tokens: tokens.len(), kept_tokens: keep, prompt_secs: read, answer_tokens, answer_secs, hit_limit })
     }
 }

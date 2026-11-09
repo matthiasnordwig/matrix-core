@@ -200,7 +200,7 @@ fn sampler_seed_is_1337_unless_the_variable_holds_a_number() {
 
 // --- generation ---------------------------------------------------------------
 
-use super::generation::{per_second, Generation};
+use super::generation::{per_second, write_until_limit, Generation};
 
 #[test]
 fn read_tokens_leave_out_the_kept_ones() {
@@ -214,4 +214,24 @@ fn per_second_needs_time_and_tokens() {
     assert_eq!(per_second(1000.0, 2.0), Some(500.0));
     assert_eq!(per_second(1000.0, 0.0), None);
     assert_eq!(per_second(0.0, 2.0), None);
+}
+
+#[test]
+fn writing_until_the_budget_runs_out_is_a_cut_off_answer() {
+    let mut calls = 0;
+    assert_eq!(write_until_limit(4, || { calls += 1; Ok(true) }), Ok(true), "model still writing at the limit");
+    assert_eq!(calls, 4, "never more than max_tokens tokens");
+    assert!(!Generation::default().hit_limit, "a plain Generation is not cut off");
+}
+
+#[test]
+fn an_end_of_turn_inside_the_budget_is_a_finished_answer() {
+    let mut calls = 0;
+    assert_eq!(write_until_limit(4, || { calls += 1; Ok(calls < 3) }), Ok(false));
+    assert_eq!(calls, 3, "stops at the end-of-turn token");
+    // End-of-turn on the very last allowed step: the model finished, nothing was cut.
+    let mut n = 0;
+    assert_eq!(write_until_limit(3, || { n += 1; Ok(n < 3) }), Ok(false));
+    // An error (cancel, decode failure) wins over both.
+    assert_eq!(write_until_limit(4, || Err("cancelled".to_string())), Err("cancelled".to_string()));
 }

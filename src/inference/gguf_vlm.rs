@@ -11,7 +11,7 @@
 //! a context sized to prompt + answer (`vlm_prompt::context_for`, KV cache
 //! type from the endpoint's `kv_quantization`) → `eval_chunks` (image encoder + decode) → greedy generation up to
 //! `max_tokens` (the endpoint's Output Reserve). The answer reports whether it
-//! hit that limit; the caller turns a cut-off answer into an error.
+//! hit that limit (`generation::write_until_limit`, shared with the chat engine); the caller turns a cut-off answer into an error.
 //!
 //! Uses the process-global llama.cpp backend (`crate::llama_backend`). Model
 //! and projector are loaded once per engine; every call builds a fresh
@@ -139,10 +139,10 @@ impl GgufVisionEngine {
         let mut out = Vec::<u8>::new();
         let mut step = LlamaBatch::new(1, 1);
         let mut idx = -1;
-        for _ in 0..max_tokens {
+        let hit_limit = super::generation::write_until_limit(max_tokens, || {
             let tok = sampler.sample(&ctx, idx);
             if self.model.is_eog_token(tok) {
-                return Ok(VisionAnswer { text: String::from_utf8_lossy(&out).into_owned(), hit_limit: false });
+                return Ok(false);
             }
             if let Ok(bytes) = self.model.token_to_piece_bytes(tok, 128, true, None) {
                 out.extend_from_slice(&bytes);
@@ -152,7 +152,8 @@ impl GgufVisionEngine {
             n_past += 1;
             ctx.decode(&mut step).map_err(|e| format!("decode: {e}"))?;
             idx = 0;
-        }
-        Ok(VisionAnswer { text: String::from_utf8_lossy(&out).into_owned(), hit_limit: true })
+            Ok(true)
+        })?;
+        Ok(VisionAnswer { text: String::from_utf8_lossy(&out).into_owned(), hit_limit })
     }
 }
