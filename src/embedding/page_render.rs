@@ -9,6 +9,8 @@
 //! [`PageRenderer`] renders single pages on demand at any resolution (OCR of
 //! scanned pages in the app's ingest).
 //! `examples/page_stats.rs` prints the same measurements as a table.
+//! Whether the system has any font at all ([`system_fonts_present`]) decides
+//! `PageInput::glyphs_as_boxes` (page_select.rs, item 1).
 
 use pdf_oxide::elements::PathOperation;
 use pdf_oxide::rendering::{render_page, RenderOptions};
@@ -41,6 +43,18 @@ fn to_box(r: &pdf_oxide::geometry::Rect) -> BoxPt {
 /// Run `f`, turning a panic inside pdf_oxide into `None`.
 fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok().flatten()
+}
+
+/// Whether the system has any font for text a PDF does not embed. pdf_oxide reads
+/// the same system fonts (`fontdb::Database::load_system_fonts`); without one it
+/// draws such glyphs as filled boxes. Looked up once per process.
+fn system_fonts_present() -> bool {
+    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        !db.is_empty()
+    })
 }
 
 /// Measurements of one page (0-based `idx`); `None` if it cannot be rendered.
@@ -81,6 +95,7 @@ pub fn measure_page(doc: &PdfDocument, idx: usize) -> Option<PageStats> {
             chars: &chars,
             paths: &paths,
             images: &images,
+            glyphs_as_boxes: !system_fonts_present(),
         }))
     })
 }

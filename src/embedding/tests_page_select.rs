@@ -18,7 +18,7 @@ fn fill(buf: &mut [u8], w: usize, x0: usize, x1: usize, y0: usize, y1: usize, rg
 
 fn input<'a>(rgba: &'a [u8], w: usize, h: usize, chars: &'a [BoxPt], paths: &'a [PathInfo], images: &'a [BoxPt]) -> PageInput<'a> {
     // 1 px = 1 pt keeps the coordinates readable.
-    PageInput { rgba, width: w, height: h, page_w: w as f32, page_h: h as f32, chars, paths, images }
+    PageInput { rgba, width: w, height: h, page_w: w as f32, page_h: h as f32, chars, paths, images, glyphs_as_boxes: false }
 }
 
 #[test]
@@ -42,6 +42,19 @@ fn solid_bar_outside_text_makes_a_graphics_page_but_not_inside_text() {
     let s = page_stats(&input(&buf, 100, 100, &chars, &[], &[]));
     assert_eq!(s.solid, 0.0);
     assert!(!s.is_graphics_page());
+}
+
+#[test]
+fn without_system_fonts_solid_is_not_measured_but_curves_still_count() {
+    let mut buf = white(100, 100);
+    // Glyph boxes drawn past the character boxes look like a solid bar.
+    fill(&mut buf, 100, 40, 50, 40, 50, [20, 20, 20]);
+    let boxes = PageInput { glyphs_as_boxes: true, ..input(&buf, 100, 100, &[], &[], &[]) };
+    let s = page_stats(&boxes);
+    assert_eq!(s.solid, 0.0);
+    assert!(!s.is_graphics_page());
+    let pie = [PathInfo { bbox: BoxPt { x: 10.0, y: 10.0, width: 30.0, height: 30.0 }, ops: vec![PathOp::CurveTo; 24], dark_fill: true }];
+    assert!(page_stats(&PageInput { glyphs_as_boxes: true, ..input(&buf, 100, 100, &[], &pie, &[]) }).is_graphics_page());
 }
 
 #[test]

@@ -13,6 +13,12 @@
 //!    reports (all charts/org charts found except one line-only matrix, no
 //!    table page; title/photo pages come along). The remaining columns
 //!    (`ink`, `color`, `fills`, …) are only reported by `examples/page_stats.rs`.
+//!    Without any system font (slim Linux containers, servers) the renderer draws
+//!    every glyph of a non-embedded font as a filled box, wider than its character
+//!    box, so `solid` would make every text page a graphics page: there
+//!    ([`PageInput::glyphs_as_boxes`]) `solid` is not measured (0) and the rule
+//!    rests on `diag`, `curves` and `img_area` — a chart drawn only from filled
+//!    areas is then missed.
 //! 2. **Page offsets after text repair** ([`repair_with_page_starts`]): the
 //!    ingest repairs `pdf_extract` text line by line; page starts recorded in
 //!    the raw text are carried over line-wise (a start inside a line rounds to
@@ -62,6 +68,8 @@ pub struct PageInput<'a> {
     pub chars: &'a [BoxPt],
     pub paths: &'a [PathInfo],
     pub images: &'a [BoxPt],
+    /// The render drew text as filled boxes (no system font to draw it with): `solid` stays 0.
+    pub glyphs_as_boxes: bool,
 }
 
 /// Per-page measurements; see the module header for the rule columns.
@@ -209,7 +217,7 @@ pub fn page_stats(p: &PageInput<'_>) -> PageStats {
         ink_free: frac(ink_free),
         color: frac(color),
         color_free: frac(color_free),
-        solid: frac(solid),
+        solid: if p.glyphs_as_boxes { 0.0 } else { frac(solid) },
         paths,
         curves,
         fills,

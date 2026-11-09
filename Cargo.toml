@@ -21,8 +21,9 @@ onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:image"]
 onnx-download = ["onnx", "ort/download-binaries", "ort/tls-rustls"]
 # Render PDF pages to images (pdf_oxide + tiny-skia, pure Rust): graphics-page
 # selection + JPEG page images (`embedding/page_render.rs`), used by the app's
-# ingest and `examples/{image_probe,page_stats}.rs`.
-pdf-render = ["pdf_oxide/rendering"]
+# ingest and `examples/{image_probe,page_stats}.rs`. `fontdb` (already in the graph
+# through pdf_oxide's renderer) only tells whether the system has any font at all.
+pdf-render = ["pdf_oxide/rendering", "dep:fontdb"]
 # `gguf` also builds llama.cpp's multimodal library (mtmd: image input for
 # local vision models, `inference/gguf_vlm.rs`) — it builds on every target
 # that builds llama.cpp (macOS, iOS device, iOS simulator), so no extra feature.
@@ -47,6 +48,7 @@ regex = "1"
 chacha20poly1305 = "0.10.1"
 base64 = "0.22"
 pdf_oxide = "0.3.60"
+fontdb = { version = "0.23", optional = true }
 # Base `ort` (all targets): CPU EP only, no CoreML. On Linux x86_64 the CoreML
 # EP is apple-only and won't build, so it is added back below *only* on apple
 # targets. Cargo unifies the two entries: apple → coreml+ndarray (unchanged from
