@@ -1,5 +1,6 @@
 //! Row types of a grid run's history entry (`grid_chat_results` grouped by
-//! run, plus its once-per-run `grid_run_meta` row). Split from `models.rs`
+//! run, plus its once-per-run `grid_run_meta` row) and a collection's stamp in the
+//! key of the Tables search memory (`grid_search_cache.rs`). Split from `models.rs`
 //! (which re-exports them) to keep that file under its size cap.
 
 use serde::{Deserialize, Serialize};
@@ -46,4 +47,13 @@ pub struct GridRunMeta {
     pub json_schema: Option<String>,
     #[serde(flatten)]
     pub info: GridRunInfo,
+}
+
+/// A collection's part of the key of the Tables search memory (schema_v80): its id,
+/// `contexts.search_version` and embedding model (`grid_search_cache.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SearchStamp {
+    pub context_id: i64,
+    pub search_version: i64,
+    pub embedding_model_id: Option<i64>,
 }

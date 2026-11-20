@@ -6,14 +6,15 @@ use super::Database;
 
 #[test]
 fn local_models_start_on_automatic_and_the_chat_budget_setting_goes() {
-    let mut db = Database::open_in_memory().unwrap();
+    let db = Database::open_in_memory().unwrap();
     let local = seed_endpoint(&db, "Local", "gguf");
     let hosted = seed_endpoint(&db, "Hosted", "openai");
     db.set_setting("chat_tool_call_budget_default", &5).unwrap();
     db.set_setting("grid_tool_call_budget_default", &4).unwrap();
-    // Back to v77 with the rows above, then the migration runs as on an existing install.
-    db.conn.pragma_update(None, "user_version", 77).unwrap();
-    Database::migrate(&mut db.conn).unwrap();
+    // v78 and v79 run again over the rows above, as on an existing install (later migrations are
+    // not idempotent, so only these two).
+    db.conn.execute_batch(super::MIGRATIONS[77]).unwrap();
+    db.conn.execute_batch(super::MIGRATIONS[78]).unwrap();
 
     let window = |id| db.llm_endpoint(id).unwrap().unwrap().context_window;
     assert_eq!((window(local), window(hosted)), (0, 8192));

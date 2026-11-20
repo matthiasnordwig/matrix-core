@@ -40,6 +40,7 @@ mod paragraph_vectors;
 mod paragraph_vectors_tests;
 mod fts;
 mod grid;
+mod grid_search_cache;
 mod structural_profiles;
 mod grid_profiles;
 mod reasoning_lists;
@@ -248,6 +249,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v77.sql"),
     include_str!("schema_v78.sql"),
     include_str!("schema_v79.sql"),
+    include_str!("schema_v80.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -356,6 +358,8 @@ mod tests;
 mod grid_run_info_tests;
 #[cfg(test)]
 mod grid_cell_sources_tests;
+#[cfg(test)]
+mod grid_search_cache_tests;
 #[cfg(test)]
 mod fts_tests;
 #[cfg(test)]
