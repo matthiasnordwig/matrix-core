@@ -142,12 +142,18 @@ pub fn lines_from_rows(rows: &[ScanRow], body_h: f64) -> Vec<PageLine> {
         .collect()
 }
 
-/// Whether the rows are written right to left: more than half of their letters are Hebrew,
-/// Arabic or related (no shared script helper exists; the ranges are those of
-/// `token_estimate.rs` plus the presentation forms).
+/// Whether the rows are written right to left (see [`is_rtl_text`]).
 fn is_rtl(rows: &[ScanRow]) -> bool {
+    is_rtl_text(rows.iter().map(|r| r.text.as_str()))
+}
+
+/// Whether `texts` are written right to left: more than half of their letters are Hebrew,
+/// Arabic or related (no shared script helper exists; the ranges are those of
+/// `token_estimate.rs` plus the presentation forms). Also decides the box order inside a row
+/// while the rows are built (`ingest/ocr`).
+pub fn is_rtl_text<'a>(texts: impl IntoIterator<Item = &'a str>) -> bool {
     let (mut rtl, mut all) = (0usize, 0usize);
-    for c in rows.iter().flat_map(|r| r.text.chars()).filter(|c| c.is_alphabetic()) {
+    for c in texts.into_iter().flat_map(str::chars).filter(|c| c.is_alphabetic()) {
         all += 1;
         rtl += usize::from(matches!(c as u32, 0x590..=0x8FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF));
     }
