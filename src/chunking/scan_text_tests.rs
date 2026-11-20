@@ -8,7 +8,7 @@ fn pl(text: &str, gap: bool) -> PageLine {
 }
 
 fn row(text: &str, left: f64, top: f64, width: f64, height: f64) -> ScanRow {
-    ScanRow { text: text.into(), left, right: left + width, top, bottom: top + height, height }
+    ScanRow { text: text.into(), left, right: left + width, top, bottom: top + height, height, ..Default::default() }
 }
 
 #[test]
@@ -211,4 +211,28 @@ fn right_to_left_text_has_its_start_edge_on_the_right() {
     // The same geometry mirrored with Latin letters is left to right: no indent at 0 and 5 from the left.
     let ltr: Vec<ScanRow> = rows.iter().map(|r| ScanRow { text: "Text".into(), ..r.clone() }).collect();
     assert!(!lines_from_rows(&ltr, 0.03)[0].indent);
+}
+
+#[test]
+fn a_block_start_opens_a_paragraph_without_a_gap_and_a_title_is_a_heading() {
+    // Tightly set rows (no gap anywhere): only the engine's block starts and its title separate them.
+    let mut rows: Vec<ScanRow> = (0..5).map(|i| row(&format!("Zeile {i}"), 0.1, 0.1 + i as f64 * 0.03, 0.7, 0.03)).collect();
+    rows[0].kind = RowKind::Title;
+    rows[0].block_start = true; // first row of a page: never a gap above it
+    rows[2].block_start = true;
+    rows[3].kind = RowKind::ListItem;
+    rows[3].block_start = true;
+    let lines = lines_from_rows(&rows, 0.03);
+    let gaps: Vec<bool> = lines.iter().map(|l| l.gap).collect();
+    assert_eq!(gaps, vec![false, false, true, true, false]);
+    assert!(lines[0].heading && !lines[1].heading && !lines[3].heading, "{lines:?}");
+    let a = assemble(&[(1, lines)]);
+    assert_eq!(a.stored, "## Zeile 0\n\nZeile 1\n\nZeile 2\n\nZeile 3 Zeile 4");
+}
+
+#[test]
+fn without_kind_and_block_start_the_rows_read_as_before() {
+    let rows: Vec<ScanRow> = (0..4).map(|i| row(&format!("Zeile {i}"), 0.1, 0.1 + i as f64 * 0.03, 0.7, 0.03)).collect();
+    assert!(lines_from_rows(&rows, 0.03).iter().all(|l| !l.gap));
+    assert_eq!(ScanRow::default().kind, RowKind::Text);
 }
