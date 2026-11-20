@@ -10,8 +10,8 @@
 //! 2. [`clean_pages`]: lone page numbers ([`is_page_number`]) and running heads/feet (the same
 //!    line, digits ignored, at a page edge on at least a quarter of the pages, at least 3) go.
 //! 3. [`assemble`]: lines of a paragraph are joined ([`join_kind`]: end-of-line hyphen removed
-//!    or kept), a paragraph runs on over a page break unless the next page starts one; headings
-//!    become `## …` lines, paragraphs are separated by a blank line. The stored text has a
+//!    or kept; Chinese/Japanese lines meet without a space, [`joins_directly`]), a paragraph
+//!    runs on over a page break unless the next page starts one; headings become `## …` lines, paragraphs are separated by a blank line. The stored text has a
 //!    single `\n` only where a page break falls inside a paragraph, so every page start
 //!    (`Assembled::page_starts`) is a line start — the offsets [`ChunkPages`] needs.
 //!    [`chunk_view`] turns those single newlines into spaces (same byte length): the text the
@@ -32,6 +32,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::pages::ChunkPages;
+use crate::token_estimate::is_cjk;
 
 /// Revision of the scan text rules, stamped as `metadata.scan_rev` on chunks cut from an
 /// assembled scan run (absent = the old page-by-page OCR blocks).
@@ -41,7 +42,8 @@ pub const SCAN_REV: i64 = 1;
 pub const PARAGRAPH_GAP_LINES: f64 = 1.0;
 
 /// One text row of a page in reading order with its box, in TOP-left coordinates (0..1 of the
-/// image): `top`/`bottom` from the image top, `left`/`right` from its left edge, `height` the
+/// image; a page set in vertical columns arrives turned into its reading frame by `ingest/ocr`:
+/// each column is a row, the rightmost on top): `top`/`bottom` from the image top, `left`/`right` from its left edge, `height` the
 /// tallest box of the row. Columns of one row are joined with ` | ` in `text`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScanRow {
@@ -323,11 +325,23 @@ pub enum Join {
     Dehyphen,
     /// Hyphen kept, glued ("Nord-" + "Amerika").
     Glue,
+    /// Chinese/Japanese on both sides: no space (these scripts have none between words).
+    Direct,
     Space,
+}
+
+/// Whether text ending with `prev` and text starting with `next` meet without a space: both
+/// sides are Chinese/Japanese characters ([`is_cjk`]). Also used between the boxes of one row
+/// (`ingest/ocr`).
+pub fn joins_directly(prev: &str, next: &str) -> bool {
+    prev.trim_end().chars().next_back().is_some_and(is_cjk) && next.trim_start().chars().next().is_some_and(is_cjk)
 }
 
 /// How `next` continues a paragraph that ends with `prev`.
 pub fn join_kind(prev: &str, next: &str) -> Join {
+    if joins_directly(prev, next) {
+        return Join::Direct;
+    }
     let mut tail = prev.chars().rev();
     // '=' and '⸗': the double hyphen of older print.
     let (Some('-' | '¬' | '=' | '⸗'), Some(before)) = (tail.next(), tail.next()) else { return Join::Space };
@@ -404,7 +418,9 @@ pub fn assemble(pages: &[(i64, Vec<PageLine>)]) -> Assembled {
                     a.dehyphen_over_page += usize::from(i == 0);
                 }
                 Join::Glue => a.glued += 1,
-                Join::Space => text.push(' '),
+                Join::Direct if i > 0 => {}
+                // A page break becomes a '\n' in place of a space (`break_at`), also between CJK lines.
+                Join::Direct | Join::Space => text.push(' '),
             }
             if i == 0 {
                 mid_breaks.push((text.len(), *page));

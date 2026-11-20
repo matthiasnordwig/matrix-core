@@ -53,6 +53,17 @@ fn hyphens_at_line_ends_are_joined_by_the_next_word() {
 }
 
 #[test]
+fn chinese_and_japanese_lines_join_without_a_space_except_at_a_page_break() {
+    assert_eq!(join_kind("意味として開示される「いき」の會得の第", "一の任務として"), Join::Direct);
+    assert_eq!(join_kind("任務として、", "我々は"), Join::Direct);
+    assert_eq!(join_kind("意味 Matrix", "として"), Join::Space);
+    assert_eq!(join_kind("한국어", "문장"), Join::Space, "Korean puts spaces between words");
+    let a = assemble(&[(1, vec![pl("會得の第", true), pl("一の任務", false)]), (2, vec![pl("として", false)])]);
+    assert_eq!(a.stored, "會得の第一の任務\nとして");
+    assert_eq!(a.page_starts, vec![(0, 1), ("會得の第一の任務\n".len(), 2)]);
+}
+
+#[test]
 fn a_paragraph_runs_over_the_page_break_and_keeps_its_pages() {
     let pages = vec![
         (3, vec![pl("Erster Absatz endet.", true), pl("Der zweite beginnt mit der Kündi-", true)]),

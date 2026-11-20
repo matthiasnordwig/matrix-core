@@ -51,6 +51,12 @@ enum Kind {
     Hangul,
 }
 
+/// A Chinese/Japanese character (Han, kana, CJK and full-width punctuation): written without
+/// spaces between words. Hangul is not included (Korean puts spaces between words).
+pub fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3000..=0x30FF | 0x3400..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+}
+
 impl Kind {
     fn of(c: char) -> Kind {
         let o = c as u32;
@@ -63,7 +69,7 @@ impl Kind {
             0x370..=0x52F => Kind::Cyrillic,
             0x590..=0x8FF => Kind::Arabic,
             0x900..=0x109F => Kind::Abugida,
-            0x3000..=0x30FF | 0x3400..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF => Kind::Cjk,
+            _ if is_cjk(c) => Kind::Cjk,
             0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => Kind::Hangul,
             _ => Kind::Symbol,
         }
