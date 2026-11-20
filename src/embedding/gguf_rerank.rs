@@ -78,7 +78,7 @@ mod imp {
     use crate::{CoreError, Result};
 
     /// XLM-R effective max sequence ≈ 1024 (positions offset by 2). Truncate each
-    /// pair to fit; the caller already caps the doc snippet upstream (Phase 1).
+    /// pair to fit: the app feeds whole passages, so this is where a long one ends.
     const MAX_SEQ_LEN: usize = 1024;
 
     /// Process-global llama.cpp backend, shared with the LLM engine and the
@@ -123,11 +123,9 @@ mod imp {
             // runs the cls head and stores the single rank logit per sequence.
             // n_ubatch (physical micro-batch) must cover a full pair: `encode()`
             // hard-asserts `n_ubatch >= n_tokens`. Its default is 512, so a pair
-            // longer than 512 tokens (possible up to MAX_SEQ_LEN=1024 when the
-            // caller feeds long/uncapped doc text) would abort the process
-            // instead of scoring. Production caps doc text to 512 chars
-            // (RERANK_SNIPPET_CAP_CHARS) so pairs stay short, but sizing ubatch
-            // to n_ctx makes long pairs safe too. Mirrors `gguf_embed.rs`.
+            // longer than 512 tokens (up to MAX_SEQ_LEN=1024: the app feeds whole
+            // passages) would abort the process instead of scoring; sizing
+            // ubatch to n_ctx keeps long pairs safe. Mirrors `gguf_embed.rs`.
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(NonZeroU32::new(self.n_ctx))
                 .with_n_batch(self.n_ctx)
