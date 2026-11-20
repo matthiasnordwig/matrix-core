@@ -73,10 +73,11 @@ fn load_backend_dlls() {
 /// Metal all layers; Vulkan (`gguf-vulkan`) llama.cpp's default, all layers on the dedicated
 /// cards it found (an integrated unit only without one). CPU: no graphics device at all (an
 /// empty device list, else llama.cpp still hands single large operations to the card). The
-/// iOS Simulator is always CPU: its Metal runs llama.cpp's kernels wrongly (garbage, no error).
+/// iOS Simulator is always CPU: its Metal runs llama.cpp's kernels wrongly (garbage, no error);
+/// so is a macOS virtual machine (paravirtual graphics: llama.cpp crashes in Metal, see [`cpu_only_host`]).
 pub fn model_params_on(unit: Unit) -> LlamaModelParams {
     let params = LlamaModelParams::default().with_use_mmap(true);
-    if unit == Unit::Cpu || cfg!(all(target_os = "ios", target_abi = "sim")) {
+    if unit == Unit::Cpu || cpu_only_host(cfg!(all(target_os = "ios", target_abi = "sim")), in_virtual_machine()) {
         let params = params.with_n_gpu_layers(0);
         return params.with_devices(&[]).unwrap_or_else(|_| LlamaModelParams::default().with_use_mmap(true).with_n_gpu_layers(0));
     }
@@ -84,6 +85,34 @@ pub fn model_params_on(unit: Unit) -> LlamaModelParams {
         params.with_n_gpu_layers(999)
     } else {
         params
+    }
+}
+
+/// Hosts whose Metal cannot run llama.cpp: the iOS Simulator and any virtual machine.
+fn cpu_only_host(ios_simulator: bool, virtual_machine: bool) -> bool {
+    ios_simulator || virtual_machine
+}
+
+/// True inside a virtual machine (macOS: sysctl `kern.hv_vmm_present`, 1 in a guest); cached.
+/// Elsewhere false (Windows/Linux guests have no Metal path to protect).
+fn in_virtual_machine() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static VM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *VM.get_or_init(|| {
+            let mut value: libc::c_int = 0;
+            let mut size = std::mem::size_of::<libc::c_int>();
+            let name = c"kern.hv_vmm_present";
+            // SAFETY: `value`/`size` describe a valid c_int buffer; the name is NUL-terminated.
+            let rc = unsafe {
+                libc::sysctlbyname(name.as_ptr(), (&mut value as *mut libc::c_int).cast(), &mut size, std::ptr::null_mut(), 0)
+            };
+            rc == 0 && value == 1
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }
 
@@ -241,7 +270,14 @@ fn hidden_gpu_use() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::backend;
+    use super::{backend, cpu_only_host};
+
+    #[test]
+    fn simulator_and_vm_force_cpu() {
+        assert!(cpu_only_host(true, false));
+        assert!(cpu_only_host(false, true));
+        assert!(!cpu_only_host(false, false));
+    }
 
     /// Regression for `BackendAlreadyInitialized`: repeated calls — as issued
     /// by the LLM engine, embedder and reranker within one process — must all
