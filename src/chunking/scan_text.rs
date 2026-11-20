@@ -7,9 +7,6 @@
 //!    [`PARAGRAPH_GAP_LINES`] line heights or at an indented line; [`is_heading`] marks a row
 //!    much taller than the body text with space above it, an outline number ([`outline_start`])
 //!    opening a short line, or a short line without a sentence end with gaps above and below.
-//!    An engine that recognises the layout adds [`RowKind`] and `block_start` to its rows: the
-//!    first row of a paragraph, list item or table row starts a paragraph (not at the top of a
-//!    page), the engine's title is a heading.
 //! 2. [`clean_pages`]: lone page numbers ([`is_page_number`]) and running heads/feet (the same
 //!    line, digits ignored, at a page edge on at least a quarter of the pages, at least 3) go.
 //! 3. [`assemble`]: lines of a paragraph are joined ([`join_kind`]: end-of-line hyphen removed
@@ -43,26 +40,10 @@ pub const SCAN_REV: i64 = 1;
 /// Empty space between two rows, in line heights, above which a new paragraph starts.
 pub const PARAGRAPH_GAP_LINES: f64 = 1.0;
 
-/// How the recognition engine classed a row, when it classes rows at all (Apple's document
-/// recognition does; plain text engines leave everything [`RowKind::Text`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RowKind {
-    #[default]
-    Text,
-    /// The engine's title of the page: a heading whatever the geometry says.
-    Title,
-    /// First row of a list item (`- item`); further rows of the item are [`RowKind::Text`].
-    ListItem,
-    /// A table row, its cells joined with ` | `.
-    TableRow,
-}
-
 /// One text row of a page in reading order with its box, in TOP-left coordinates (0..1 of the
 /// image): `top`/`bottom` from the image top, `left`/`right` from its left edge, `height` the
-/// tallest box of the row. Columns of one row are joined with ` | ` in `text`. `kind` and
-/// `block_start` come from engines that recognise the layout (paragraph, list item, table row);
-/// `block_start` marks the first row of such a block and starts a paragraph like a gap does.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// tallest box of the row. Columns of one row are joined with ` | ` in `text`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScanRow {
     pub text: String,
     pub left: f64,
@@ -70,8 +51,6 @@ pub struct ScanRow {
     pub top: f64,
     pub bottom: f64,
     pub height: f64,
-    pub kind: RowKind,
-    pub block_start: bool,
 }
 
 /// One line of a page after recognition: its text and what the layout says about it.
@@ -156,11 +135,9 @@ pub fn lines_from_rows(rows: &[ScanRow], body_h: f64) -> Vec<PageLine> {
         .enumerate()
         .map(|(i, r)| PageLine {
             text: r.text.trim().to_string(),
-            // The first row of a page has no gap above it (a paragraph may run on from the page
-            // before), and for a block start the same holds: only the rules of `assemble` decide.
-            gap: i > 0 && (gap(&rows[i - 1], r) || r.block_start),
+            gap: i > 0 && gap(&rows[i - 1], r),
             indent: start_edge(r, rtl) - margin > INDENT_LINES * body_h,
-            heading: r.kind == RowKind::Title || is_heading(rows, i, body_h, full_w),
+            heading: is_heading(rows, i, body_h, full_w),
         })
         .collect()
 }
