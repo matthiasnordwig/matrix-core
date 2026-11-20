@@ -10,7 +10,10 @@
 //! `eval_runs/retrieval/images/ap0/README.md`): of the chunks of the hit's page
 //! (`page_select::chunks_for_page`), the one whose vector is most similar to
 //! the query. A chunk reached by several page images keeps its best rank;
-//! a page without a usable chunk drops out.
+//! a page without a usable chunk drops out. Scanned pages — the chosen chunk
+//! holds text recognised by OCR ([`is_scanned_text`]) — drop out too unless the
+//! caller keeps them (`FusionParams::img_scanned`): their text says what the page
+//! says, their image vectors only competed with it (`fusion.rs`).
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -23,8 +26,8 @@ use super::page_select::{chunks_for_page, ChunkSpan};
 
 impl Database {
     /// Best-first `(chunk_id, page_image_id)` list of up to `n` entries for
-    /// one context. Chunk positions are loaded at most once per document, and
-    /// only for documents that have an image hit.
+    /// one context (`scanned`: keep scanned pages). Chunk positions are loaded at
+    /// most once per document, and only for documents that have an image hit.
     pub(crate) fn image_ranked_chunks(
         &self,
         context_id: i64,
@@ -32,6 +35,7 @@ impl Database {
         qvec: &[f32],
         n: usize,
         doc_ids: Option<&[i64]>,
+        scanned: bool,
     ) -> Result<Vec<(i64, i64)>> {
         if matches!(doc_ids, Some(d) if d.is_empty()) {
             return Ok(Vec::new());
@@ -85,6 +89,17 @@ impl Database {
                 out.push((chunk_id, img.page_image_id));
             }
         }
+        if !scanned && !out.is_empty() {
+            let ids: Vec<i64> = out.iter().map(|(c, _)| *c).collect();
+            let scans: std::collections::HashSet<i64> =
+                self.chunks_by_ids(&ids)?.into_iter().filter(|c| is_scanned_text(&c.metadata)).map(|c| c.id).collect();
+            out.retain(|(c, _)| !scans.contains(c));
+        }
         Ok(out)
     }
+}
+
+/// Chunk metadata of text recognised from a scanned page (`"ocr": true`).
+pub(crate) fn is_scanned_text(metadata: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(metadata).ok().and_then(|m| m.get("ocr").and_then(|v| v.as_bool())) == Some(true)
 }

@@ -513,6 +513,8 @@ fn fusion_params_parse_and_defaults() {
     assert_eq!((d.cross_lang_fts, d.img_no_keyword), (0.0, 0.5));
     assert_eq!(FusionParams::parse("xw=1,iw=2"), FusionParams { cross_lang_fts: 1.0, img_no_keyword: 1.0, ..d });
     assert_eq!(FusionParams::parse("xw=0.25,iw=-1"), FusionParams { cross_lang_fts: 0.25, img_no_keyword: 0.0, ..d });
+    assert!(!d.img_scanned);
+    assert_eq!(FusionParams::parse("scan=1"), FusionParams { img_scanned: true, ..d });
 }
 
 #[test]

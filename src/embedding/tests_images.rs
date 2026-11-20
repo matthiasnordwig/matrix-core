@@ -2,7 +2,8 @@
 //! image vectors bit-identical to the two-list fusion; an image hit lifts the
 //! query-closest chunk of its page (structural `metadata.page` and LLM byte
 //! ranges); never compares image vectors of another model; honours the
-//! `doc_ids` scope, omitted chunks and the `img=0` switch; counts half without a keyword hit; the preview mark
+//! `doc_ids` scope, omitted chunks and the `img=0` switch; leaves scanned pages (OCR text) out unless
+//! `scan=1`; counts half without a keyword hit; the preview mark
 //! (`page_image_id`) only for an image rank within 30 % of the visible
 //! `preview_k` (the pure rule and provenance math: `tests_provenance.rs`).
 
@@ -357,4 +358,50 @@ fn preview_mark_needs_an_image_rank_within_30_percent_of_preview_k_but_ranks_sta
     assert_eq!(few.len(), 1);
     let same_as_k1 = get(1).into_iter().next().unwrap();
     assert_eq!((few[0].chunk_id, few[0].page_image_id), (same_as_k1.chunk_id, same_as_k1.page_image_id));
+}
+
+#[test]
+fn scanned_pages_stay_out_of_the_image_list_unless_kept() {
+    let db = Database::open_in_memory().unwrap();
+    let (m, ctx, doc, ids) = structural(&db);
+    // c4 (page 6, closer to Q than c3, which reaches page 6 too) is text recognised from a scan; page 2 (c0 and ca)
+    // comes from a text layer.
+    let scan = db
+        .create_chunk(&NewChunk {
+            context_id: ctx,
+            document_id: doc,
+            chunk_index: 5,
+            char_start: 50,
+            char_end: 60,
+            text: "abschnitt gescannt".into(),
+            signature: None,
+            is_omitted: false,
+            metadata: r#"{"section":"","page":6,"ocr":true}"#.into(),
+        })
+        .unwrap()
+        .id;
+    db.insert_embedding(&NewEmbedding { chunk_id: scan, context_id: ctx, document_id: doc, embedding_model_id: m, dim: 3, vector: vec![1.0, 0.1, 0.0] })
+        .unwrap();
+    add_page(&db, ctx, doc, 6, None, Some((m, &Q)));
+    let q = queries(m);
+    let image_rank = |hits: &[ScoredChunk], id: i64| hits.iter().find(|h| h.chunk_id == id).and_then(|h| h.provenance.image);
+    // Only the scanned page has an image vector: the result equals the fusion without images.
+    assert_eq!(bits(&run(&db, &[ctx], &q, None, &on())), bits(&run(&db, &[ctx], &q, None, &off())));
+    // A graphics page beside it still counts (on c0, its chunk closest to Q), and on rank 1 of the image list.
+    add_page(&db, ctx, doc, 2, None, Some((m, &[0.9, 0.1, 0.0])));
+    let got = run(&db, &[ctx], &q, None, &on());
+    assert_eq!(image_rank(&got, ids[0]).map(|i| i.rank), Some(1));
+    assert!(image_rank(&got, scan).is_none());
+    // `scan=1` keeps the scanned page (it is closer to the query: rank 1).
+    let kept = run(&db, &[ctx], &q, None, &FusionParams { img_scanned: true, ..on() });
+    assert_eq!(image_rank(&kept, scan).map(|i| i.rank), Some(1));
+}
+
+#[test]
+fn scanned_text_is_recognised_by_its_ocr_mark() {
+    use super::image_list::is_scanned_text;
+    assert!(is_scanned_text(r#"{"page":3,"ocr":true,"scan_rev":2}"#));
+    assert!(!is_scanned_text(r#"{"page":3,"ocr":false}"#));
+    assert!(!is_scanned_text(r#"{"page":3}"#));
+    assert!(!is_scanned_text("not json"));
 }

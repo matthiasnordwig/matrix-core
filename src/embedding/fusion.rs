@@ -30,10 +30,13 @@
 //! (default 0: off for that question). An image hit whose chunk the keyword search did not find
 //! (no word of the question on the page) counts with [`FusionParams::img_no_keyword`] (default
 //! 0.5): graphics pages of an unrelated report otherwise fill the top ranks of a question whose
-//! words they do not contain. The `MATRIX_HYBRID_FUSION` env var (`stop=0|1`, `w=<f32>`,
+//! words they do not contain. Scanned pages (text recognised by OCR, `metadata.ocr`) are left out of
+//! the image list unless [`FusionParams::img_scanned`]: their page image is stored for every page, but
+//! the text already holds what the page says, and their image vectors pushed the right passage down
+//! (`handbuch/core.md` „Bildsuche in der Hybrid-Fusion“). The `MATRIX_HYBRID_FUSION` env var (`stop=0|1`, `w=<f32>`,
 //! `k=<usize>`, `img=0|1`, `xw=<f32>` (cross-language keyword factor), `iw=<f32>` (image without
-//! keyword hit), comma-separated) only exists to re-measure alternatives headlessly
-//! (`services/examples/embed_compare.rs`, `scripts/bench_search.py`).
+//! keyword hit), `scan=0|1` (scanned pages in the image list), comma-separated) only exists to re-measure
+//! alternatives headlessly (`services/examples/embed_compare.rs`, `image_e2e.rs`, `scripts/bench_search.py`).
 
 use std::sync::OnceLock;
 
@@ -55,6 +58,8 @@ pub struct FusionParams {
     pub cross_lang_fts: f32,
     /// RRF weight of an image hit whose chunk is not in the keyword list (1 = like any image hit).
     pub img_no_keyword: f32,
+    /// Keep scanned pages (OCR text) in the page-image list.
+    pub img_scanned: bool,
 }
 
 /// How many of the best vector hits decide the language the answer is likely written in.
@@ -70,12 +75,12 @@ pub(crate) fn cross_language_factor(query_lang: &str, top_langs: &[Option<&str>]
 
 impl Default for FusionParams {
     fn default() -> Self {
-        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10, img: true, cross_lang_fts: 0.0, img_no_keyword: 0.5 }
+        FusionParams { drop_stopwords: true, fts_weight: 1.0, k: 10, img: true, cross_lang_fts: 0.0, img_no_keyword: 0.5, img_scanned: false }
     }
 }
 
 impl FusionParams {
-    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, `xw=<f32>`, `iw=<f32>`, comma-separated; unknown parts are ignored and
+    /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, `xw=<f32>`, `iw=<f32>`, `scan=0|1`, comma-separated; unknown parts are ignored and
     /// missing ones keep their default.
     pub fn parse(spec: &str) -> Self {
         let mut p = FusionParams::default();
@@ -83,6 +88,7 @@ impl FusionParams {
             match part.split_once('=') {
                 Some(("stop", v)) => p.drop_stopwords = v != "0",
                 Some(("img", v)) => p.img = v != "0",
+                Some(("scan", v)) => p.img_scanned = v != "0",
                 Some(("xw", v)) => {
                     if let Ok(w) = v.parse::<f32>() {
                         p.cross_lang_fts = w.clamp(0.0, 1.0);

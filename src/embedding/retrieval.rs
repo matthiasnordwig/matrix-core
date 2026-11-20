@@ -259,7 +259,7 @@ impl Database {
                 // Page-image list (best-first, already mapped onto chunks), only
                 // vectors of this context's model — same space as `qvec`.
                 let img_ranked = if fusion.img {
-                    self.image_ranked_chunks(cid, model_id, qvec, n, doc_ids)?
+                    self.image_ranked_chunks(cid, model_id, qvec, n, doc_ids, fusion.img_scanned)?
                 } else {
                     Vec::new()
                 };
