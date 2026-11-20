@@ -47,6 +47,20 @@ pub struct GridRunMeta {
     pub json_schema: Option<String>,
     #[serde(flatten)]
     pub info: GridRunInfo,
+    /// Sources the run could not search (schema_v81); empty for runs from before v81.
+    #[serde(default)]
+    pub sources_not_searched: Vec<NotSearchable>,
+}
+
+/// A collection a search cannot find anything in yet, and why: `indexing` (a chunking/embedding
+/// job runs for it), `no_documents` (nothing added yet), `not_indexed` (split but not embedded, no
+/// search model bound, indexing failed or the search model changed). Decided by services
+/// `commands/source_readiness.rs`; a grid run keeps its list (`grid_run_meta.sources_not_searched`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotSearchable {
+    pub id: i64,
+    pub name: String,
+    pub reason: String,
 }
 
 /// A collection's part of the key of the Tables search memory (schema_v80): its id,

@@ -8,7 +8,8 @@
 //! (pre-schema_v41, mode unknown, so history loading falls back to lenient
 //! shape-based explosion). Since schema_v66 it also records how the run was
 //! started (`GridRunInfo`: model, agentic budget, template, context mode),
-//! which `list_grid_runs` joins into every history entry.
+//! which `list_grid_runs` joins into every history entry, and since schema_v81
+//! the sources the run could not search (`NotSearchable`, JSON array).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -26,6 +27,13 @@ fn row_to_run_info(row: &Row<'_>) -> rusqlite::Result<GridRunInfo> {
         template_name: row.get("template_name")?,
         context_mode: row.get("context_mode")?,
     })
+}
+
+/// The schema_v81 list of unsearched sources (NULL = none, or a run from before v81).
+fn not_searched_from(row: &Row<'_>, col: &str) -> rusqlite::Result<Vec<NotSearchable>> {
+    let Some(json) = row.get::<_, Option<String>>(col)? else { return Ok(Vec::new()) };
+    serde_json::from_str(&json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
 }
 
 fn row_to_chat_result(row: &Row<'_>) -> rusqlite::Result<GridChatResult> {
@@ -223,7 +231,7 @@ impl Database {
             .conn
             .query_row(
                 "SELECT system_prompt, json_schema, llm_endpoint_id, pool_id, model_label,
-                        tool_call_budget, template_name, context_mode
+                        tool_call_budget, template_name, context_mode, sources_not_searched
                  FROM grid_run_meta WHERE run_id = ?1",
                 [run_id],
                 |row| {
@@ -231,10 +239,22 @@ impl Database {
                         system_prompt: row.get("system_prompt")?,
                         json_schema: row.get("json_schema")?,
                         info: row_to_run_info(row)?,
+                        sources_not_searched: not_searched_from(row, "sources_not_searched")?,
                     })
                 },
             )
             .optional()?)
+    }
+
+    /// Records the sources the run could not search (empty: all searchable). Call after
+    /// `upsert_grid_run_meta`; a re-run under the same `run_id` overwrites the list.
+    pub fn set_grid_run_not_searched(&self, run_id: &str, sources: &[NotSearchable]) -> Result<()> {
+        let json = if sources.is_empty() { None } else { Some(serde_json::to_string(sources)?) };
+        self.conn.execute(
+            "UPDATE grid_run_meta SET sources_not_searched = ?2 WHERE run_id = ?1",
+            params![run_id, json],
+        )?;
+        Ok(())
     }
 
     /// Records how the run was started (model, agentic budget, template,

@@ -1,6 +1,7 @@
 //! schema_v66: a grid run's start settings (`GridRunInfo`) — stored via
 //! `set_grid_run_info`, read back by `grid_run_meta` and joined into
 //! `list_grid_runs`; runs without meta or from before v66 report all `None`.
+//! schema_v81: the unsearched sources of a run (`set_grid_run_not_searched`).
 
 use super::models::*;
 use super::Database;
@@ -122,4 +123,70 @@ fn v70_drops_the_dead_grid_sheet_tables() {
     let fresh = tables(&db.conn);
     assert!(fresh.iter().all(|t| t != "grid_rows" && t != "grid_sheets" && t != "idx_grid_rows_sheet"), "{fresh:?}");
     assert!(fresh.iter().any(|t| t == "grid_chat_results"));
+}
+
+fn dora() -> NotSearchable {
+    NotSearchable { id: 7, name: "DORA".into(), reason: "not_indexed".into() }
+}
+
+/// schema_v81: the unsearched sources stay with the run; an empty list stores NULL, a re-run
+/// overwrites the list, a meta upsert (re-run start) keeps it until it is set anew.
+#[test]
+fn unsearched_sources_round_trip_and_a_rerun_overwrites_them() {
+    let db = db();
+    db.upsert_grid_run_meta("run-n", "sys", None).unwrap();
+    assert!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched.is_empty());
+    let empty = NotSearchable { id: 8, name: "Empty".into(), reason: "no_documents".into() };
+    db.set_grid_run_not_searched("run-n", &[dora(), empty.clone()]).unwrap();
+    assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched, vec![dora(), empty.clone()]);
+    db.upsert_grid_run_meta("run-n", "sys2", None).unwrap();
+    assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched.len(), 2);
+    db.set_grid_run_not_searched("run-n", &[empty.clone()]).unwrap();
+    assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched, vec![empty]);
+    db.set_grid_run_not_searched("run-n", &[]).unwrap();
+    let stored: Option<String> = db
+        .conn
+        .query_row("SELECT sources_not_searched FROM grid_run_meta WHERE run_id = 'run-n'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stored, None, "an empty list stores NULL");
+    // A run without meta row: a no-op, not an error.
+    db.set_grid_run_not_searched("run-none", &[dora()]).unwrap();
+}
+
+/// schema_v81 on an existing v80 database: a stored run keeps its meta and reports no unsearched sources.
+#[test]
+fn v81_applies_on_an_existing_v80_database() {
+    let old = super::vision_tests::migrate_to(80);
+    old.execute("INSERT INTO grid_run_meta (run_id, system_prompt, json_schema) VALUES ('run-v80', 'sys', NULL)", []).unwrap();
+    let db = Database::init(old).unwrap();
+    assert_eq!(db.schema_version().unwrap(), super::MIGRATIONS.len() as i64);
+    let meta = db.grid_run_meta("run-v80").unwrap().unwrap();
+    assert_eq!(meta.system_prompt, "sys");
+    assert!(meta.sources_not_searched.is_empty());
+    db.set_grid_run_not_searched("run-v80", &[dora()]).unwrap();
+    assert_eq!(db.grid_run_meta("run-v80").unwrap().unwrap().sources_not_searched, vec![dora()]);
+}
+
+/// The list outlives the process: a fresh connection on the same file reads it back.
+#[test]
+fn unsearched_sources_survive_reopening_the_database() {
+    let path = std::env::temp_dir().join(format!("matrix-v81-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let db = Database::open(&path).unwrap();
+        db.upsert_grid_run_meta("run-r", "sys", None).unwrap();
+        db.set_grid_run_not_searched("run-r", &[dora()]).unwrap();
+    }
+    let reopened = Database::open(&path).unwrap();
+    assert_eq!(reopened.grid_run_meta("run-r").unwrap().unwrap().sources_not_searched, vec![dora()]);
+    drop(reopened);
+    for ext in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+    }
+}
+
+#[test]
+fn meta_without_the_list_still_deserializes() {
+    let old: GridRunMeta = serde_json::from_str(r#"{"system_prompt":"s","json_schema":null}"#).unwrap();
+    assert!(old.sources_not_searched.is_empty());
 }
