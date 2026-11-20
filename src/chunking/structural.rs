@@ -35,6 +35,10 @@ use super::sentences::split_sentences;
 use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
 
+/// Largest chunk (characters) without a structural profile; also the size scanned pages are
+/// cut to (services OCR chunks).
+pub const DEFAULT_MAX_CHUNK_CHARS: usize = 1500;
+
 #[derive(Debug, Clone)]
 struct CompiledPattern {
     role: String,
@@ -111,7 +115,7 @@ pub fn chunk_pdf_structurally(
             regex: RegexBuilder::new(r"\b(?:means|shall mean|bezeichnet|gilt als|im Sinne)").case_insensitive(true).build().unwrap(),
             priority: 50,
         });
-        (200, 1500, comps)
+        (200, DEFAULT_MAX_CHUNK_CHARS, comps)
     };
 
     let mut all_chunks = Vec::new();

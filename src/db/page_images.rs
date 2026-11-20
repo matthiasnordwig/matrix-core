@@ -269,7 +269,7 @@ impl Database {
     }
 
     /// All chunks of a document in `chunk_index` order with their position
-    /// (byte range, `metadata.page`) and — only if made by `embedding_model_id`
+    /// (byte range, `metadata.page`, last page of `metadata.page_breaks`) and — only if made by `embedding_model_id`
     /// with length `dim` — their vector. No chunk text is loaded.
     pub(crate) fn chunk_spans_with_vectors(
         &self,
@@ -281,7 +281,9 @@ impl Database {
             "SELECT c.id, c.char_start, c.char_end, c.is_omitted,
                     CASE WHEN json_valid(c.metadata)
                          THEN CAST(json_extract(c.metadata, '$.page') AS INTEGER) END,
-                    e.vector
+                    e.vector,
+                    CASE WHEN json_valid(c.metadata)
+                         THEN CAST(json_extract(c.metadata, '$.page_breaks[#-1][1]') AS INTEGER) END
                FROM chunks c
                LEFT JOIN embeddings e
                       ON e.chunk_id = c.id AND e.embedding_model_id = ?2 AND e.dim = ?3
@@ -295,11 +297,13 @@ impl Database {
                 None => None,
             };
             let page: Option<i64> = r.get(4)?;
+            let last_page: Option<i64> = r.get(6)?;
             let span = ChunkSpan {
                 chunk_id: r.get(0)?,
                 char_start: r.get(1)?,
                 char_end: r.get(2)?,
                 page: page.filter(|p| *p > 0),
+                last_page: last_page.filter(|p| *p > 0),
             };
             Ok((span, r.get(3)?, vector))
         })?;

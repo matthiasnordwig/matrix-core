@@ -387,22 +387,34 @@ impl Database {
 
     /// Outline of a document from its stored chunks (`chunking/outline.rs`): the heading path of
     /// each chunk and the chunks of its whole section. Omitted chunks are left out; Markdown
-    /// headings count only in chunks of the Markdown chunker that are not OCR page text.
+    /// headings count in chunks of the Markdown chunker that are not OCR page text, and in
+    /// chunks of an assembled scan run (`scan_rev`, `chunking/scan_text.rs`) — there without
+    /// the line opening the run's block (`## Text on pages 5–9 (OCR)`).
     pub fn document_outline(&self, document_id: i64) -> Result<crate::chunking::outline::Outline> {
+        use crate::chunking::scan_text::is_scan_marker;
         let mut stmt = self.conn.prepare(
             "SELECT id, text, metadata FROM chunks WHERE document_id = ?1 AND is_omitted = 0 ORDER BY chunk_index",
         )?;
         let rows: Vec<(i64, String, String)> = stmt
             .query_map(params![document_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<std::result::Result<_, _>>()?;
-        let input: Vec<crate::chunking::outline::OutlineChunk> = rows
+        let read: Vec<(i64, std::borrow::Cow<str>, bool)> = rows
             .iter()
             .map(|(id, text, meta)| {
                 let meta: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
+                if meta.get("scan_rev").is_some_and(|v| !v.is_null()) {
+                    // The marker line stays as an empty line: line positions are unchanged.
+                    let lines: Vec<&str> = text.split('\n').map(|l| if is_scan_marker(l) { "" } else { l }).collect();
+                    return (*id, std::borrow::Cow::Owned(lines.join("\n")), true);
+                }
                 let markdown = meta.get("chunk_type").and_then(|v| v.as_str()) == Some("markdown_section")
                     && meta.get("ocr").and_then(|v| v.as_bool()) != Some(true);
-                crate::chunking::outline::OutlineChunk { id: *id, text, markdown }
+                (*id, std::borrow::Cow::Borrowed(text.as_str()), markdown)
             })
+            .collect();
+        let input: Vec<crate::chunking::outline::OutlineChunk> = read
+            .iter()
+            .map(|(id, text, markdown)| crate::chunking::outline::OutlineChunk { id: *id, text, markdown: *markdown })
             .collect();
         Ok(crate::chunking::outline::Outline::build(&input))
     }
@@ -512,20 +524,23 @@ impl Database {
     }
 
     /// Every chunk of a document in `chunk_index` order with its position
-    /// (byte range, `metadata.page`), without text — where later chunks go in.
+    /// (byte range, `metadata.page`, last page of `metadata.page_breaks`), without text — where later chunks go in.
     pub fn chunk_spans(&self, document_id: i64) -> Result<Vec<crate::embedding::page_select::ChunkSpan>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, char_start, char_end,
-                    CASE WHEN json_valid(metadata) THEN CAST(json_extract(metadata, '$.page') AS INTEGER) END
+                    CASE WHEN json_valid(metadata) THEN CAST(json_extract(metadata, '$.page') AS INTEGER) END,
+                    CASE WHEN json_valid(metadata) THEN CAST(json_extract(metadata, '$.page_breaks[#-1][1]') AS INTEGER) END
                FROM chunks WHERE document_id = ?1 ORDER BY chunk_index",
         )?;
         let rows = stmt.query_map([document_id], |r| {
             let page: Option<i64> = r.get(3)?;
+            let last_page: Option<i64> = r.get(4)?;
             Ok(crate::embedding::page_select::ChunkSpan {
                 chunk_id: r.get(0)?,
                 char_start: r.get(1)?,
                 char_end: r.get(2)?,
                 page: page.filter(|p| *p > 0),
+                last_page: last_page.filter(|p| *p > 0),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

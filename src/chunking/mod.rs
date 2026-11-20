@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paragraphs;
 pub mod repeats;
 pub mod rules;
+pub mod scan_text;
 pub mod text_repair;
 
 pub use segments::{split_segments, Segment};
@@ -52,3 +53,5 @@ mod pdf_lines_tests;
 mod paragraphs_tests;
 #[cfg(test)]
 mod repeats_tests;
+#[cfg(test)]
+mod scan_text_tests;

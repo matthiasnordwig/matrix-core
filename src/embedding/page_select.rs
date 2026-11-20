@@ -25,7 +25,8 @@
 //!    that line's start).
 //! 3. **Page → chunks** ([`chunks_for_page`]): structural chunks carry their
 //!    start page in `metadata.page` — a chunk then covers its start page up to
-//!    and including the start page of the next chunk; otherwise chunks whose
+//!    and including the start page of the next chunk, or its own last page
+//!    (`metadata.page_breaks`) if that lies further; otherwise chunks whose
 //!    byte range overlaps the page's range in `extracted_text` belong to it.
 
 /// A box in PDF user space (points, origin bottom-left).
@@ -307,6 +308,8 @@ pub struct ChunkSpan {
     pub char_end: i64,
     /// `metadata.page` (structural chunker: 1-based start page), if any.
     pub page: Option<i64>,
+    /// Page of the last entry of `metadata.page_breaks` (the chunk's own last page), if any.
+    pub last_page: Option<i64>,
 }
 
 /// Chunk ids belonging to `page` (1-based). `spans` = ALL chunks of the
@@ -330,8 +333,9 @@ pub fn chunks_for_page(spans: &[ChunkSpan], page: i64, range: Option<(i64, i64)>
             .enumerate()
             .filter(|(i, _)| {
                 let from = starts[*i];
-                let to = starts.get(i + 1).copied().unwrap_or(i64::MAX);
-                from <= page && page <= to.max(from)
+                let next = starts.get(i + 1).copied().unwrap_or(i64::MAX);
+                let to = next.max(spans[*i].last_page.unwrap_or(from)).max(from);
+                from <= page && page <= to
             })
             .map(|(_, s)| s.chunk_id)
             .collect();

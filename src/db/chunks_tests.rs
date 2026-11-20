@@ -389,3 +389,33 @@ fn document_outline_reads_chunks_in_index_order_without_omitted_and_ocr_headings
     assert_eq!(o.path(usage).as_deref(), Some("Usage"));
     assert_eq!(o.section(setup).unwrap().chunk_ids, vec![setup, ocr]);
 }
+
+#[test]
+fn document_outline_reads_headings_of_an_assembled_scan_run_but_not_its_marker() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    let mk = |idx: i64, text: &str, metadata: serde_json::Value| {
+        let c = NewChunk { context_id: ctx, document_id: doc, chunk_index: idx, char_start: 0, char_end: 1, text: text.into(), signature: None, is_omitted: false, metadata: metadata.to_string() };
+        db.create_chunk(&c).unwrap().id
+    };
+    let scan = serde_json::json!({ "chunk_type": "markdown_section", "ocr": true, "scan_rev": 1 });
+    let first = mk(0, "## Text on pages 5\u{2013}9 (OCR)\n\nVorwort ohne Überschrift.", scan.clone());
+    let heizer = mk(1, "## Der Heizer\n\nAls der sechzehnjährige\nKarl Roßmann …", scan.clone());
+    let cont = mk(2, "weiter im Text.", scan);
+    let o = db.document_outline(doc).unwrap();
+    assert_eq!(o.path(first), None, "the marker line is no heading");
+    assert_eq!(o.path(heizer).as_deref(), Some("Der Heizer"));
+    assert_eq!(o.section(heizer).unwrap().chunk_ids, vec![heizer, cont]);
+}
+
+#[test]
+fn chunk_spans_read_the_last_page_of_page_breaks() {
+    let db = db();
+    let (ctx, doc) = seed(&db);
+    for (idx, meta) in [(0, r#"{"page":5,"page_breaks":[[40,6],[90,8]]}"#), (1, r#"{"page":8,"page_breaks":[]}"#), (2, "{}")] {
+        let c = NewChunk { context_id: ctx, document_id: doc, chunk_index: idx, char_start: 0, char_end: 1, text: "x".into(), signature: None, is_omitted: false, metadata: meta.into() };
+        db.create_chunk(&c).unwrap();
+    }
+    let got: Vec<(Option<i64>, Option<i64>)> = db.chunk_spans(doc).unwrap().iter().map(|s| (s.page, s.last_page)).collect();
+    assert_eq!(got, vec![(Some(5), Some(8)), (Some(8), None), (None, None)]);
+}

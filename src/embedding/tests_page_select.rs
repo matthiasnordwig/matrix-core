@@ -150,7 +150,7 @@ fn page_ranges_cover_the_text() {
 }
 
 fn span(id: i64, start: i64, end: i64, page: Option<i64>) -> ChunkSpan {
-    ChunkSpan { chunk_id: id, char_start: start, char_end: end, page }
+    ChunkSpan { chunk_id: id, char_start: start, char_end: end, page, last_page: None }
 }
 
 #[test]
@@ -163,6 +163,18 @@ fn structural_chunks_cover_start_page_to_next_start_page() {
     assert_eq!(chunks_for_page(&spans, 5, None), vec![3]);
     // The last chunk runs to the end of the document.
     assert_eq!(chunks_for_page(&spans, 9, Some((0, 1))), vec![4]);
+}
+
+#[test]
+fn a_chunk_reaches_its_own_last_page_even_past_the_next_start() {
+    // Chunk 1 runs from page 5 to 8 (page_breaks); chunk 2 (page 6) stands after it.
+    let spans = [ChunkSpan { last_page: Some(8), ..span(1, 0, 10, Some(5)) }, span(2, 0, 10, Some(6)), span(3, 0, 10, Some(9))];
+    assert_eq!(chunks_for_page(&spans, 7, None), vec![1, 2]);
+    assert_eq!(chunks_for_page(&spans, 8, None), vec![1, 2]);
+    assert_eq!(chunks_for_page(&spans, 9, None), vec![2, 3]);
+    // A recorded last page before the next start changes nothing.
+    let spans = [ChunkSpan { last_page: Some(5), ..span(1, 0, 10, Some(5)) }, span(2, 0, 10, Some(7))];
+    assert_eq!(chunks_for_page(&spans, 6, None), vec![1]);
 }
 
 #[test]
