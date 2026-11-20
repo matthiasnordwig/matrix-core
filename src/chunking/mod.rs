@@ -21,6 +21,7 @@ pub mod paragraphs;
 pub mod repeats;
 pub mod rules;
 pub mod scan_text;
+pub mod scan_noise;
 pub mod text_repair;
 
 pub use segments::{split_segments, Segment};
@@ -55,3 +56,5 @@ mod paragraphs_tests;
 mod repeats_tests;
 #[cfg(test)]
 mod scan_text_tests;
+#[cfg(test)]
+mod scan_noise_tests;

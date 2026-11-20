@@ -35,6 +35,10 @@ use super::sentences::split_sentences;
 use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
 
+/// Module labels of BaFin circulars (MaRisk: "AT 4.3", "BTO 1.2", "BTR 3"): major headings like
+/// an article, so a numbered paragraph below one keeps it ("BTO 1.2 3").
+const MODULE_LABELS: [&str; 4] = ["at", "bt", "bto", "btr"];
+
 /// Largest chunk (characters) without a structural profile; also the size scanned pages are
 /// cut to (services OCR chunks).
 pub const DEFAULT_MAX_CHUNK_CHARS: usize = 1500;
@@ -94,8 +98,9 @@ pub fn chunk_pdf_structurally(
         comps.push(CompiledPattern {
             role: "heading_l1".to_string(),
             // A number (or a Roman numeral after a space) must follow the word: "at the request" or
-            // "At least" at a line start is no heading.
-            regex: RegexBuilder::new(r"^((?:Artikel|Article|Art\.|§|AT|Kapitel|Abschnitt|TITEL|TITLE|CHAPTER)(?:\s*\d[\d.]*[a-z]?|\s+[IVXLC]+)\b)\s*(.*)").case_insensitive(true).build().unwrap(),
+            // "At least" at a line start is no heading. AT/BT/BTO/BTR: the modules of BaFin circulars
+            // (MaRisk "BTO 1.2 Anforderungen …").
+            regex: RegexBuilder::new(r"^((?:Artikel|Article|Art\.|§|AT|BTO|BTR|BT|Kapitel|Abschnitt|TITEL|TITLE|CHAPTER)(?:\s*\d[\d.]*[a-z]?|\s+[IVXLC]+)\b)\s*(.*)").case_insensitive(true).build().unwrap(),
             priority: 100,
         });
         // Numbered section "2.1 Scope": number = section, rest = title.
@@ -343,9 +348,12 @@ pub fn chunk_pdf_structurally(
         
         if is_heading {
             if let Some(ref a) = extracted_abschnitt {
-                // Check if it's a major heading (contains letters other than just a-z enum)
+                // A major heading (article, chapter, module of a circular) opens a section; a bare
+                // number or "(a)" below it becomes "<major> <number>".
                 let lower = a.to_lowercase();
-                let is_major = ["art", "§", "kapitel", "abschnitt", "titel", "title", "chapter"].iter().any(|k| lower.contains(k));
+                let label: String = lower.chars().take_while(|c| c.is_alphabetic()).collect();
+                let is_major = ["art", "§", "kapitel", "abschnitt", "titel", "title", "chapter"].iter().any(|k| lower.contains(k))
+                    || MODULE_LABELS.contains(&label.as_str());
                 if is_major {
                     primary_abschnitt = Some(a.clone());
                     current_abschnitt = Some(a.clone());

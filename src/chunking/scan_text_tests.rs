@@ -13,10 +13,11 @@ fn row(text: &str, left: f64, top: f64, width: f64, height: f64) -> ScanRow {
 
 #[test]
 fn page_numbers_are_recognised_in_their_usual_forms() {
-    for t in ["16", "— 16 —", "[3]", "xii", "- 7 -"] {
+    // Dashes as recognition reads them in old print: "ー", "一", "－", "～".
+    for t in ["16", "— 16 —", "[3]", "xii", "- 7 -", "ー8ー", "一13ー", "－ 77ー", "～37一", "54 _", "- 67.-"] {
         assert!(is_page_number(t), "{t}");
     }
-    for t in ["Seite 3 von 9", "und", "16 Uhr", "Im", "12345", "—"] {
+    for t in ["Seite 3 von 9", "und", "16 Uhr", "Im", "12345", "—", "一", "ー一ー"] {
         assert!(!is_page_number(t), "{t}");
     }
 }
@@ -40,6 +41,21 @@ fn a_line_on_few_pages_is_no_running_line() {
     let r = clean_pages(&mut pages);
     assert_eq!(r.running_lines, 10, "only the 10× repeated edge line goes");
     assert_eq!(pages[0].1[0].text, "Kapitel");
+}
+
+#[test]
+fn misread_copies_of_a_running_line_go_too() {
+    let w = ["Anna", "Berta", "Carl", "Dora", "Emil", "Fritz", "Gustav", "Heinrich"];
+    let foot = ["Digitized by Google", "Digilized by Google", "Digitiz ed by", "Digitized by Googlel", "Digitized by Google", "Digitized by Google", "Google", "Digitized by Goog"];
+    let mut pages: Vec<(i64, Vec<PageLine>)> =
+        (0..8).map(|p| (p as i64, vec![pl(&format!("Text {}", w[p]), true), pl(&format!("weiter {}.", w[p]), false), pl(foot[p], true)])).collect();
+    let r = clean_pages(&mut pages);
+    assert_eq!(r.running_lines, 7, "a piece shorter than half the line stays: {:?}", pages[6].1);
+    assert_eq!(pages[6].1.last().unwrap().text, "Google");
+    // A short running line has no misread copies: "Kapitel" (7 letters) keeps "Kapital".
+    let mut pages: Vec<(i64, Vec<PageLine>)> =
+        (0..8).map(|p| (p as i64, vec![pl(if p == 7 { "Kapital" } else { "Kapitel" }, true), pl(&format!("Satz {}.", w[p]), false)])).collect();
+    assert_eq!(clean_pages(&mut pages).running_lines, 7);
 }
 
 #[test]
@@ -122,7 +138,7 @@ fn pages_of_range_relative_to_the_chunk() {
 
 #[test]
 fn outline_numbers_start_headings_only_on_short_lines() {
-    for t in ["§ 5 Kündigung", "3.2 Ziele", "II. Teil", "Artikel 12", "4. Ergebnisse"] {
+    for t in ["§ 5 Kündigung", "§ 8. Über den Zeitbegriff.", "3.2 Ziele", "II. Teil", "Artikel 12", "Kapitel 3. Schluss", "4. Ergebnisse"] {
         assert!(outline_start(t), "{t}");
     }
     for t in ["1913 kam er", "Das Schiff", "§§"] {
@@ -159,6 +175,25 @@ fn a_sentence_line_with_gaps_is_no_heading() {
     // A body line whose box came out tall, without space above: no heading.
     let rows = vec![row("eine Zeile", 0.1, 0.1, 0.8, h), row("die nächste Zeile ohne Abstand", 0.1, 0.12, 0.8, 1.5 * h)];
     assert!(!is_heading(&rows, 1, h, 0.8));
+}
+
+#[test]
+fn a_centred_outline_line_with_a_full_stop_is_a_heading_a_numbered_sentence_is_not() {
+    let h = 0.02;
+    let body = |t: &str, top: f64| row(t, 0.18, top, 0.82, h);
+    let rows = vec![
+        body("Ende des vorigen Absatzes, der über die ganze Breite läuft", 0.10),
+        row("§ 8. Über den Zeitbegriff in der Physik.", 0.31, 0.16, 0.555, h), // centred, gap above
+        body("An zwei weit voneinander entfernten Stellen hat der Blitz", 0.185),
+        row("§ 9. Die Relativität.", 0.27, 0.207, 0.6, h), // centred on a skewed scan, no gap above
+        body("eingeschlagen, und so weiter über die ganze Breite der Zeile", 0.23),
+        row("1. Die Frist beträgt zwei Wochen.", 0.24, 0.27, 0.4, h), // indented, gap above
+        body("Weiter im Text über die ganze Breite der Seite hin und her", 0.30),
+        row("2. Sie beginnt mit dem Zugang.", 0.18, 0.36, 0.35, h), // at the margin, gaps around
+        body("Weiter im Text über die ganze Breite der Seite hin und her", 0.42),
+    ];
+    let heads: Vec<bool> = lines_from_rows(&rows, h).iter().map(|l| l.heading).collect();
+    assert_eq!(heads, vec![false, true, false, true, false, false, false, false, false]);
 }
 
 #[test]

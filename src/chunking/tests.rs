@@ -194,6 +194,15 @@ fn upper_case_section_word_is_a_major_heading() {
 }
 
 #[test]
+fn circular_modules_are_major_headings_and_keep_their_paragraphs() {
+    // MaRisk: "AT 9" is followed by the module "BTO 1.1"; its numbered paragraph keeps the module.
+    let md = format!("AT 9 Auslagerung\n\n{FILLER_A}\n\nBTO 1.1 Funktionstrennung\n\n{FILLER_B}\n\n2 Abhaengig von Art und Umfang\n\n{FILLER_A}");
+    let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();
+    let sections: Vec<_> = chunks.iter().map(|c| meta(c, "section")).collect();
+    assert_eq!(sections, ["AT 9", "BTO 1.1", "BTO 1.1 2"], "{:?}", chunks.iter().map(|c| &c.text).collect::<Vec<_>>());
+}
+
+#[test]
 fn a_word_at_a_line_start_is_no_heading_without_a_number() {
     let md = format!("Article 3\n\n{FILLER_A}\n\nat the request of a Member State\n\n{FILLER_B}");
     let chunks = structural::chunk_pdf_structurally(&pdf_bytes_from_markdown(&md), 1, 1, None).unwrap();

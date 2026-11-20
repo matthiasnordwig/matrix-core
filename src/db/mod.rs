@@ -251,6 +251,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v79.sql"),
     include_str!("schema_v80.sql"),
     include_str!("schema_v81.sql"),
+    include_str!("schema_v82.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -357,6 +358,8 @@ impl Database {
 mod tests;
 #[cfg(test)]
 mod grid_run_info_tests;
+#[cfg(test)]
+mod structural_profile_migration_tests;
 #[cfg(test)]
 mod grid_cell_sources_tests;
 #[cfg(test)]
