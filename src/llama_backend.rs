@@ -28,10 +28,6 @@ use crate::compute::{Fit, Gpu, Unit};
 
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 static INIT: Mutex<()> = Mutex::new(());
-/// One `llama_params_fit` at a time: it points llama.cpp's process-global log callback at its own
-/// stack frame and restores the callback it found, so two at once leave the callback aimed at a
-/// finished frame and the next log line crashes. Held around every `fit_params` call.
-static FIT: Mutex<()> = Mutex::new(());
 
 /// Returns the process-wide llama.cpp backend, initializing it on first use.
 /// Callers map the `String` error into their own error type.
@@ -176,11 +172,7 @@ pub fn fit_to_gpu_memory(
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx))
             .with_n_batch(n_batch);
         let mut margins = vec![gpu_margin() as usize; llama_cpp_2::max_devices()];
-        let fitted = {
-            let _one = FIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _)
-        };
-        match fitted {
+        match params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _) {
             Err(FitError::Failure) => {
                 params.set(model_params_on(Unit::Cpu));
                 Some(Fit::Nothing)
@@ -226,11 +218,7 @@ pub fn context_on_gpu(model_path: &str, n_batch: u32, kv: Option<&str>, n_ctx_mi
     // llama.cpp's defaults (every layer on the graphics unit): fit refuses parameters it did not set.
     let mut params = std::pin::pin!(LlamaModelParams::default().with_use_mmap(true));
     let mut margins = vec![usize::try_from(margin).unwrap_or(usize::MAX); llama_cpp_2::max_devices()];
-    let fit = {
-        let _one = FIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx_min, GGML_LOG_LEVEL_WARN as _)
-    }
-    .ok()?;
+    let fit = params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx_min, GGML_LOG_LEVEL_WARN as _).ok()?;
     // Fewer layers on the unit = the model does not fit whole even at `n_ctx_min`.
     (params.n_gpu_layers() < 0).then_some(fit.n_ctx)
 }
@@ -313,11 +301,11 @@ mod tests {
         assert!(std::ptr::eq(first, second));
     }
 
-    /// Regression: `llama_params_fit` swaps llama.cpp's global log callback for one pointing at
-    /// its own stack frame and restores the one it found. Two fits at once (the endpoint list is
+    /// Regression: upstream `llama_params_fit` swaps llama.cpp's global log callback for one pointing
+    /// at its own stack frame and restores the one it found. Two fits at once (the endpoint list is
     /// requested several times at app start) left the callback aimed at a finished frame, and the
-    /// next log line jumped through it (SIGBUS in `llama_log_internal`, 0.2.12). Fits from many
-    /// threads must all return. Needs a GGUF model (`MATRIX_FIT_TEST_GGUF` or the reranker under
+    /// next log line jumped through it (SIGBUS in `llama_log_internal`, 0.2.12; fixed in the vendored
+    /// llama.cpp, `MATRIX PATCH`). Fits from many threads must all return. Needs a GGUF model (`MATRIX_FIT_TEST_GGUF` or the reranker under
     /// `models/`); skipped without one.
     #[test]
     fn concurrent_fits_keep_the_log_callback_valid() {
@@ -348,5 +336,38 @@ mod tests {
         for t in threads {
             t.join().expect("fit thread");
         }
+    }
+
+    /// Regression: upstream `llama_params_fit` points the process-global log callback at its own
+    /// stack frame while it runs, so a log line from any other thread (a model loading, a context
+    /// being made) could call through a half-written pointer. The vendored llama.cpp leaves the
+    /// callback alone (`MATRIX PATCH`); it must not change while a fit runs. Same model as above.
+    #[test]
+    fn fit_leaves_the_log_callback_alone() {
+        type Callback = Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, *mut std::ffi::c_void)>;
+        unsafe extern "C" {
+            fn llama_log_get(callback: *mut Callback, user_data: *mut *mut std::ffi::c_void);
+        }
+        let current = || {
+            let (mut cb, mut ud): (Callback, *mut std::ffi::c_void) = (None, std::ptr::null_mut());
+            // SAFETY: llama.cpp writes the two out-parameters, nothing else.
+            unsafe { llama_log_get(&raw mut cb, &raw mut ud) };
+            (cb.map(|f| f as usize), ud as usize)
+        };
+        let path = std::env::var("MATRIX_FIT_TEST_GGUF").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../models/bge-reranker-v2-m3-gguf/bge-reranker-v2-m3-Q8_0.gguf").into()
+        });
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("skipped: no GGUF model at {path}");
+            return;
+        }
+        backend().expect("backend");
+        let before = current();
+        let fit = std::thread::spawn(move || super::context_on_gpu(&path, 512, None, 512, super::GPU_MARGIN));
+        while !fit.is_finished() {
+            assert_eq!(current(), before, "log callback changed during llama_params_fit");
+        }
+        fit.join().expect("fit thread");
+        assert_eq!(current(), before);
     }
 }
