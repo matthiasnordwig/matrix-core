@@ -4,10 +4,10 @@
 //! shared beginning that is copied onto the places). Every candidate answers the same [`ROWS`] small
 //! rows — a fixed text, [`SHARED`] tokens shared, [`READ`] own tokens read and [`WRITE`] written per
 //! row, greedily and without stopping at an end token, so every run does the same work. Reading gains
-//! little from more places, writing much; real table rows read far more than they write (classic rows
-//! ~2.5–4.5k tokens read, 100–150 written), so the measurement reads four times what it writes —
-//! more than the feasibility measurement (`handbuch/core.md` "Mehrere Sequenzen": ~380 : 150), whose
-//! gains it would otherwise overstate, and still short. A first short run warms up the kernels (Metal compiles them on first use)
+//! little from more places (hybrid models even split mixed batches), writing much; real table rows read
+//! far more than they write — measured on 40 rows (Qwen3.6 35B-A3B, PC): classic ~3.8k tokens read to
+//! ~140 written, agentic ~23k to ~320 — so the measurement reads 24 times what it writes. With 4 : 1
+//! it picked 2 places on the PC (1.35×) for tables that then ran 1.04× faster. A first short run warms up the kernels (Metal compiles them on first use)
 //! and is discarded. Takes a few seconds; the weights are the engine's, the context is its own.
 use std::time::Instant;
 
@@ -22,9 +22,9 @@ use super::gguf::{context_params, GgufEngine, CHUNK};
 /// Tokens every row shares (read once).
 pub const SHARED: usize = 256;
 /// Own tokens every row reads.
-pub const READ: usize = 160;
+pub const READ: usize = 768;
 /// Tokens every row writes.
-pub const WRITE: usize = 40;
+pub const WRITE: usize = 32;
 /// Rows per candidate (the largest candidate answers them in one go).
 pub const ROWS: usize = 4;
 
@@ -39,7 +39,7 @@ const TEXT: &str = "The committee met on a Tuesday morning to review the quarter
 /// Rows per second for each of `candidates` places (ascending, each at most [`ROWS`]).
 pub fn rows_per_second(engine: &GgufEngine, kv_quantization: Option<&str>, cpu_threads: Option<i64>, candidates: &[usize]) -> Result<Vec<(usize, f64)>, String> {
     let model = engine.model();
-    let text: Vec<LlamaToken> = model.str_to_token(&TEXT.repeat(12), AddBos::Always).map_err(|e| format!("tokenize: {e}"))?;
+    let text: Vec<LlamaToken> = model.str_to_token(&TEXT.repeat(32), AddBos::Always).map_err(|e| format!("tokenize: {e}"))?;
     let need = SHARED + ROWS * READ;
     if text.len() < need {
         return Err(format!("probe text too short: {} tokens", text.len()));
