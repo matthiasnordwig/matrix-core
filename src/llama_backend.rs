@@ -50,23 +50,29 @@ pub fn backend() -> Result<&'static LlamaBackend, String> {
         .ok_or_else(|| "failed to set llama backend".to_string())
 }
 
-/// `gguf-vulkan`: llama.cpp's backends are DLLs (`ggml-cpu-<variant>.dll`, `ggml-vulkan.dll`);
-/// llama.cpp loads the best CPU variant and every GPU backend whose driver loads. Shipped
-/// beside the exe; a development build (`cargo run`, examples) finds them in the build
-/// folder llama-cpp-sys-2 wrote them to.
+/// `gguf-vulkan`: llama.cpp's backends are shared libraries (`ggml-cpu-<variant>.dll`,
+/// `ggml-vulkan.dll`; Linux `libggml-cpu-<variant>.so`, `libggml-vulkan.so`); llama.cpp loads the
+/// best CPU variant and every GPU backend whose driver loads. Shipped beside the program; a
+/// development build (`cargo run`, examples) finds them in the build folder llama-cpp-sys-2 wrote
+/// them to (its only search path, so the folder beside the program is passed explicitly).
 #[cfg(feature = "gguf-vulkan")]
 fn load_backend_dlls() {
     use llama_cpp_2::llama_backend::{load_backends, load_backends_from_path};
     let beside_exe = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
     let has_cpu = |dir: &std::path::Path| {
-        std::fs::read_dir(dir).is_ok_and(|entries| {
-            entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("ggml-cpu"))
-        })
+        std::fs::read_dir(dir)
+            .is_ok_and(|entries| entries.flatten().any(|e| is_cpu_backend(&e.file_name().to_string_lossy())))
     };
     match beside_exe {
         Some(dir) if has_cpu(&dir) => load_backends_from_path(&dir),
         _ => load_backends(),
     }
+}
+
+/// A CPU backend file of llama.cpp: `ggml-cpu-*` (Windows) or `libggml-cpu-*` (Linux).
+#[cfg_attr(not(feature = "gguf-vulkan"), allow(dead_code))]
+fn is_cpu_backend(file_name: &str) -> bool {
+    file_name.strip_prefix("lib").unwrap_or(file_name).starts_with("ggml-cpu")
 }
 
 /// Parameters every GGUF model loads with on `unit`: weights memory-mapped. Graphics unit:
@@ -267,7 +273,16 @@ fn hidden_gpu_use() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{backend, cpu_only_host};
+    use super::{backend, cpu_only_host, is_cpu_backend};
+
+    #[test]
+    fn cpu_backend_files_on_windows_and_linux() {
+        assert!(is_cpu_backend("ggml-cpu-haswell.dll"));
+        assert!(is_cpu_backend("libggml-cpu-armv8.2_1.so"));
+        assert!(!is_cpu_backend("ggml-vulkan.dll"));
+        assert!(!is_cpu_backend("libggml-base.so.0"));
+        assert!(!is_cpu_backend("libllama.so.0"));
+    }
 
     #[test]
     fn simulator_and_vm_force_cpu() {
