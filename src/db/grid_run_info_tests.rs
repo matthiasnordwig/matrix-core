@@ -2,6 +2,7 @@
 //! `set_grid_run_info`, read back by `grid_run_meta` and joined into
 //! `list_grid_runs`; runs without meta or from before v66 report all `None`.
 //! schema_v81: the unsearched sources of a run (`set_grid_run_not_searched`).
+//! schema_v83: the settings key of a run (`set_grid_run_settings_key`).
 
 use super::models::*;
 use super::Database;
@@ -189,4 +190,34 @@ fn unsearched_sources_survive_reopening_the_database() {
 fn meta_without_the_list_still_deserializes() {
     let old: GridRunMeta = serde_json::from_str(r#"{"system_prompt":"s","json_schema":null}"#).unwrap();
     assert!(old.sources_not_searched.is_empty());
+}
+
+/// schema_v83: the settings key of a run — absent before it is set, kept by a meta upsert, gone with the run;
+/// `grid_run_exists` sees a run by its rows or its meta.
+#[test]
+fn settings_key_round_trip_and_run_existence() {
+    let db = db();
+    assert!(!db.grid_run_exists("run-k").unwrap());
+    assert_eq!(db.grid_run_settings_key("run-k").unwrap(), None);
+    db.upsert_grid_run_meta("run-k", "sys", None).unwrap();
+    assert!(db.grid_run_exists("run-k").unwrap());
+    assert_eq!(db.grid_run_settings_key("run-k").unwrap(), None);
+    db.set_grid_run_settings_key("run-k", "abc").unwrap();
+    db.upsert_grid_run_meta("run-k", "sys2", None).unwrap();
+    assert_eq!(db.grid_run_settings_key("run-k").unwrap().as_deref(), Some("abc"));
+    add_row(&db, "run-rows-only", "p");
+    assert!(db.grid_run_exists("run-rows-only").unwrap());
+    db.delete_grid_chat_run("run-k").unwrap();
+    assert!(!db.grid_run_exists("run-k").unwrap());
+}
+
+/// schema_v83 on an existing v82 database: a stored run has no settings key.
+#[test]
+fn v83_applies_on_an_existing_v82_database() {
+    let old = super::vision_tests::migrate_to(82);
+    old.execute("INSERT INTO grid_run_meta (run_id, system_prompt, json_schema) VALUES ('run-v82', 'sys', NULL)", []).unwrap();
+    let db = Database::init(old).unwrap();
+    assert_eq!(db.schema_version().unwrap(), super::MIGRATIONS.len() as i64);
+    assert_eq!(db.grid_run_settings_key("run-v82").unwrap(), None);
+    assert!(db.grid_run_exists("run-v82").unwrap());
 }

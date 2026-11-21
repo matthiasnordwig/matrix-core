@@ -9,7 +9,8 @@
 //! shape-based explosion). Since schema_v66 it also records how the run was
 //! started (`GridRunInfo`: model, agentic budget, template, context mode),
 //! which `list_grid_runs` joins into every history entry, and since schema_v81
-//! the sources the run could not search (`NotSearchable`, JSON array).
+//! the sources the run could not search (`NotSearchable`, JSON array); since schema_v83 a key
+//! over its start settings (`settings_key`, services `grid_run_settings.rs`: changed settings = new run).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -254,6 +255,31 @@ impl Database {
             "UPDATE grid_run_meta SET sources_not_searched = ?2 WHERE run_id = ?1",
             params![run_id, json],
         )?;
+        Ok(())
+    }
+
+    /// Whether a run with this id exists (stored rows or metadata).
+    pub fn grid_run_exists(&self, run_id: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM grid_run_meta WHERE run_id = ?1)
+                 OR EXISTS(SELECT 1 FROM grid_chat_results WHERE run_id = ?1)",
+            [run_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The run's settings key (schema_v83); `None` without meta row or for a run from before v83.
+    pub fn grid_run_settings_key(&self, run_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT settings_key FROM grid_run_meta WHERE run_id = ?1", [run_id], |r| r.get(0))
+            .optional()?
+            .flatten())
+    }
+
+    /// Stores the run's settings key. Call after `upsert_grid_run_meta` (no meta row: a no-op).
+    pub fn set_grid_run_settings_key(&self, run_id: &str, key: &str) -> Result<()> {
+        self.conn.execute("UPDATE grid_run_meta SET settings_key = ?2 WHERE run_id = ?1", params![run_id, key])?;
         Ok(())
     }
 
