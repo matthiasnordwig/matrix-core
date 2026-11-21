@@ -213,14 +213,15 @@ pub fn page_lines(pages: &[(i64, Vec<ScanRow>)]) -> Vec<(i64, Vec<PageLine>)> {
 
 // --- Runs of scanned pages ----------------------------------------------------------------
 
-/// A row with a wide horizontal gap (columns joined with ` | `).
+/// Two neighbouring rows with a wide horizontal gap (columns joined with ` | `): a table. A single
+/// such row (a footer "Titel | 2", a numbered formula) stays running text.
 fn has_columns(rows: &[ScanRow]) -> bool {
-    rows.iter().any(|r| r.text.contains(" | "))
+    rows.windows(2).any(|w| w[0].text.contains(" | ") && w[1].text.contains(" | "))
 }
 
 /// Whether a scanned page (`rows`, and `layer_rest` = what its text layer holds besides the
 /// recognised text) may continue the run of the scanned page before it (`prev_rows`): the
-/// text layer holds at most a page number, and neither page has column rows.
+/// text layer holds at most a page number, and neither page has column rows (two neighbouring ` | ` rows).
 pub fn continues_run(prev_rows: &[ScanRow], layer_rest: &str, rows: &[ScanRow]) -> bool {
     let rest = layer_rest.trim();
     (rest.is_empty() || is_page_number(rest)) && !has_columns(prev_rows) && !has_columns(rows)

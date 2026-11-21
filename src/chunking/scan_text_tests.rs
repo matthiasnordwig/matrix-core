@@ -208,12 +208,14 @@ fn headings_become_markdown_lines_of_their_own() {
 #[test]
 fn a_run_breaks_at_text_layer_rest_and_at_column_rows() {
     let plain = vec![row("Fließtext auf der Seite", 0.1, 0.1, 0.8, 0.02)];
-    let columns = vec![row("links | rechts", 0.1, 0.1, 0.8, 0.02)];
+    let columns = vec![row("links | rechts", 0.1, 0.1, 0.8, 0.02), row("a | b", 0.1, 0.13, 0.8, 0.02)];
+    let single = vec![row("Fußzeile | 2", 0.1, 0.1, 0.8, 0.02), row("Fließtext", 0.1, 0.13, 0.8, 0.02)];
     assert!(continues_run(&plain, "", &plain));
     assert!(continues_run(&plain, "  17 \n", &plain), "a page number in the text layer is no rest");
     assert!(!continues_run(&plain, "Stempel: Eingang", &plain));
     assert!(!continues_run(&plain, "", &columns));
     assert!(!continues_run(&columns, "", &plain));
+    assert!(continues_run(&plain, "", &single) && continues_run(&single, "", &plain), "one ` | ` row is no table");
 }
 
 #[test]
