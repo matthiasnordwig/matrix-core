@@ -65,6 +65,14 @@ fn dedicated_memory_is_the_largest_card_and_ignores_integrated_units() {
     assert_eq!(dedicated_memory(&[gpu("GeForce", false), big, igpu]), Some(24 << 30));
 }
 
+#[test]
+fn small_models_go_to_metal_or_a_card_else_the_cpu() {
+    assert_eq!(small_model_unit(true, &[]), Unit::Gpu, "Metal");
+    assert_eq!(small_model_unit(false, &[gpu("Radeon RX 7900 XTX", false)]), Unit::Gpu, "Vulkan with a card");
+    assert_eq!(small_model_unit(false, &[gpu("Radeon(TM) Graphics", true)]), Unit::Cpu, "integrated unit alone");
+    assert_eq!(small_model_unit(false, &[]), Unit::Cpu, "no Vulkan driver, or no GPU build");
+}
+
 mod driver_notice {
     use super::gpu;
     use crate::compute::driver::*;

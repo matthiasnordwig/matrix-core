@@ -83,6 +83,17 @@ pub fn dedicated_memory(gpus: &[Gpu]) -> Option<u64> {
     gpus.iter().filter(|g| !g.integrated).map(|g| g.memory_total).max()
 }
 
+/// The small GGUF models (embedder, reranker, picture model), which get no quick test of their own:
+/// graphics with Metal or a dedicated card (Vulkan), else the CPU (an integrated unit alone, or no
+/// graphics backend at all: a PC without a Vulkan driver, a build without llama.cpp's GPU part).
+pub fn small_model_unit(metal: bool, gpus: &[Gpu]) -> Unit {
+    if metal || gpus.iter().any(|g| !g.integrated) {
+        Unit::Gpu
+    } else {
+        Unit::Cpu
+    }
+}
+
 /// Smallest gain (CPU time / graphics time) for which the graphics unit is chosen.
 pub const MIN_SPEEDUP: f64 = 1.3;
 

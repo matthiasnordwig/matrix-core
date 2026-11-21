@@ -134,14 +134,11 @@ pub fn gpus() -> Vec<Gpu> {
         .collect()
 }
 
-/// The unit for the small GGUF models (embedder, reranker, picture model), which get no quick
-/// test of their own: graphics with Metal or a dedicated card, else the CPU.
+/// The unit for the small GGUF models (embedder, reranker, picture model) on this device
+/// ([`crate::compute::small_model_unit`]); asks llama.cpp for its devices only without Metal.
 pub fn rule_unit() -> Unit {
-    if cfg!(feature = "gguf-metal") || gpus().iter().any(|g| !g.integrated) {
-        Unit::Gpu
-    } else {
-        Unit::Cpu
-    }
+    let metal = cfg!(feature = "gguf-metal");
+    crate::compute::small_model_unit(metal, &if metal { Vec::new() } else { gpus() })
 }
 
 /// Graphics memory kept free for the desktop and other programs when a model is placed on the
