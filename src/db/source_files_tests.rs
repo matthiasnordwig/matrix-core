@@ -240,3 +240,17 @@ fn every_search_path_leaves_out_documents_whose_file_is_missing_by_exclusion() {
     db.set_source_present(ctx, "/d/1.txt", 10, 1_000).unwrap();
     assert_eq!(db.keyword_search_context(ctx, "Quarzbruecke", 10, None).unwrap().len(), 3);
 }
+
+#[test]
+fn a_forgotten_file_leaves_its_document_without_a_row() {
+    let db = Database::open_in_memory().unwrap();
+    let ctx = context(&db, "c");
+    let (a, b) = (document(&db, ctx, "a"), document(&db, ctx, "b"));
+    db.record_source_file(&source(a, ctx, "/kept/a.pdf"), false).unwrap();
+    db.record_source_file(&source(b, ctx, "/kept/b.pdf"), false).unwrap();
+    assert!(db.delete_source_file(a).unwrap());
+    assert!(!db.delete_source_file(a).unwrap());
+    assert!(db.document(a).unwrap().is_some(), "the document stays");
+    let left: Vec<i64> = db.source_files(ctx).unwrap().iter().map(|r| r.document_id).collect();
+    assert_eq!(left, vec![b]);
+}

@@ -99,6 +99,12 @@ impl Database {
         self.set_folder_from_source(f.document_id, &f.path)
     }
 
+    /// Forget `document_id`'s file (the document stays, without a file): the app removed the copy it
+    /// kept of an upload. Returns whether a row was there.
+    pub fn delete_source_file(&self, document_id: i64) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM source_files WHERE document_id = ?1", [document_id])? > 0)
+    }
+
     /// The finished source rows of `context_id` (not `pending`), by path and document.
     pub fn source_files(&self, context_id: i64) -> Result<Vec<SourceFile>> {
         let mut stmt = self.conn.prepare(&format!(
