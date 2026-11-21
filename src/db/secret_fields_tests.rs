@@ -260,3 +260,16 @@ fn enable_secrets_creates_key_file_and_converts() {
     drop(db);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_value_outside_the_registries_is_sealed_with_its_own_field() {
+    let mut db = Database::open_in_memory().unwrap();
+    assert_eq!(db.seal_secret(AAD_PEER_TOKEN, "tok"), "tok", "no key: plaintext");
+    db.set_secret_key(Some(SecretKey::generate()));
+    let sealed = db.seal_secret(AAD_PEER_TOKEN, "tok");
+    assert!(secrets::is_encrypted(&sealed));
+    assert_eq!(db.seal_secret(AAD_PEER_TOKEN, &sealed), sealed, "never sealed twice");
+    assert_eq!(db.open_secret(AAD_PEER_TOKEN, &sealed), "tok");
+    assert_eq!(db.open_secret(AAD_PEER_TOKEN, "plain"), "plain");
+    assert!(secrets::is_encrypted(&db.open_secret(AAD_LLM_KEY, &sealed)), "another field does not open it");
+}

@@ -1,7 +1,9 @@
 //! Which registry fields hold API keys, and their sealing on write / opening on
 //! read (`crate::secrets` does the cryptography).
 //!
-//! Fields: `llm_endpoints.api_key_ref` (the whole value),
+//! Fields: `llm_endpoints.api_key_ref` (the whole value), the token of a paired Matrix device in
+//! the app setting `peer_devices` (sealed and opened by the app: [`Database::seal_secret`],
+//! [`Database::open_secret`], associated data [`AAD_PEER_TOKEN`]),
 //! `embedding_models.api_config` → only the JSON field `api_key`,
 //! `reranker_models.api_config` → only the JSON field `key_ref` (it carries the
 //! key inline). The rest of the JSON stays readable. Each field has its own
@@ -28,6 +30,7 @@ use crate::secrets::{self, SecretKey};
 pub const AAD_LLM_KEY: &str = "llm_endpoints.api_key_ref";
 pub const AAD_EMBED_KEY: &str = "embedding_models.api_config.api_key";
 pub const AAD_RERANK_KEY: &str = "reranker_models.api_config.key_ref";
+pub const AAD_PEER_TOKEN: &str = "settings.peer_devices.token";
 const EMBED_JSON_FIELD: &str = "api_key";
 const RERANK_JSON_FIELD: &str = "key_ref";
 
@@ -78,6 +81,18 @@ impl Database {
     pub(super) fn seal_value(&self, aad: &str, v: Option<&str>) -> Option<String> {
         let v = v?;
         Some(seal(self.secret_key.as_ref(), aad, v).unwrap_or_else(|| v.to_string()))
+    }
+
+    /// `v` sealed for a field outside the registries (`aad` names it); unchanged without a key
+    /// or when already sealed.
+    pub fn seal_secret(&self, aad: &str, v: &str) -> String {
+        seal(self.secret_key.as_ref(), aad, v).unwrap_or_else(|| v.to_string())
+    }
+
+    /// The plain value of a [`seal_secret`](Self::seal_secret) result; a value that cannot be
+    /// opened (no key, replaced key) stays `enc:` (the app refuses to send it), plaintext stays.
+    pub fn open_secret(&self, aad: &str, v: &str) -> String {
+        open(self.secret_key.as_ref(), aad, v).unwrap_or_else(|| v.to_string())
     }
 
     fn seal_json(&self, aad: &str, field: &str, json: Option<&str>) -> Option<String> {
