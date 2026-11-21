@@ -29,7 +29,10 @@
 //! `CPUAndNeuralEngine`, `Coreml` → `All`; they are distinct EPs, not aliases.
 //! Non-apple targets always use the CPU EP (the `coreml` ort feature exists
 //! only on apple, see `core/Cargo.toml`). CoreML is slower than CPU for the
-//! jina-de embedder (graph partitioning), hence the CPU default.
+//! jina-de embedder (graph partitioning) and cannot run EmbeddingGemma 2 at all
+//! (it refuses the empty `*_features` inputs), hence the CPU default. `load_on`
+//! picks the unit (`onnx_ep.rs`); only the measurement (`examples/onnx_unit_bench.rs`)
+//! asks for the graphics unit, see `handbuch/core.md` "Rechenweg".
 
 use std::sync::Mutex;
 
@@ -40,7 +43,7 @@ use ndarray::Array2;
 // always takes the CPU path.
 #[cfg(target_vendor = "apple")]
 use ort::ep::coreml::{ComputeUnits as CoreMLComputeUnits, CoreML as CoreMLExecutionProvider};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::{Tokenizer, TruncationParams};
 
@@ -107,6 +110,11 @@ fn feature_dim(input: &ort::value::Outlet) -> usize {
 
 impl OrtEmbedder {
     pub fn load(model: &EmbeddingModel) -> Result<Self> {
+        Self::load_on(model, crate::compute::Unit::Cpu)
+    }
+
+    /// Like [`Self::load`], on `unit` (`onnx_ep::session_on`); `Unit::Cpu` keeps the model's own Apple EP.
+    pub fn load_on(model: &EmbeddingModel, unit: crate::compute::Unit) -> Result<Self> {
         let model_path = model
             .model_path
             .as_ref()
@@ -117,7 +125,7 @@ impl OrtEmbedder {
             .ok_or_else(|| CoreError::Embedding("tokenizer_path missing".into()))?;
 
         #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
-        let mut builder = Session::builder()?;
+        let mut builder = super::onnx_ep::session_on(unit)?;
         // Apple only: which EP a model uses is now a real per-model choice
         // (MODEL_INFRA_PLAN.md AP3), defaulting to CPU — including on iOS: the
         // bundled iOS model is *seeded* with `Ane` (see
@@ -140,15 +148,13 @@ impl OrtEmbedder {
                 Some(ExecutionProvider::Coreml) => Some(CoreMLComputeUnits::All),
                 _ => None,
             };
-            if let Some(units) = compute_units {
+            if let (Some(units), crate::compute::Unit::Cpu) = (compute_units, unit) {
                 builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
                     .with_compute_units(units)
                     .build()])?;
             }
         }
-        let session = builder
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .commit_from_file(model_path)?;
+        let session = builder.commit_from_file(model_path)?;
 
         let has_token_type = session.inputs().iter().any(|i| i.name() == "token_type_ids");
         let feature_inputs: Vec<(String, usize)> = session

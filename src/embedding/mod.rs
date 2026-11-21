@@ -28,6 +28,9 @@ pub mod rerank;
 
 #[cfg(feature = "onnx")]
 pub mod onnx;
+/// Where an ONNX session runs (graphics unit or CPU), one place for every ONNX model.
+#[cfg(feature = "onnx")]
+pub mod onnx_ep;
 /// glibc < 2.38 shims for the prebuilt ONNX Runtime (Linux only).
 #[cfg(all(target_os = "linux", feature = "onnx"))]
 mod glibc_compat;

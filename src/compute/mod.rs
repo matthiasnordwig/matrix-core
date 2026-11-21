@@ -6,8 +6,9 @@
 //! 1. **Rule, free:** [`gguf_verdict`] from the devices llama.cpp reports. No graphics unit, or a
 //!    model that does not fit: CPU. Apple's Metal and a dedicated card the whole model plus its
 //!    context fits on: graphics unit. Everything else (an integrated graphics unit, part of the
-//!    layers only): a quick test. The ONNX models (search model, ONNX reranker) stay on the CPU:
-//!    DirectML was slower there at the chunk sizes Matrix cuts (`handbuch/release-windows.md`).
+//!    layers only): a quick test. The ONNX models (search model and its image encoder, ONNX
+//!    reranker, PaddleOCR) stay on the CPU, measured against the graphics unit with
+//!    `embedding/onnx_ep.rs` (`handbuch/core.md` "Rechenweg").
 //! 2. **Quick test, once:** the engine measures both ways ([`Timing`]) and [`judge`] decides. The
 //!    result is kept under [`probe_key`] (device, driver, model file, build), so it runs again only
 //!    when one of them changes.

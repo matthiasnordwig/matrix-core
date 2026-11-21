@@ -14,14 +14,15 @@
 //! shared through an `Arc` so an image and its text queries use ONE session
 //! ([`OrtImageEmbedder::with_text`] takes the app's cached text embedder
 //! instead of loading the ~1 GB model a second time). The vision session runs
-//! on the CPU EP; CoreML for it is unmeasured.
+//! on the CPU: CoreML was slower (Mac), DirectML fails on a Reshape node of
+//! `vision_encoder_q4` (`examples/onnx_unit_bench.rs`, `handbuch/core.md` "Rechenweg").
 
 use std::sync::{Arc, Mutex};
 
 use image::imageops::FilterType;
 use image::DynamicImage;
 use ndarray::{Array2, Array3};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::Session;
 use ort::value::Tensor;
 
 use super::onnx::OrtEmbedder;
@@ -45,9 +46,12 @@ impl OrtImageEmbedder {
     /// Like [`Self::load`], but on an already loaded text embedder of the same
     /// model (shared session, no second copy of the text model in memory).
     pub fn with_text(text: Arc<OrtEmbedder>, vision_model_path: &str) -> Result<Self> {
-        let vision = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .commit_from_file(vision_model_path)?;
+        Self::with_text_on(text, vision_model_path, crate::compute::Unit::Cpu)
+    }
+
+    /// Like [`Self::with_text`], the vision encoder on `unit` (`onnx_ep::session_on`).
+    pub fn with_text_on(text: Arc<OrtEmbedder>, vision_model_path: &str, unit: crate::compute::Unit) -> Result<Self> {
+        let vision = super::onnx_ep::session_on(unit)?.commit_from_file(vision_model_path)?;
         Ok(Self { vision: Mutex::new(vision), text, max_soft_tokens: MAX_SOFT_TOKENS })
     }
 
