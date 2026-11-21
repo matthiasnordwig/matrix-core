@@ -8,7 +8,8 @@
 //!    much taller than the body text with space above it, an outline number ([`outline_start`])
 //!    opening a short line (with a full stop only when centred), or a short line without a
 //!    sentence end with gaps above and below.
-//! 2. [`clean_pages`]: lone page numbers ([`is_page_number`]) and running heads/feet (the same
+//! 2. [`clean_pages`]: lone page numbers ([`is_page_number`], also a lone row of them in columns
+//!    like the sheet signature "2 | 17") and running heads/feet (the same
 //!    line, digits ignored, at a page edge on at least a quarter of the pages, at least 3, and
 //!    misread copies of it, [`misread_of`]) go; recognition noise in place of punctuation is
 //!    replaced (`scan_noise.rs`).
@@ -276,6 +277,18 @@ pub fn is_page_number(t: &str) -> bool {
     t.chars().count() <= 12 && !core.is_empty() && PAGE_NUMBER_RE.is_match(core)
 }
 
+/// A page-number line of `page`: a lone page number, or a row whose columns (` | `) are all page
+/// numbers while no neighbouring row has columns — a sheet signature beside the page number
+/// ("2 | 17"), not the last row of a table of figures.
+fn page_number_line(page: &[PageLine], i: usize) -> bool {
+    let t = &page[i].text;
+    if !t.contains(" | ") {
+        return is_page_number(t);
+    }
+    let columns = |j: Option<usize>| j.and_then(|j| page.get(j)).is_some_and(|l| l.text.contains(" | "));
+    !columns(i.checked_sub(1)) && !columns(Some(i + 1)) && t.split(" | ").all(is_page_number)
+}
+
 /// Key of a running line: lower case, digit runs as `#`, whitespace collapsed.
 fn running_key(t: &str) -> String {
     DIGITS_RE.replace_all(&t.to_lowercase(), "#").split_whitespace().collect::<Vec<_>>().join(" ")
@@ -284,7 +297,9 @@ fn running_key(t: &str) -> String {
 /// A running line's key must be this long (without spaces) before misread copies of it count.
 const FUZZY_MIN_CHARS: usize = 8;
 
-fn levenshtein(a: &[char], b: &[char]) -> usize {
+/// Edit distance between two character sequences (insert, delete, replace each count 1); also
+/// the measure of the OCR accuracy tests in services (`ingest/ocr/*_measure.rs`).
+pub fn levenshtein(a: &[char], b: &[char]) -> usize {
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.iter().enumerate() {
         let mut cur = vec![i + 1];
@@ -342,7 +357,7 @@ fn drop_lines(page: &mut Vec<PageLine>, drop: &HashSet<usize>) {
 pub fn clean_pages(pages: &mut [(i64, Vec<PageLine>)]) -> Removed {
     let mut removed = Removed::default();
     for (_, page) in pages.iter_mut() {
-        let drop: HashSet<usize> = edges(page.len()).into_iter().filter(|&i| is_page_number(&page[i].text)).collect();
+        let drop: HashSet<usize> = edges(page.len()).into_iter().filter(|&i| page_number_line(page, i)).collect();
         removed.page_numbers += drop.len();
         drop_lines(page, &drop);
     }

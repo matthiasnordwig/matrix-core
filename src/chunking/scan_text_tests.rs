@@ -34,6 +34,19 @@ fn running_heads_go_page_numbers_go_text_stays() {
 }
 
 #[test]
+fn a_sheet_signature_beside_the_page_number_goes_a_table_row_stays() {
+    // Regression (Kafka scan, PaddleOCR): footer "2 | 17" = sheet number and page number as two boxes.
+    let mut pages = vec![
+        (1, vec![pl("Text eins.", false), pl("weiter.", false), pl("2 | 17", true)]),
+        (2, vec![pl("Jahr | Wert", false), pl("1 | 12", false), pl("Satz.", true), pl("Ende | 3", false)]),
+    ];
+    let r = clean_pages(&mut pages);
+    assert_eq!(r.page_numbers, 1);
+    assert_eq!(pages[0].1.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Text eins.", "weiter."]);
+    assert_eq!(pages[1].1.len(), 4, "a numbers row under a header row and a mixed row stay");
+}
+
+#[test]
 fn a_line_on_few_pages_is_no_running_line() {
     let w = ["Anna", "Berta", "Carl", "Dora", "Emil", "Fritz", "Gustav", "Heinrich", "Ida", "Julius", "Karl", "Ludwig"];
     let mut pages: Vec<(i64, Vec<PageLine>)> =
