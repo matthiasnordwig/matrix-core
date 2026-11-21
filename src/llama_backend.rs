@@ -28,6 +28,10 @@ use crate::compute::{Fit, Gpu, Unit};
 
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 static INIT: Mutex<()> = Mutex::new(());
+/// One `llama_params_fit` at a time: it points llama.cpp's process-global log callback at its own
+/// stack frame and restores the callback it found, so two at once leave the callback aimed at a
+/// finished frame and the next log line crashes. Held around every `fit_params` call.
+static FIT: Mutex<()> = Mutex::new(());
 
 /// Returns the process-wide llama.cpp backend, initializing it on first use.
 /// Callers map the `String` error into their own error type.
@@ -172,7 +176,11 @@ pub fn fit_to_gpu_memory(
             .with_n_ctx(std::num::NonZeroU32::new(n_ctx))
             .with_n_batch(n_batch);
         let mut margins = vec![gpu_margin() as usize; llama_cpp_2::max_devices()];
-        match params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _) {
+        let fitted = {
+            let _one = FIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx, GGML_LOG_LEVEL_WARN as _)
+        };
+        match fitted {
             Err(FitError::Failure) => {
                 params.set(model_params_on(Unit::Cpu));
                 Some(Fit::Nothing)
@@ -218,7 +226,11 @@ pub fn context_on_gpu(model_path: &str, n_batch: u32, kv: Option<&str>, n_ctx_mi
     // llama.cpp's defaults (every layer on the graphics unit): fit refuses parameters it did not set.
     let mut params = std::pin::pin!(LlamaModelParams::default().with_use_mmap(true));
     let mut margins = vec![usize::try_from(margin).unwrap_or(usize::MAX); llama_cpp_2::max_devices()];
-    let fit = params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx_min, GGML_LOG_LEVEL_WARN as _).ok()?;
+    let fit = {
+        let _one = FIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        params.as_mut().fit_params(&path, &mut cparams, &mut margins, n_ctx_min, GGML_LOG_LEVEL_WARN as _)
+    }
+    .ok()?;
     // Fewer layers on the unit = the model does not fit whole even at `n_ctx_min`.
     (params.n_gpu_layers() < 0).then_some(fit.n_ctx)
 }
@@ -299,5 +311,42 @@ mod tests {
         let first = backend().expect("first init");
         let second = backend().expect("second call must reuse, not re-init");
         assert!(std::ptr::eq(first, second));
+    }
+
+    /// Regression: `llama_params_fit` swaps llama.cpp's global log callback for one pointing at
+    /// its own stack frame and restores the one it found. Two fits at once (the endpoint list is
+    /// requested several times at app start) left the callback aimed at a finished frame, and the
+    /// next log line jumped through it (SIGBUS in `llama_log_internal`, 0.2.12). Fits from many
+    /// threads must all return. Needs a GGUF model (`MATRIX_FIT_TEST_GGUF` or the reranker under
+    /// `models/`); skipped without one.
+    #[test]
+    fn concurrent_fits_keep_the_log_callback_valid() {
+        let path = std::env::var("MATRIX_FIT_TEST_GGUF").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../models/bge-reranker-v2-m3-gguf/bge-reranker-v2-m3-Q8_0.gguf").into()
+        });
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("skipped: no GGUF model at {path}");
+            return;
+        }
+        backend().expect("backend");
+        let threads: Vec<_> = (0..6)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..3 {
+                        let _ = super::context_on_gpu(&path, 512, None, 512, super::GPU_MARGIN);
+                        let _ = super::fit_to_gpu_memory(
+                            std::pin::pin!(super::model_params_on(crate::compute::Unit::Gpu)),
+                            &path,
+                            512,
+                            512,
+                        );
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("fit thread");
+        }
     }
 }
