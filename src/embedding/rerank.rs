@@ -30,6 +30,9 @@ pub fn rank_merge(scores: &[f32], top_k: usize) -> Vec<usize> {
     idx
 }
 
+/// The error text of a scoring stopped on request (`score_pairs_until`, ONNX and GGUF).
+pub const STOPPED: &str = "rerank stopped: nobody waits for the scores any more";
+
 #[cfg(feature = "onnx")]
 mod imp {
     //! EP selection mirrors `onnx.rs::OrtEmbedder::load` (MODEL_INFRA_PLAN.md
@@ -129,11 +132,21 @@ mod imp {
         /// the same order as `docs`. Batches in small groups to bound memory;
         /// each pair is truncated to `MAX_SEQ_LEN`.
         pub fn score_pairs(&self, query: &str, docs: &[&str]) -> Result<Vec<f32>> {
+            self.score_pairs_until(query, docs, &|| false)
+        }
+
+        /// [`score_pairs`](Self::score_pairs) that asks `stop` before each batch and ends with an
+        /// error once it says yes (a caller that no longer waits for the scores; the batch that
+        /// runs is finished, batches stay the same, so the scores do too).
+        pub fn score_pairs_until(&self, query: &str, docs: &[&str], stop: &dyn Fn() -> bool) -> Result<Vec<f32>> {
             if docs.is_empty() {
                 return Ok(Vec::new());
             }
             let mut out: Vec<f32> = Vec::with_capacity(docs.len());
             for batch in docs.chunks(BATCH_SIZE) {
+                if stop() {
+                    return Err(CoreError::Embedding(super::STOPPED.into()));
+                }
                 out.extend(self.score_batch(query, batch)?);
             }
             Ok(out)

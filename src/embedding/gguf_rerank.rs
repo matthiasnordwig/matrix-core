@@ -115,6 +115,13 @@ mod imp {
         /// Score each (query, doc) pair; returns one raw rank logit per doc, in
         /// `docs` order. Higher = more relevant. Empty `docs` → empty vec.
         pub fn score_pairs(&self, query: &str, docs: &[&str]) -> Result<Vec<f32>> {
+            self.score_pairs_until(query, docs, &|| false)
+        }
+
+        /// [`score_pairs`](Self::score_pairs) that asks `stop` before each pair and ends with an
+        /// error once it says yes (a caller that no longer waits for the scores). Each pair is
+        /// scored on its own, so the scores do not change.
+        pub fn score_pairs_until(&self, query: &str, docs: &[&str], stop: &dyn Fn() -> bool) -> Result<Vec<f32>> {
             if docs.is_empty() {
                 return Ok(Vec::new());
             }
@@ -148,6 +155,9 @@ mod imp {
 
             let mut out: Vec<f32> = Vec::with_capacity(docs.len());
             for &doc in docs {
+                if stop() {
+                    return Err(CoreError::Embedding(crate::embedding::rerank::STOPPED.into()));
+                }
                 let doc_tokens: Vec<i32> = self
                     .model
                     .str_to_token(doc, AddBos::Always)
