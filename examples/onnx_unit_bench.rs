@@ -1,9 +1,11 @@
 //! Graphics unit against CPU for the local ONNX search model (`embedding/onnx_ep.rs`): passages per
 //! second when ingesting, query latency, image embeddings per second, and how close the vectors of
-//! both ways are (cosine per passage/image). Uses the app's own `OrtEmbedder`/`OrtImageEmbedder`.
+//! each way are to the first one's (cosine per passage/query/image). Uses the app's own
+//! `OrtEmbedder`/`OrtImageEmbedder`. Ways: `cpu`, `gpu`, and `gpu-fixed` (input padded to `FIXED`
+//! tokens with a fixed shape, `OrtEmbedder::load_padded`; longer passages are skipped and counted).
 //! Run (Windows: DirectML, Apple: CoreML):
-//!   MODEL_DIR=<embeddinggemma-2 folder> TEXT_DIR=<folder of .md/.txt> [N=200] [CHARS=1200]
-//!   [IMAGE_DIR=<folder of .png/.jpg> VISION=vision_encoder_q4.onnx [VISION_UNIT=cpu|gpu]] [UNITS=cpu,gpu]
+//!   MODEL_DIR=<embeddinggemma-2 folder> TEXT_DIR=<folder of .md/.txt> [N=200] [CHARS=1200] [FIXED=512]
+//!   [IMAGE_DIR=<folder of .png/.jpg> VISION=vision_encoder_q4.onnx [VISION_UNIT=cpu|gpu]] [UNITS=cpu,gpu,gpu-fixed]
 //!   cargo run --release --example onnx_unit_bench --features onnx-download
 
 #[cfg(feature = "onnx")]
@@ -22,10 +24,17 @@ fn main() {
     let dir = PathBuf::from(env("MODEL_DIR").expect("set MODEL_DIR"));
     let n: usize = env("N").and_then(|v| v.parse().ok()).unwrap_or(200);
     let chars: usize = env("CHARS").and_then(|v| v.parse().ok()).unwrap_or(1200);
-    let units: Vec<Unit> = env("UNITS")
+    let fixed: usize = env("FIXED").and_then(|v| v.parse().ok()).unwrap_or(512);
+    // (unit, fixed input length)
+    let ways: Vec<(Unit, Option<usize>)> = env("UNITS")
         .unwrap_or_else(|| "cpu,gpu".into())
         .split(',')
-        .map(|u| if u.trim() == "gpu" { Unit::Gpu } else { Unit::Cpu })
+        .map(|u| match u.trim() {
+            "gpu" => (Unit::Gpu, None),
+            "gpu-fixed" => (Unit::Gpu, Some(fixed)),
+            "cpu-fixed" => (Unit::Cpu, Some(fixed)),
+            _ => (Unit::Cpu, None),
+        })
         .collect();
 
     // Passages: paragraphs of the text files, joined up to `chars` (never cut inside a paragraph).
@@ -52,7 +61,7 @@ fn main() {
     }
     let avg = passages.iter().map(|p| p.chars().count()).sum::<usize>() / passages.len().max(1);
     println!("{} passages, avg {avg} chars", passages.len());
-    let queries: Vec<String> = passages.iter().take(20).map(|p| format!("task: search result | query: {}", p.chars().skip(20).take(60).collect::<String>())).collect();
+    let queries: Vec<String> = passages.iter().map(|p| format!("task: search result | query: {}", p.chars().skip(20).take(60).collect::<String>())).collect();
 
     let images: Vec<Vec<u8>> = env("IMAGE_DIR")
         .map(|d| {
@@ -85,30 +94,36 @@ fn main() {
     };
     let vision = env("VISION").map(|v| path(&v));
 
-    // Per unit: passage vectors, image vectors.
-    type Run = (Unit, Vec<Vec<f32>>, Vec<Vec<f32>>);
+    // Per way: passage vectors, query vectors, image vectors (`None`: longer than the fixed input).
+    type Vecs = Vec<Option<Vec<f32>>>;
+    type Run = (String, Vecs, Vecs, Vec<Vec<f32>>);
     let mut runs: Vec<Run> = Vec::new();
-    for unit in units {
+    for (unit, pad) in ways {
+        let name = match pad { Some(l) => format!("{unit:?}-fixed{l}"), None => format!("{unit:?}") };
         let t = Instant::now();
-        let e = Arc::new(OrtEmbedder::load_on(&model, unit).expect("load"));
+        let e = Arc::new(match pad {
+            Some(l) => OrtEmbedder::load_padded(&model, unit, l),
+            None => OrtEmbedder::load_on(&model, unit),
+        }.expect("load"));
         let load = t.elapsed().as_secs_f64();
-        for p in passages.iter().take(3) {
+        let fits = |t: &str| pad.is_none_or(|l| e.token_count(t).unwrap() <= l);
+        for p in passages.iter().filter(|p| fits(p)).take(3) {
             e.embed_query(&model, p).unwrap(); // warm-up, discarded
         }
-        let t = Instant::now();
-        let vecs: Vec<Vec<f32>> = passages.iter().map(|p| e.embed_query(&model, p).unwrap()).collect();
-        let secs = t.elapsed().as_secs_f64();
-        let t = Instant::now();
-        for q in &queries {
-            e.embed_query(&model, q).unwrap();
-        }
-        let q_ms = t.elapsed().as_secs_f64() * 1000.0 / queries.len().max(1) as f64;
-        let t = Instant::now();
-        for _ in 0..10 {
-            e.embed_query(&model, &queries[0]).unwrap();
-        }
-        println!("{unit:?}: same query 10x: {:.0} ms each", t.elapsed().as_secs_f64() * 100.0);
-        println!("{unit:?}: load {load:.1} s, {} passages {secs:.1} s = {:.1}/s, query {q_ms:.0} ms", vecs.len(), vecs.len() as f64 / secs);
+        let embed_all = |texts: &[String]| -> (Vecs, f64, usize) {
+            let t = Instant::now();
+            let v: Vecs = texts.iter().map(|p| fits(p).then(|| e.embed_query(&model, p).unwrap())).collect();
+            let done = v.iter().filter(|x| x.is_some()).count();
+            (v, t.elapsed().as_secs_f64() * 1000.0 / done.max(1) as f64, done)
+        };
+        let (vecs, p_ms, p_done) = embed_all(&passages);
+        let tokens = passages.iter().filter(|p| fits(p)).map(|p| e.token_count(p).unwrap()).sum::<usize>() / p_done.max(1);
+        let (qvecs, q_ms, _) = embed_all(&queries);
+        println!(
+            "{name}: load {load:.1} s, {p_done}/{} passages (avg {tokens} tokens) {p_ms:.0} ms each = {:.1}/s, query {q_ms:.0} ms",
+            vecs.len(),
+            1000.0 / p_ms
+        );
         let mut img_vecs = Vec::new();
         // The vision encoder's own unit: `VISION_UNIT=cpu|gpu` (default: the text model's).
         let vision_unit = match env("VISION_UNIT").as_deref() {
@@ -116,30 +131,39 @@ fn main() {
             Some("cpu") => Unit::Cpu,
             _ => unit,
         };
-        if let (Some(v), false) = (&vision, images.is_empty()) {
+        if let (Some(v), false, None) = (&vision, images.is_empty(), pad) {
             let ie = OrtImageEmbedder::with_text_on(e.clone(), v, vision_unit).expect("vision").with_max_soft_tokens(app::embedding::vision_prep::APP_SOFT_TOKENS);
             ie.embed_image_bytes(&images[0]).unwrap();
             let t = Instant::now();
             img_vecs = images.iter().map(|b| ie.embed_image_bytes(b).unwrap()).collect();
             let s = t.elapsed().as_secs_f64();
-            println!("{unit:?} (vision {vision_unit:?}): {} images {s:.1} s = {:.2}/s", img_vecs.len(), img_vecs.len() as f64 / s);
+            println!("{name} (vision {vision_unit:?}): {} images {s:.1} s = {:.2}/s", img_vecs.len(), img_vecs.len() as f64 / s);
         }
-        runs.push((unit, vecs, img_vecs));
+        runs.push((name, vecs, qvecs, img_vecs));
     }
     let cos = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
-    let report = |what: &str, a: &[Vec<f32>], b: &[Vec<f32>]| {
-        if a.is_empty() || a.len() != b.len() {
+    let report = |what: &str, ways: &str, pairs: Vec<(&Vec<f32>, &Vec<f32>)>| {
+        if pairs.is_empty() {
             return;
         }
-        let c: Vec<f32> = a.iter().zip(b).map(|(x, y)| cos(x, y)).collect();
+        let c: Vec<f32> = pairs.iter().map(|(x, y)| cos(x, y)).collect();
         let min = c.iter().cloned().fold(f32::MAX, f32::min);
         let mean = c.iter().sum::<f32>() / c.len() as f32;
         let below = c.iter().filter(|&&v| v < 0.999).count();
-        println!("cosine {what} cpu vs gpu: min {min:.6}, mean {mean:.6}, below 0.999: {below}/{}", c.len());
+        println!("cosine {what} {ways}: min {min:.6}, mean {mean:.6}, below 0.999: {below}/{}", c.len());
     };
-    if runs.len() == 2 {
-        report("passages", &runs[0].1, &runs[1].1);
-        report("images", &runs[0].2, &runs[1].2);
+    fn pairs<'a>(a: &'a [Option<Vec<f32>>], b: &'a [Option<Vec<f32>>]) -> Vec<(&'a Vec<f32>, &'a Vec<f32>)> {
+        a.iter().zip(b).filter_map(|(x, y)| Some((x.as_ref()?, y.as_ref()?))).collect()
+    }
+    if let Some((first, rest)) = runs.split_first() {
+        for r in rest {
+            let ways = format!("{} vs {}", first.0, r.0);
+            report("passages", &ways, pairs(&first.1, &r.1));
+            report("queries", &ways, pairs(&first.2, &r.2));
+            if first.3.len() == r.3.len() {
+                report("images", &ways, first.3.iter().zip(&r.3).collect());
+            }
+        }
     }
 }
 

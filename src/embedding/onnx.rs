@@ -32,7 +32,8 @@
 //! jina-de embedder (graph partitioning) and cannot run EmbeddingGemma 2 at all
 //! (it refuses the empty `*_features` inputs), hence the CPU default. `load_on`
 //! picks the unit (`onnx_ep.rs`); only the measurement (`examples/onnx_unit_bench.rs`)
-//! asks for the graphics unit, see `handbuch/core.md` "Rechenweg".
+//! asks for the graphics unit, see `handbuch/core.md` "Rechenweg". `load_padded` fixes the input
+//! shape (padded to one length, attention mask 0 on the padding) for DirectML.
 
 use std::sync::Mutex;
 
@@ -71,6 +72,14 @@ pub struct OrtEmbedder {
     feature_inputs: Vec<(String, usize)>,
     /// Graph emits a pooled `sentence_embedding` output (skip mean-pool).
     has_sentence_embedding: bool,
+    /// Fixed input length (`load_padded`): every input is padded to it, longer ones are refused.
+    pad_to: Option<usize>,
+}
+
+/// Free dimensions of the search model's inputs fixed by [`OrtEmbedder::load_padded`]: one input
+/// of `len` tokens, no image/video/audio tokens. Names absent from a model are ignored by ONNX Runtime.
+fn fixed_dimensions(len: usize) -> [(&'static str, i64); 5] {
+    [("batch_size", 1), ("sequence_length", len as i64), ("num_image_tokens", 0), ("num_video_tokens", 0), ("num_audio_tokens", 0)]
 }
 
 /// Input lengths in tokens and the memory one call needs (EmbeddingGemma 2 on CPU, measured; the ONNX
@@ -115,6 +124,23 @@ impl OrtEmbedder {
 
     /// Like [`Self::load`], on `unit` (`onnx_ep::session_on`); `Unit::Cpu` keeps the model's own Apple EP.
     pub fn load_on(model: &EmbeddingModel, unit: crate::compute::Unit) -> Result<Self> {
+        Self::load_with(model, unit, None)
+    }
+
+    /// Like [`Self::load_on`] with every input padded to `len` tokens and the input shape fixed:
+    /// DirectML fuses the graph only for one shape (`handbuch/core.md` "Rechenweg"). An input longer
+    /// than `len` tokens is refused (`embed` errors); [`Self::token_count`] tells beforehand.
+    pub fn load_padded(model: &EmbeddingModel, unit: crate::compute::Unit, len: usize) -> Result<Self> {
+        Self::load_with(model, unit, Some(len))
+    }
+
+    /// Tokens `text` becomes (after the length cap), as the model sees it.
+    pub fn token_count(&self, text: &str) -> Result<usize> {
+        let encoding = self.tokenizer.encode(text, true).map_err(|e| CoreError::Embedding(format!("tokenize: {e}")))?;
+        Ok(encoding.get_ids().len())
+    }
+
+    fn load_with(model: &EmbeddingModel, unit: crate::compute::Unit, pad_to: Option<usize>) -> Result<Self> {
         let model_path = model
             .model_path
             .as_ref()
@@ -124,7 +150,6 @@ impl OrtEmbedder {
             .as_ref()
             .ok_or_else(|| CoreError::Embedding("tokenizer_path missing".into()))?;
 
-        #[cfg_attr(not(target_vendor = "apple"), allow(unused_mut))]
         let mut builder = super::onnx_ep::session_on(unit)?;
         // Apple only: which EP a model uses is now a real per-model choice
         // (MODEL_INFRA_PLAN.md AP3), defaulting to CPU — including on iOS: the
@@ -153,6 +178,9 @@ impl OrtEmbedder {
                     .with_compute_units(units)
                     .build()])?;
             }
+        }
+        for (name, size) in pad_to.map(fixed_dimensions).into_iter().flatten() {
+            builder = builder.with_dimension_override(name, size)?;
         }
         let session = builder.commit_from_file(model_path)?;
 
@@ -183,6 +211,7 @@ impl OrtEmbedder {
             has_token_type,
             feature_inputs,
             has_sentence_embedding,
+            pad_to,
         })
     }
 
@@ -199,12 +228,21 @@ impl OrtEmbedder {
             .tokenizer
             .encode(text, true)
             .map_err(|e| CoreError::Embedding(format!("tokenize: {e}")))?;
-        let ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
-        let mask: Vec<i64> = encoding
+        let mut ids: Vec<i64> = encoding.get_ids().iter().map(|&x| x as i64).collect();
+        let mut mask: Vec<i64> = encoding
             .get_attention_mask()
             .iter()
             .map(|&x| x as i64)
             .collect();
+        if let Some(len) = self.pad_to {
+            if ids.len() > len {
+                return Err(CoreError::Embedding(format!("{} tokens, the fixed input holds {len}", ids.len())));
+            }
+            let pad = self.tokenizer.get_padding().map(|p| p.pad_id).or_else(|| self.tokenizer.token_to_id("<pad>")).unwrap_or(0);
+            let pad = pad as i64;
+            ids.resize(len, pad);
+            mask.resize(len, 0);
+        }
         let seq = ids.len().max(1);
 
         let to_arr = |v: Vec<i64>| {
