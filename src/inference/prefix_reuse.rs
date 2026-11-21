@@ -23,6 +23,10 @@
 //! between (a chat while a Grid run waits). Bounded by count and bytes ([`snapshots_to_drop`]).
 //! This only pays when the shared part comes first: prompts put static text (instructions,
 //! schema, tool list, the source text several calls ask about) before the variable part.
+//!
+//! An engine with several places (one sequence each, `gguf_places.rs`) keeps this per place and
+//! picks the place for a call with [`slot_for`]; [`admits`] keeps the calls running at once
+//! inside the context the places share.
 //! Pure; tests in `inference/tests.rs`.
 
 /// How far before the end of a prompt the state is saved (tokens).
@@ -129,4 +133,24 @@ pub fn snapshots_to_drop(sizes: &[usize]) -> usize {
         drop += 1;
     }
     drop
+}
+
+/// The free place (sequence) of an engine with several (`gguf_places.rs`) that takes `next`: the
+/// one whose memory shares the longest beginning with it — the next round of a tool loop lands
+/// where its previous round still is; on a tie the one holding the fewest tokens (it loses least),
+/// then the first. `free` = the memories of the free places; `None` without one.
+pub fn slot_for<T: PartialEq>(free: &[&[T]], next: &[T]) -> Option<usize> {
+    free.iter()
+        .enumerate()
+        .max_by_key(|(i, m)| (shared_len(m, next), std::cmp::Reverse(m.len()), std::cmp::Reverse(*i)))
+        .map(|(i, _)| i)
+}
+
+/// Whether a call needing `need` cells (prompt + answer budget) may start next to calls needing
+/// `running` in a context of `n_ctx` cells shared by all places: always when nothing runs (the
+/// prompt check already made sure one call fits), else only when all of them fit even without
+/// sharing a beginning — so the shared memory rarely runs full mid-answer (then the engine stops
+/// the latest call and runs it again later).
+pub fn admits(running: &[usize], need: usize, n_ctx: usize) -> bool {
+    running.is_empty() || running.iter().sum::<usize>().saturating_add(need) <= n_ctx
 }

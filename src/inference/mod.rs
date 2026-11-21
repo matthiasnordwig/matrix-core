@@ -1,4 +1,5 @@
-//! On-device generation through llama.cpp: `gguf` (chat), `gguf_device` (on which unit the
+//! On-device generation through llama.cpp: `gguf` (chat; several calls at once on `gguf_places`, how
+//! many pay off measured by `gguf_places_probe`), `gguf_device` (on which unit the
 //! chat model runs, quick test), `gguf_vlm` (picture + instruction via mtmd) and their shared
 //! prompt builder `chat_template` —
 //! behind the `gguf` feature — plus the llama.cpp-free text helpers
@@ -14,6 +15,10 @@ pub mod seed;
 pub mod gguf;
 #[cfg(feature = "gguf")]
 pub mod gguf_device;
+#[cfg(feature = "gguf")]
+mod gguf_places;
+#[cfg(feature = "gguf")]
+pub mod gguf_places_probe;
 #[cfg(feature = "gguf")]
 pub mod gguf_vlm;
 pub mod vlm_prompt;

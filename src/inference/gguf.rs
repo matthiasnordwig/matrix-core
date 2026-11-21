@@ -11,11 +11,16 @@
 //! the rounds of a tool loop no longer read the whole conversation again. Where a prompt
 //! stops sharing the previous call, the whole memory up to there is copied to host RAM
 //! (`Snapshot`) — the instructions every Grid row or extraction chunk starts with — and
-//! restored by a later call starting with it, also after another job's calls. Calls on one
-//! local endpoint run one at a time (its gate, `max_concurrency` 1); a call that still finds
+//! restored by a later call starting with it, also after another job's calls. With one place
+//! (the default) calls on one local endpoint run one at a time (its gate); a call that still finds
 //! the session busy gets a context of its own and keeps nothing. A failed or stopped call
 //! starts the next one fresh (snapshots stay). The kept context holds its memory (KV,
 //! recurrent state, compute buffers) between calls.
+//!
+//! With several places ([`GgufEngine::set_places`], app `local_places.rs`) the context belongs to a
+//! worker thread instead (`gguf_places.rs`): one sequence per place, calls come in over a channel,
+//! every step decodes the next token of every writing place plus a piece of the prompts being read.
+//! The one-place session is dropped first; places are part of the key the context was made with.
 //!
 //! When the kept memory goes (the one rule, `handbuch/core.md`): the next call on this engine
 //! keeps only what its prompt shares — a rewritten chat history (dropped or compacted turns)
@@ -28,10 +33,11 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::context::params::{LlamaContextParams, KvCacheType};
 use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, TryLockError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use super::generation::Generation;
+use super::gguf_places::{self, Msg, Request, Worker};
 use super::prefix_reuse::{self, Reuse};
 use super::seed::{sampler_seed, SEED_ENV};
 use crate::compute::Unit;
@@ -45,37 +51,69 @@ use crate::llama_backend::backend as get_backend;
 pub const CHUNK: usize = 512;
 
 pub struct GgufEngine {
-    // Declared before `model`: fields drop in order, and the session's context borrows it.
+    // Declared before `model`: fields drop in order, and the session's and the worker's contexts
+    // borrow it (`Worker` joins its thread when dropped).
     session: Mutex<Option<Session>>,
+    worker: Mutex<Option<Worker>>,
     model: Box<LlamaModel>,
     n_ctx: u32,
     /// Memory that cannot be cut back to any position (recurrent part, sliding window).
     partial_memory: bool,
     unit: Unit,
+    /// Places for calls at once ([`GgufEngine::set_places`]); 1 = one context, one call at a time.
+    places: AtomicUsize,
 }
 
 /// Context settings a session was made with; another call with other settings starts a new one.
 #[derive(Clone, PartialEq, Eq)]
-struct SessionKey {
+pub(super) struct SessionKey {
     kv_quantization: Option<String>,
     cpu_threads: Option<i64>,
 }
 
-/// What the context's memory holds.
+/// What the context's memory holds (with several places: one place's sequence).
 #[derive(Default)]
-struct Memory {
-    tokens: Vec<LlamaToken>,
+pub(super) struct Memory {
+    pub(super) tokens: Vec<LlamaToken>,
     /// Saved partial states (`LlamaStateSeqFlags::PARTIAL_ONLY`) by the position they were
     /// taken at, ascending (`prefix_reuse::retain`).
-    checkpoints: Vec<(usize, Vec<u8>)>,
+    pub(super) checkpoints: Vec<(usize, Vec<u8>)>,
     /// Saved beginnings, least recently used first (`prefix_reuse::snapshots_to_drop`).
     snapshots: Vec<Snapshot>,
 }
 
 /// The whole memory (every layer) after reading `tokens`.
-struct Snapshot {
-    tokens: Vec<LlamaToken>,
-    state: Vec<u8>,
+pub(super) struct Snapshot {
+    pub(super) tokens: Vec<LlamaToken>,
+    pub(super) state: Vec<u8>,
+}
+
+/// The parameters of a context of `n_ctx` tokens with `key`'s settings; the worker adds its sequences.
+pub(super) fn context_params(n_ctx: u32, key: &SessionKey) -> LlamaContextParams {
+    let mut ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx)).with_n_batch(CHUNK as u32);
+    if let Some(q) = key.kv_quantization.as_deref() {
+        let kv_type = match q {
+            "Q8_0" => KvCacheType::Q8_0,
+            "Q4_0" => KvCacheType::Q4_0,
+            _ => KvCacheType::F16,
+        };
+        ctx_params = ctx_params.with_type_k(kv_type).with_type_v(kv_type);
+    }
+    if let Some(t) = key.cpu_threads {
+        ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
+    }
+    ctx_params
+}
+
+/// The sampler of one answer: temperature 0.7 with a mild repetition penalty, fixed seed (`seed.rs`).
+pub(super) fn sampler() -> llama_cpp_2::sampling::LlamaSampler {
+    llama_cpp_2::sampling::LlamaSampler::chain_simple(vec![
+        llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
+        llama_cpp_2::sampling::LlamaSampler::top_k(40),
+        llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
+        llama_cpp_2::sampling::LlamaSampler::temp(0.7),
+        llama_cpp_2::sampling::LlamaSampler::dist(sampler_seed(std::env::var(SEED_ENV).ok().as_deref())),
+    ])
 }
 
 struct Session {
@@ -121,7 +159,22 @@ impl GgufEngine {
             .map_err(|e| format!("model load {model_path}: {e}"))?;
 
         let partial_memory = model.is_recurrent() || model.is_hybrid() || has_sliding_window(&model);
-        Ok(Self { session: Mutex::new(None), model: Box::new(model), n_ctx, partial_memory, unit })
+        Ok(Self {
+            session: Mutex::new(None),
+            worker: Mutex::new(None),
+            model: Box::new(model),
+            n_ctx,
+            partial_memory,
+            unit,
+            places: AtomicUsize::new(1),
+        })
+    }
+
+    /// How many calls may run at once (one place each, at least 1); the app sets it before a call
+    /// (`localllm`, from `local_places`). Takes effect with the next call: more than one moves the
+    /// context to a worker with that many places; once there, calls stay with the worker.
+    pub fn set_places(&self, places: usize) {
+        self.places.store(places.max(1), Ordering::Relaxed);
     }
 
     /// Where this engine runs.
@@ -179,6 +232,11 @@ impl GgufEngine {
         }
 
         let key = SessionKey { kv_quantization: kv_quantization.map(str::to_string), cpu_threads };
+        let places = self.places.load(Ordering::Relaxed);
+        if places > 1 || self.worker.lock().unwrap_or_else(|p| p.into_inner()).is_some() {
+            let turn_start = self.turn_start(messages, &tokens, add_bos);
+            return self.generate_on_places(tokens, turn_start, max_tokens, key, places, stop);
+        }
         let mut slot = match self.session.try_lock() {
             Ok(slot) => slot,
             Err(TryLockError::Poisoned(p)) => {
@@ -225,9 +283,42 @@ impl GgufEngine {
         Some(prefix_reuse::shared_len(&earlier_tokens, tokens))
     }
 
+    /// One call through the worker with several places: queued there, answered when its place is done.
+    fn generate_on_places(&self, tokens: Vec<LlamaToken>, turn_start: Option<usize>, max_tokens: u32, key: SessionKey, places: usize, stop: &AtomicBool) -> Result<Generation, String> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (reply, answer) = std::sync::mpsc::channel();
+        let request = Request { tokens, turn_start, max_tokens, cancel: cancel.clone(), reply };
+        self.worker_sender(key, places)?.send(Msg::Run(request)).map_err(|_| gguf_places::STOPPED.to_string())?;
+        gguf_places::wait(&answer, &cancel, stop)
+    }
+
+    /// The channel to the worker with `key` and at least `places` places, started (or replaced) now
+    /// if needed. The one-place session goes first: two contexts of this size need not fit together.
+    fn worker_sender(&self, key: SessionKey, places: usize) -> Result<std::sync::mpsc::Sender<Msg>, String> {
+        let mut slot = self.worker.lock().unwrap_or_else(|p| p.into_inner());
+        let places = places.max(slot.as_ref().map_or(1, Worker::places));
+        if let Some(w) = slot.as_ref().filter(|w| w.serves(&key, places)) {
+            return Ok(w.sender());
+        }
+        // An old worker answers what it already has, then ends (its drop waits for that).
+        *slot = None;
+        *self.session.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        // SAFETY: the model is boxed, never moves and outlives the worker (field order; dropping
+        // `Worker` joins its thread).
+        let model: &'static LlamaModel = unsafe { &*(self.model.as_ref() as *const LlamaModel) };
+        let worker = Worker::spawn(model, self.n_ctx, key, places, self.partial_memory)?;
+        let tx = worker.sender();
+        *slot = Some(worker);
+        Ok(tx)
+    }
+
     /// Drops what the engine keeps beyond the live context (snapshots, saved partial states,
-    /// the last call's tokens) — under memory pressure (app `localllm`). The next call starts fresh.
+    /// the last call's tokens) — under memory pressure (app `localllm`). The next call starts fresh;
+    /// with several places, places busy with a call keep theirs.
     pub fn drop_saved(&self) {
+        if let Some(w) = self.worker.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            let _ = w.sender().send(Msg::DropSaved);
+        }
         if let Ok(mut slot) = self.session.try_lock() {
             if let Some(session) = slot.as_mut() {
                 session.memory = Memory::default();
@@ -237,21 +328,13 @@ impl GgufEngine {
     }
 
     fn new_context(&self, key: &SessionKey) -> Result<LlamaContext<'_>, String> {
-        let mut ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(self.n_ctx))
-            .with_n_batch(CHUNK as u32);
-        if let Some(q) = key.kv_quantization.as_deref() {
-            let kv_type = match q {
-                "Q8_0" => KvCacheType::Q8_0,
-                "Q4_0" => KvCacheType::Q4_0,
-                _ => KvCacheType::F16,
-            };
-            ctx_params = ctx_params.with_type_k(kv_type).with_type_v(kv_type);
-        }
-        if let Some(t) = key.cpu_threads {
-            ctx_params = ctx_params.with_n_threads(t as i32).with_n_threads_batch(t as i32);
-        }
-        self.model.new_context(get_backend()?, ctx_params).map_err(|e| format!("context create: {e}"))
+        self.model.new_context(get_backend()?, context_params(self.n_ctx, key)).map_err(|e| format!("context create: {e}"))
+    }
+
+    /// The settings of a context with `kv_quantization` and `cpu_threads` (the quick measurement of
+    /// places, `gguf_places_probe.rs`).
+    pub(super) fn key_for(kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> SessionKey {
+        SessionKey { kv_quantization: kv_quantization.map(str::to_string), cpu_threads }
     }
 
     /// Prepares `ctx` for `tokens` along `prefix_reuse::plan`, or from a snapshot when that keeps
@@ -358,14 +441,7 @@ impl GgufEngine {
         let mut n_past = tokens.len() as i32;
         let read = started.elapsed().as_secs_f64();
 
-        let samplers = vec![
-            llama_cpp_2::sampling::LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
-            llama_cpp_2::sampling::LlamaSampler::top_k(40),
-            llama_cpp_2::sampling::LlamaSampler::top_p(0.9, 1),
-            llama_cpp_2::sampling::LlamaSampler::temp(0.7),
-            llama_cpp_2::sampling::LlamaSampler::dist(sampler_seed(std::env::var(SEED_ENV).ok().as_deref())),
-        ];
-        let mut chain = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
+        let mut chain = sampler();
 
         // Accept prompt tokens into the chain to avoid repeating the prompt
         for &t in tokens {

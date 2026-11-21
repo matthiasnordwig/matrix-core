@@ -1,4 +1,5 @@
-//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse`, `generation`).
+//! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse` incl. the
+//! choice of a place, `generation`).
 use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
 
 #[test]
@@ -234,4 +235,27 @@ fn an_end_of_turn_inside_the_budget_is_a_finished_answer() {
     assert_eq!(write_until_limit(3, || { n += 1; Ok(n < 3) }), Ok(false));
     // An error (cancel, decode failure) wins over both.
     assert_eq!(write_until_limit(4, || Err("cancelled".to_string())), Err("cancelled".to_string()));
+}
+
+#[test]
+fn a_call_takes_the_place_that_shares_most_of_it() {
+    use super::prefix_reuse::slot_for;
+    let next = [1, 2, 3, 4, 5];
+    let (a, b, c): (&[i32], &[i32], &[i32]) = (&[1, 2, 9], &[1, 2, 3, 4], &[]);
+    assert_eq!(slot_for(&[a, b, c], &next), Some(1), "the previous round of the same tool loop");
+    // Nothing shared anywhere: the emptiest place loses least.
+    let (d, e): (&[i32], &[i32]) = (&[7, 7, 7], &[8]);
+    assert_eq!(slot_for(&[d, e], &next), Some(1));
+    // A tie in both: the first.
+    assert_eq!(slot_for(&[e, e], &next), Some(0));
+    assert_eq!(slot_for::<i32>(&[], &next), None);
+}
+
+#[test]
+fn calls_start_together_only_while_all_fit_the_shared_context() {
+    use super::prefix_reuse::admits;
+    assert!(admits(&[], 20_000, 16_384), "alone a call always starts (the prompt check guards it)");
+    assert!(admits(&[7_000], 7_000, 16_384));
+    assert!(!admits(&[7_000, 7_000], 7_000, 16_384), "the third would not fit even sharing nothing");
+    assert!(admits(&[5_000, 5_000, 5_000], 5_000, 262_144));
 }
