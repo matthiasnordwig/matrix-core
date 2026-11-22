@@ -8,6 +8,7 @@ pub mod embedding;
 pub mod inference;
 #[cfg(feature = "gguf")]
 pub mod llama_backend;
+pub mod media;
 pub mod refs;
 pub mod secrets;
 pub mod text_language;

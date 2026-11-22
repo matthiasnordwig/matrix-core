@@ -23,6 +23,7 @@ pub mod rules;
 pub mod scan_text;
 pub mod scan_noise;
 pub mod text_repair;
+pub mod transcript;
 
 pub use segments::{split_segments, Segment};
 pub use sentences::{split_sentences, Sentence};
