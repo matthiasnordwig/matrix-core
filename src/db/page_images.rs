@@ -15,6 +15,8 @@
 //! picture the model gave no description for (chunk metadata, not text).
 //! A PDF graphics page keeps its describe state on its own row
 //! (`set_page_description_state`, schema_v64), so re-chunking cannot reset it.
+//! A video still is a page image with a time range (`insert_frame`, `frame_times`, schema_v85); which
+//! passages it points at is kept by `media.rs::sync_frame_ranges`.
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -73,6 +75,43 @@ impl Database {
         tx.commit()?;
         self.page_image(id)?
             .ok_or_else(|| CoreError::NotFound(format!("page_image {id}")))
+    }
+
+    /// Store a video still visible from `t_start_ms` to `t_end_ms` (schema_v85); like
+    /// [`Self::insert_page_image`], `page` is its running number. Its text range is set by
+    /// `sync_frame_ranges` once the passages exist.
+    pub fn insert_frame(&self, p: &NewPageImage, t_start_ms: i64, t_end_ms: i64) -> Result<PageImage> {
+        let id = self.in_savepoint("insert_frame", || {
+            self.conn.execute("DELETE FROM page_images WHERE document_id = ?1 AND page = ?2", params![p.document_id, p.page])?;
+            self.conn.execute(
+                "INSERT INTO page_images
+                    (context_id, document_id, page, char_start, char_end, width, height, image, t_start_ms, t_end_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![p.context_id, p.document_id, p.page, p.char_start, p.char_end, p.width, p.height, p.image, t_start_ms, t_end_ms],
+            )?;
+            Ok::<_, CoreError>(self.conn.last_insert_rowid())
+        })?;
+        self.page_image(id)?.ok_or_else(|| CoreError::NotFound(format!("page_image {id}")))
+    }
+
+    /// The stills of a video with their time and text range, in page order (pages without a time,
+    /// i.e. of other documents, are left out).
+    pub fn frame_times(&self, document_id: i64) -> Result<Vec<FrameTime>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, page, t_start_ms, t_end_ms, char_start, char_end FROM page_images
+              WHERE document_id = ?1 AND t_start_ms IS NOT NULL ORDER BY page",
+        )?;
+        let rows = stmt.query_map([document_id], |r| {
+            Ok(FrameTime {
+                page_image_id: r.get(0)?,
+                page: r.get(1)?,
+                t_start_ms: r.get(2)?,
+                t_end_ms: r.get::<_, Option<i64>>(3)?.unwrap_or(r.get(2)?),
+                char_start: r.get(4)?,
+                char_end: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// One page image (without its bytes).

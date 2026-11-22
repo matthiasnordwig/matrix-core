@@ -325,8 +325,8 @@ impl Database {
     }
 
     /// Copy all documents of context `src` with their chunks (text, offsets,
-    /// signature, omitted flag, metadata) and page images (without vectors)
-    /// into context `dst`, in one
+    /// signature, omitted flag, metadata), page images (without vectors) and
+    /// audio/video rows (`media.rs`) into context `dst`, in one
     /// transaction. `dst` must have no documents yet (guards against a double
     /// copy). Returns the number of chunks copied. FTS rows follow via the
     /// `chunks_fts_*` triggers.
@@ -353,9 +353,11 @@ impl Database {
             tx.execute(
                 "INSERT INTO documents
                     (context_id, name, zip_entry, byte_size, page_count, content_hash,
-                     extracted_text, ingested_at, description, chunker)
+                     extracted_text, ingested_at, description, chunker,
+                     taken_at_ms, tz_offset_min, time_source, origin)
                  SELECT ?2, name, zip_entry, byte_size, page_count, content_hash,
-                        extracted_text, ingested_at, description, chunker
+                        extracted_text, ingested_at, description, chunker,
+                        taken_at_ms, tz_offset_min, time_source, origin
                  FROM documents WHERE id = ?1",
                 params![doc_id, dst],
             )?;
@@ -383,12 +385,13 @@ impl Database {
             tx.execute(
                 "INSERT INTO page_images
                     (context_id, document_id, page, char_start, char_end, width, height, image, created_at,
-                     description_state, description_model)
+                     description_state, description_model, t_start_ms, t_end_ms)
                  SELECT ?2, ?3, page, char_start, char_end, width, height, image, created_at,
-                        description_state, description_model
+                        description_state, description_model, t_start_ms, t_end_ms
                  FROM page_images WHERE document_id = ?1 ORDER BY page",
                 params![doc_id, dst, new_doc],
             )?;
+            super::media::copy_media_rows(&tx, doc_id, new_doc)?;
         }
         // `duplicate_of` names a chunk of the source; the copy's repeats name the copied chunk.
         let repeats: Vec<(i64, i64)> = {

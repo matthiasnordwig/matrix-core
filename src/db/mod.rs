@@ -58,6 +58,7 @@ mod source_files;
 pub mod doc_meta;
 mod doc_time;
 mod media;
+mod media_models;
 mod doc_meta_models;
 pub mod page_refresh;
 mod grid_run_models;

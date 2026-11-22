@@ -11,7 +11,8 @@ zu Line-Gap/Forward-/Backward-Merge).
 `outline.rs` liest die Gliederung (Pfad, ganzer Abschnitt) beim Abruf aus gespeicherten Chunks
 zurück, ohne Neuzerlegung (Tests: `outline_tests.rs`).
 `mail.rs` schneidet Mails je Absender und erkennt eingebettete Mails an ihrer Form, `kind.rs` erkennt die
-Dokumentart, `rules.rs` schneidet nach Zeilenmarken (nur von Hand gewählt). Zeichengrenzen sind nur Rückfall.
+Dokumentart, `rules.rs` schneidet nach Zeilenmarken (nur von Hand gewählt). `transcript.rs` schneidet Ton/Video aus
+Zeitsegmenten (Text: `media/text.rs`; Regeln: `handbuch/medien.md` „Passagen“). Zeichengrenzen sind nur Rückfall.
 
 **Index-Basis:** `char_start`/`char_end` sind **Byte-Offsets** in den Dokumenttext
 (`signatures.rs`, `markdown.rs`); `markdown.rs` garantiert zusätzlich
