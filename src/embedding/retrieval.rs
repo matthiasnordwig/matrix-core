@@ -15,7 +15,9 @@
 //! per context via Reciprocal Rank Fusion (ranks only, never scores across
 //! spaces; keyword query and list weight per `fusion.rs`); `retrieve_with` stays the pure vector path. Every retrieve fn takes
 //! `doc_ids` (file-level scope); in the hybrid path the same filter is applied to
-//! ALL lists before fusion, otherwise out-of-scope chunks leak.
+//! ALL lists before fusion, otherwise out-of-scope chunks leak. A space without a question vector
+//! (its model computes on a paired device that is not in reach, services `query_vectors.rs`) is
+//! searched by its keyword list alone in the hybrid path — never with another space's vector.
 //!
 //! The hybrid path fuses a third list per context where page-image vectors of
 //! the context's model exist (`image_list.rs`): graphics pages scored in the
@@ -239,7 +241,22 @@ impl Database {
         // Chunk → best-ranked page image mapped onto it (preview decided below).
         let mut page_image_of: HashMap<i64, i64> = HashMap::new();
         for (model_id, ctxs) in self.contexts_by_model(context_ids)? {
+            // No question vector for this space (its model computes on a paired device that is not
+            // in reach): the keyword list alone, never another space's vector.
             let Some(qvec) = query_by_model.get(&model_id) else {
+                for cid in ctxs {
+                    let fts_ranked: Vec<i64> = self
+                        .keyword_search_context(cid, &keyword_query, n, doc_ids)?
+                        .into_iter()
+                        .map(|(id, _rank)| id)
+                        .collect();
+                    let lists = [(Some(ListKind::Keyword), fts_ranked.as_slice(), fusion.fts_weight)];
+                    for sc in rrf_fuse_traced_with(&lists, fusion.k, n, |_, _| 1.0) {
+                        let hit = acc.entry(sc.chunk_id).or_insert_with(|| ScoredChunk::new(sc.chunk_id, 0.0));
+                        hit.score += sc.score;
+                        hit.provenance.absorb(&sc.provenance);
+                    }
+                }
                 continue;
             };
             for cid in ctxs {

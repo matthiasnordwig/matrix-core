@@ -234,6 +234,28 @@ fn hybrid_keeps_cross_space_isolation() {
 }
 
 #[test]
+fn hybrid_without_a_question_vector_searches_that_space_by_keywords_only() {
+    let db = Database::open_in_memory().unwrap();
+    let m4 = model(&db, "kw-4d", 4);
+    let m3 = model(&db, "kw-3d", 3);
+    let a = context_with_vectors(&db, "Context_A", m4.id, 4, &[vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]]);
+    let b = context_with_vectors(&db, "Context_B", m3.id, 3, &[vec![1.0, 0.0, 0.0], vec![0.0, 0.0, 1.0]]);
+    // Only A's model has a vector (B's computes on a paired device that is not in reach).
+    let mut qbm: std::collections::HashMap<i64, Vec<f32>> = std::collections::HashMap::new();
+    qbm.insert(m4.id, vec![1.0, 0.0, 0.0, 0.0]);
+    let hits = db.retrieve_hybrid_with(&[1, 2], &qbm, "Context_B", 4, None).unwrap();
+    let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
+    assert!(b.iter().all(|id| ids.contains(id)), "B found by its keywords: {ids:?}");
+    let from_b: Vec<&ScoredChunk> = hits.iter().filter(|h| b.contains(&h.chunk_id)).collect();
+    assert!(from_b.iter().all(|h| h.provenance.vector.is_none()), "no vector list in B's space");
+    assert!(ids.contains(&a[0]), "A still searched by its vector: {ids:?}");
+    // Without any vector the vector path finds nothing there, the hybrid one still the keywords.
+    let none = std::collections::HashMap::new();
+    assert!(db.retrieve_with(&[2], &none, 4, None).unwrap().is_empty());
+    assert_eq!(db.retrieve_hybrid_with(&[2], &none, "Context_B", 4, None).unwrap().len(), 2);
+}
+
+#[test]
 fn hybrid_batch_matches_looped_single() {
     let db = Database::open_in_memory().unwrap();
     let m = model(&db, "hyb-batch", 4);
