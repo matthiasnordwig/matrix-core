@@ -158,3 +158,47 @@ mod driver_notice {
         assert_eq!((n.vendor, n.driver_url), (Vendor::Other, None));
     }
 }
+
+#[test]
+fn simulator_and_vm_force_cpu() {
+    assert!(cpu_only_host(true, false));
+    assert!(cpu_only_host(false, true));
+    assert!(!cpu_only_host(false, false));
+}
+
+#[test]
+fn whisper_takes_the_card_the_rule_chose() {
+    use DeviceKind::{Gpu as Card, IntegratedGpu as Igpu, Other};
+    // Ryzen PC: CPU, integrated Radeon, RX 7900 XTX — whisper's number 1, not 0.
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Other, Igpu, Card]), Some(1));
+    // Integrated unit registered after the card.
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Card, Igpu, Other]), Some(0));
+    // Two cards: the first, as llama.cpp's placement of the small models.
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Other, Card, Card]), Some(0));
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Igpu, Other, Card, Card]), Some(1));
+    // Metal (reported as integrated) or another unit the rule took alone.
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Igpu, Other]), Some(0));
+    // The rule chose the CPU (an integrated unit alone on a PC, a simulator, …): no graphics device.
+    assert_eq!(whisper_gpu_device(Unit::Cpu, &[Other, Igpu, Card]), None);
+    // Nothing whisper can use.
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[Other, Other]), None);
+    assert_eq!(whisper_gpu_device(Unit::Gpu, &[]), None);
+}
+
+#[test]
+fn whisper_device_follows_the_rule_on_made_up_machines() {
+    use DeviceKind::{Gpu as Card, IntegratedGpu as Igpu, Other};
+    let gpus = |kinds: &[DeviceKind]| -> Vec<Gpu> {
+        kinds.iter().filter(|k| **k != Other).map(|k| gpu("x", *k == Igpu)).collect()
+    };
+    for (kinds, metal, want) in [
+        (vec![Other, Igpu, Card], false, Some(1)),
+        (vec![Other, Card, Card], false, Some(0)),
+        (vec![Other, Igpu], false, None),
+        (vec![Other], false, None),
+        (vec![Igpu, Other], true, Some(0)),
+    ] {
+        let unit = small_model_unit(metal, &gpus(&kinds));
+        assert_eq!(whisper_gpu_device(unit, &kinds), want, "{kinds:?} metal {metal}");
+    }
+}

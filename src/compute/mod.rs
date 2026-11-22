@@ -95,6 +95,68 @@ pub fn small_model_unit(metal: bool, gpus: &[Gpu]) -> Unit {
     }
 }
 
+/// Hosts whose Metal cannot run ggml (llama.cpp, whisper.cpp): the iOS Simulator (llama.cpp's kernels
+/// compute garbage, whisper.cpp stops with SIGTRAP while loading its weights) and any virtual machine
+/// (paravirtual graphics: llama.cpp crashes in Metal). Every ggml model runs on the CPU there.
+pub fn cpu_only_host(ios_simulator: bool, virtual_machine: bool) -> bool {
+    ios_simulator || virtual_machine
+}
+
+/// [`cpu_only_host`] for this process.
+pub fn cpu_only_here() -> bool {
+    cpu_only_host(cfg!(all(target_os = "ios", target_abi = "sim")), in_virtual_machine())
+}
+
+/// True inside a virtual machine (macOS: sysctl `kern.hv_vmm_present`, 1 in a guest); cached.
+/// Elsewhere false (Windows/Linux guests have no Metal path to protect).
+fn in_virtual_machine() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static VM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *VM.get_or_init(|| {
+            let mut value: libc::c_int = 0;
+            let mut size = std::mem::size_of::<libc::c_int>();
+            let name = c"kern.hv_vmm_present";
+            // SAFETY: `value`/`size` describe a valid c_int buffer; the name is NUL-terminated.
+            let rc = unsafe {
+                libc::sysctlbyname(name.as_ptr(), (&mut value as *mut libc::c_int).cast(), &mut size, std::ptr::null_mut(), 0)
+            };
+            rc == 0 && value == 1
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Kind of a ggml backend device (`ggml_backend_dev_type`), as far as the choice of device cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    Gpu,
+    IntegratedGpu,
+    /// CPU, accelerators and anything else.
+    Other,
+}
+
+/// whisper.cpp's `gpu_device` for the unit the rule chose ([`small_model_unit`]); `None` = the CPU
+/// (`use_gpu` false). `devices`: every ggml device in registration order. The device is the one
+/// llama.cpp puts the small models on — the first dedicated card, else (Metal, which may report
+/// itself as integrated) the first integrated unit — so Whisper and the other models share one card
+/// and one memory budget. whisper.cpp counts only GPU and integrated-GPU devices, in that order
+/// (`whisper_backend_init_gpu`); left alone it takes number 0, on a PC with a Ryzen the integrated
+/// Radeon, not the card.
+pub fn whisper_gpu_device(unit: Unit, devices: &[DeviceKind]) -> Option<i32> {
+    if unit == Unit::Cpu {
+        return None;
+    }
+    let index = devices
+        .iter()
+        .position(|d| *d == DeviceKind::Gpu)
+        .or_else(|| devices.iter().position(|d| *d == DeviceKind::IntegratedGpu))?;
+    Some(devices[..index].iter().filter(|d| **d != DeviceKind::Other).count() as i32)
+}
+
 /// Smallest gain (CPU time / graphics time) for which the graphics unit is chosen.
 pub const MIN_SPEEDUP: f64 = 1.3;
 
