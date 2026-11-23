@@ -224,8 +224,8 @@ pub fn alternate_names(reader: impl BufRead, ids: &HashSet<i64>) -> std::io::Res
 }
 
 /// Lower case, every run of non-alphanumeric characters one space, padded with spaces: whole-word search
-/// by plain `contains`.
-fn words(text: &str) -> String {
+/// by plain `contains` (place names here, label words in `media/scene_words.rs`).
+pub fn words(text: &str) -> String {
     let mut out = String::from(" ");
     for c in text.chars().flat_map(char::to_lowercase) {
         if c.is_alphanumeric() {
