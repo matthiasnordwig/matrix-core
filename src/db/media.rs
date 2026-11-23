@@ -286,6 +286,15 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Gives page image `page_image_id` the time range of a video still (a bundle's stills on import).
+    pub fn set_frame_time(&self, page_image_id: i64, t_start_ms: i64, t_end_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE page_images SET t_start_ms = ?2, t_end_ms = ?3 WHERE id = ?1",
+            params![page_image_id, t_start_ms, t_end_ms],
+        )?;
+        Ok(())
+    }
+
     /// Resuming the stills of a video: drops the stills (and through `ON DELETE SET NULL` the link of their
     /// segments) that end after `done_ms`, the part the interrupted phase reads again. Returns how many went.
     pub fn discard_frames_after(&self, document_id: i64, done_ms: i64) -> Result<usize> {

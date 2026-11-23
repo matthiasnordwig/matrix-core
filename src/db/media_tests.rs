@@ -248,6 +248,8 @@ fn resuming_the_stills_drops_those_past_done_ms() {
     let b = frame(&db, ctx, doc, 2, 10_000, 30_000);
     db.insert_media_segments(&[MediaSegment { page_image_id: Some(b), ..seg(doc, SegmentKind::Slide, 10_000, 30_000, "slide") }]).unwrap();
     assert_eq!(db.discard_frames_after(doc, 10_000).unwrap(), 1);
+    db.set_frame_time(a, 500, 9_000).unwrap();
+    assert_eq!((db.frame_times(doc).unwrap()[0].t_start_ms, db.frame_times(doc).unwrap()[0].t_end_ms), (500, 9_000));
     let left: Vec<i64> = db.frame_times(doc).unwrap().iter().map(|f| f.page_image_id).collect();
     assert_eq!(left, [a]);
     assert_eq!(db.media_segments(doc).unwrap()[0].page_image_id, None);
