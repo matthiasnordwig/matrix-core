@@ -8,6 +8,7 @@ pub mod diarize_cluster;
 pub mod frame_kind;
 pub mod quad;
 pub mod rectify;
+pub mod scene_labels;
 pub mod scenes;
 pub mod slide_track;
 pub mod text;

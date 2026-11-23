@@ -57,6 +57,8 @@ mod source_models;
 mod source_files;
 pub mod doc_meta;
 mod doc_time;
+mod doc_place;
+pub mod scene_labels;
 mod media;
 mod media_models;
 mod doc_meta_models;
@@ -258,6 +260,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v83.sql"),
     include_str!("schema_v84.sql"),
     include_str!("schema_v85.sql"),
+    include_str!("schema_v86.sql"),
 ];
 
 /// The embedded database handle. Repository methods are implemented across the
@@ -410,3 +413,5 @@ mod doc_meta_tests;
 mod local_context_migration_tests;
 #[cfg(test)]
 mod media_migration_tests;
+#[cfg(test)]
+mod place_scene_tests;

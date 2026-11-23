@@ -354,10 +354,10 @@ impl Database {
                 "INSERT INTO documents
                     (context_id, name, zip_entry, byte_size, page_count, content_hash,
                      extracted_text, ingested_at, description, chunker,
-                     taken_at_ms, tz_offset_min, time_source, origin)
+                     taken_at_ms, tz_offset_min, time_source, origin, lat, lon, place_id, device)
                  SELECT ?2, name, zip_entry, byte_size, page_count, content_hash,
                         extracted_text, ingested_at, description, chunker,
-                        taken_at_ms, tz_offset_min, time_source, origin
+                        taken_at_ms, tz_offset_min, time_source, origin, lat, lon, place_id, device
                  FROM documents WHERE id = ?1",
                 params![doc_id, dst],
             )?;
@@ -392,6 +392,24 @@ impl Database {
                 params![doc_id, dst, new_doc],
             )?;
             super::media::copy_media_rows(&tx, doc_id, new_doc)?;
+            // Scene labels per picture (same page); the vectors are not copied, so their labels count as
+            // still to be checked against the copy's own vectors.
+            tx.execute(
+                "INSERT INTO scene_labels (page_image_id, document_id, source, label)
+                 SELECT n.id, ?2, l.source, l.label FROM scene_labels l
+                   JOIN page_images o ON o.id = l.page_image_id
+                   JOIN page_images n ON n.document_id = ?2 AND n.page = o.page
+                  WHERE o.document_id = ?1",
+                params![doc_id, new_doc],
+            )?;
+            tx.execute(
+                "INSERT INTO scene_label_state (page_image_id, vectors_model_id, vision)
+                 SELECT n.id, NULL, s.vision FROM scene_label_state s
+                   JOIN page_images o ON o.id = s.page_image_id
+                   JOIN page_images n ON n.document_id = ?2 AND n.page = o.page
+                  WHERE o.document_id = ?1",
+                params![doc_id, new_doc],
+            )?;
         }
         // `duplicate_of` names a chunk of the source; the copy's repeats name the copied chunk.
         let repeats: Vec<(i64, i64)> = {

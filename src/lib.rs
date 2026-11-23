@@ -12,6 +12,7 @@ pub mod media;
 pub mod refs;
 pub mod secrets;
 pub mod text_language;
+pub mod timeline;
 pub mod text_match;
 pub mod token_estimate;
 

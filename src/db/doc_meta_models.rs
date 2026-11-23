@@ -1,5 +1,6 @@
 //! Types of the search filter by sender, date and folder (`doc_meta.rs`, schema_v75) and of a document's
-//! time and origin (`doc_time.rs`, schema_v85), re-exported
+//! time and origin (`doc_time.rs`, schema_v85), of its place and device and the filter on places and scene
+//! labels (`doc_place.rs`, `scene_labels.rs`, schema_v86), re-exported
 //! by `models.rs`.
 
 use serde::{Deserialize, Serialize};
@@ -40,4 +41,31 @@ pub struct DocTime {
     pub tz_offset_min: Option<i32>,
     pub time_source: Option<String>,
     pub origin: Option<String>,
+}
+
+/// Where a document was made and with what (schema_v86, `doc_place.rs`): position in WGS 84 degrees
+/// from the file's metadata, the GeoNames id of the nearest place once resolved, the camera or phone.
+/// `None` = unknown.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DocPlace {
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub place_id: Option<i64>,
+    pub device: Option<String>,
+}
+
+/// The search filter on what pictures show and where documents were made (schema_v86), next to
+/// [`DocFilter`]: documents at one of `place_ids` (resolved from a place name by the caller, which holds
+/// the place index) and documents with a picture labelled with any of `scene` (`media/scene_labels.rs`
+/// keys). Both combine with each other and with the [`DocFilter`] by AND.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PictureFilter {
+    pub place_ids: Option<Vec<i64>>,
+    pub scene: Vec<String>,
+}
+
+impl PictureFilter {
+    pub fn is_empty(&self) -> bool {
+        self.place_ids.is_none() && self.scene.is_empty()
+    }
 }
