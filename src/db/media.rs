@@ -243,13 +243,16 @@ impl Database {
     /// Re-cut of a media document (new profile, renamed speaker, more segments after resuming): its
     /// text becomes `text`, its chunks `chunks` (graph evidence carried over by
     /// `replace_document_chunks`), and its stills follow ([`Self::sync_frame_ranges`]) — all in one
-    /// savepoint. Returns the chunks inserted and the carry-over counts.
+    /// savepoint. A new passage whose text and metadata equal an old one's keeps that one's vector, so
+    /// a media job that re-cuts while it transcribes (and a renamed speaker) embeds only what changed.
+    /// Returns the chunks inserted and the carry-over counts.
     pub fn replace_media_document_text(
         &self,
         document_id: i64,
         text: &str,
         chunks: &[NewChunk],
     ) -> Result<(usize, EvidenceCarryReport)> {
+        let vectors = self.chunk_vectors_by_text(document_id)?;
         self.replace_document_chunks(document_id, || {
             let n = self.conn.execute(
                 "UPDATE documents SET extracted_text = ?2, byte_size = ?3 WHERE id = ?1",
@@ -258,12 +261,38 @@ impl Database {
             if n == 0 {
                 return Err(CoreError::NotFound(format!("document {document_id}")));
             }
+            let mut keep = self.conn.prepare_cached(
+                "INSERT OR REPLACE INTO embeddings (chunk_id, context_id, document_id, embedding_model_id, dim, vector)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
             for c in chunks {
-                self.create_chunk(c)?;
+                let id = self.create_chunk(c)?.id;
+                if let Some((model, dim, blob)) = vectors.get(&(c.text.clone(), c.metadata.clone())) {
+                    keep.execute(params![id, c.context_id, document_id, model, dim, blob])?;
+                }
             }
             self.sync_frame_ranges(document_id)?;
             Ok(chunks.len())
         })
+    }
+
+    /// The stored vectors of a document's chunks by (text, metadata).
+    fn chunk_vectors_by_text(&self, document_id: i64) -> Result<std::collections::HashMap<(String, String), (i64, i64, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.text, COALESCE(c.metadata, ''), e.embedding_model_id, e.dim, e.vector
+               FROM chunks c JOIN embeddings e ON e.chunk_id = c.id WHERE c.document_id = ?1",
+        )?;
+        let rows = stmt.query_map([document_id], |r| Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?, r.get(4)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Resuming the stills of a video: drops the stills (and through `ON DELETE SET NULL` the link of their
+    /// segments) that end after `done_ms`, the part the interrupted phase reads again. Returns how many went.
+    pub fn discard_frames_after(&self, document_id: i64, done_ms: i64) -> Result<usize> {
+        Ok(self.conn.execute(
+            "DELETE FROM page_images WHERE document_id = ?1 AND t_start_ms IS NOT NULL AND COALESCE(t_end_ms, t_start_ms) > ?2",
+            params![document_id, done_ms],
+        )?)
     }
 }
 

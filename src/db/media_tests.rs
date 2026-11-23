@@ -218,3 +218,37 @@ fn context_copy_carries_media_rows_stills_and_document_time() {
     assert_eq!(segs.len(), 2);
     assert_eq!(segs[1].page_image_id, Some(frames[0].page_image_id), "points at the copied still");
 }
+
+#[test]
+fn a_re_cut_keeps_the_vectors_of_unchanged_passages() {
+    let (db, ctx, doc) = setup();
+    let (seed_ctx, _) = crate::db::chunks::chunks_tests::seed(&db);
+    let model = db.context(seed_ctx).unwrap().unwrap().embedding_model_id.unwrap();
+    db.upsert_media_document(&media(doc)).unwrap();
+    let (text, chunks) = cut(ctx, doc, &[(0, 10_000, "intro"), (10_000, 20_000, "middle")]);
+    db.replace_media_document_text(doc, &text, &chunks).unwrap();
+    for (i, c) in doc_chunks(&db, doc).unwrap().iter().enumerate() {
+        let v = vec![i as f32 + 1.0, 0.0, 0.0, 0.0];
+        db.insert_embedding(&NewEmbedding { chunk_id: c.id, context_id: ctx, document_id: doc, embedding_model_id: model, dim: 4, vector: v }).unwrap();
+    }
+    // More speech came in: the first passage is the same, the second grew, a third is new.
+    let (text, chunks) = cut(ctx, doc, &[(0, 10_000, "intro"), (10_000, 25_000, "middle and more"), (25_000, 30_000, "end")]);
+    db.replace_media_document_text(doc, &text, &chunks).unwrap();
+    let now = doc_chunks(&db, doc).unwrap();
+    assert_eq!(db.embedding_vector(now[0].id).unwrap(), Some(vec![1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(db.embedding_vector(now[1].id).unwrap(), None, "changed text is embedded again");
+    assert_eq!(db.embedding_vector(now[2].id).unwrap(), None);
+}
+
+#[test]
+fn resuming_the_stills_drops_those_past_done_ms() {
+    let (db, ctx, doc) = setup();
+    db.upsert_media_document(&media(doc)).unwrap();
+    let a = frame(&db, ctx, doc, 1, 0, 10_000);
+    let b = frame(&db, ctx, doc, 2, 10_000, 30_000);
+    db.insert_media_segments(&[MediaSegment { page_image_id: Some(b), ..seg(doc, SegmentKind::Slide, 10_000, 30_000, "slide") }]).unwrap();
+    assert_eq!(db.discard_frames_after(doc, 10_000).unwrap(), 1);
+    let left: Vec<i64> = db.frame_times(doc).unwrap().iter().map(|f| f.page_image_id).collect();
+    assert_eq!(left, [a]);
+    assert_eq!(db.media_segments(doc).unwrap()[0].page_image_id, None);
+}
