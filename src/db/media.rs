@@ -61,6 +61,9 @@ fn row_to_segment(r: &Row<'_>) -> rusqlite::Result<MediaSegment> {
     })
 }
 
+/// Vectors of a document's passages by (text, metadata): (model id, dimension, blob).
+type StoredVectors = std::collections::HashMap<(String, String), (i64, i64, Vec<u8>)>;
+
 /// A passage's position for [`frame_range`]: byte range in the document text and time range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimedSpan {
@@ -277,7 +280,7 @@ impl Database {
     }
 
     /// The stored vectors of a document's chunks by (text, metadata).
-    fn chunk_vectors_by_text(&self, document_id: i64) -> Result<std::collections::HashMap<(String, String), (i64, i64, Vec<u8>)>> {
+    fn chunk_vectors_by_text(&self, document_id: i64) -> Result<StoredVectors> {
         let mut stmt = self.conn.prepare(
             "SELECT c.text, COALESCE(c.metadata, ''), e.embedding_model_id, e.dim, e.vector
                FROM chunks c JOIN embeddings e ON e.chunk_id = c.id WHERE c.document_id = ?1",
