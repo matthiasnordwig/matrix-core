@@ -4,6 +4,7 @@
 //! rule (standard deviations above the mean place similarity) to show where the rule sits.
 //!   cargo run --release --example scene_label_probe --features onnx-download -- \
 //!       --images <dir> --truth truth.json --model-dir <embeddinggemma-2 dir> [--vision vision_encoder_q4] [--cache c.json]
+//!       [--dump labels.json] [--texts other_texts.json]
 //! `truth.json`: `{"<file stem>": ["outdoors", "water", …], …}`; `-io` in a list = setting not judged.
 //! Pictures not in the truth file are skipped. Exit 0 = completed, 2 = usage, 3 = runtime error.
 
@@ -127,6 +128,12 @@ fn main() {
         }
     };
     println!("{} pictures, {} label texts", rows.len(), sl::prompts().len());
+    // `--dump labels.json`: the rule's labels per picture (for comparing with the Vision labels,
+    // services `examples/scene_vision_probe.rs`).
+    if let Some(p) = get("--dump") {
+        let out: BTreeMap<&str, Vec<&str>> = rows.iter().map(|(k, s)| (k.as_str(), sl::labels_from(s))).collect();
+        std::fs::write(p, serde_json::to_string(&out).unwrap()).unwrap_or_else(|e| fail(e.to_string()));
+    }
     evaluate("rule (scene_labels::labels_from, SPREADS)", &sl::labels_from, true);
     // Sweep of the rule's factor (standard deviations above the mean of the place similarities).
     for k in [1.0f32, 1.25, 1.5, 1.75, 2.0] {

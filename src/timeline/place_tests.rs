@@ -75,3 +75,21 @@ fn names_in_a_question_find_their_place() {
     assert!(mentioned("York", &names).is_empty(), "a name needs all its words");
     assert!(mentioned("Wienerwald", &names).is_empty(), "whole words only");
 }
+
+#[test]
+fn a_point_inside_a_large_city_belongs_to_it_not_to_the_nearer_small_place() {
+    let rows = [
+        row(1, "Big City", "", 40.0, -74.0, "PPL", "US", 8_000_000, "America/New_York"),
+        row(2, "Small Town", "", 40.04, -73.95, "PPL", "US", 10_000, "America/New_York"),
+    ]
+    .join("\n");
+    let ix = PlaceIndex::parse(rows.as_bytes()).unwrap();
+    // 4.9 km from the city centre, 2.3 km from the town centre: inside the city's area (r ≈ 17.8 km), outside the town's.
+    let p = (40.03, -73.975);
+    assert_eq!(ix.nearest(p.0, p.1).unwrap().0.id, 2);
+    assert_eq!(ix.locate(p.0, p.1).unwrap().0.id, 1);
+    // At the town's own centre the town wins (it lies more centrally there).
+    assert_eq!(ix.locate(40.04, -73.95).unwrap().0.id, 2);
+    // Far from both: the nearest.
+    assert_eq!(ix.locate(38.0, -74.1).unwrap().0.id, 1);
+}

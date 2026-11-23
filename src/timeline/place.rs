@@ -1,7 +1,7 @@
 //! The offline place index: GeoNames `cities1000` (every place with at least 1000 inhabitants or a seat of
 //! an administrative division; CC BY 4.0, named in the app's licences) parsed from its tab-separated rows.
-//! A position becomes the nearest place ([`PlaceIndex::nearest`], grid of 1° cells searched ring by ring,
-//! great-circle distance), a place id becomes a name for the answer context ([`PlaceIndex::get`]), and a
+//! A position becomes its place ([`PlaceIndex::locate`]: the place whose area holds it, else the nearest;
+//! grid of 1° cells searched ring by ring, great-circle distance), a place id becomes a name for the answer context ([`PlaceIndex::get`]), and a
 //! question or filter text names a place when one of the place's names stands in it as whole words
 //! ([`mentioned`]). No online geocoder: positions never leave the device.
 //!
@@ -45,7 +45,14 @@ pub struct PlaceIndex {
     zones: Vec<Box<str>>,
     by_id: HashMap<i64, u32>,
     cells: HashMap<(i16, i16), Vec<u32>>,
+    max_population: u32,
 }
+
+/// People per km² over which a place's population is spread to give it an area ([`PlaceIndex::locate`]).
+/// Measured on 14 positions (city sights, suburb centres; services `places_tests.rs::real_*`): 2000 and 4000
+/// gave a suburb centre (Schwechat) to Vienna, 8000 to 32000 all right; the smallest of those (city
+/// cores are denser than that, so a large city's area is rather too small than too large).
+pub const DENSITY: f64 = 8000.0;
 
 fn cell(lat: f64, lon: f64) -> (i16, i16) {
     (lat.floor().clamp(-90.0, 89.0) as i16, lon.floor().rem_euclid(360.0) as i16)
@@ -89,6 +96,7 @@ impl PlaceIndex {
                 zone,
             });
             index.by_id.insert(id, i);
+            index.max_population = index.max_population.max(index.places[i as usize].population);
             index.cells.entry(cell(lat, lon)).or_default().push(i);
         }
         Ok(index)
@@ -116,6 +124,47 @@ impl PlaceIndex {
     /// off the globe. Searches the cells around the position ring by ring until the next ring cannot hold
     /// anything nearer (a ring of cells lies at least its radius in degrees of latitude away).
     pub fn nearest(&self, lat: f64, lon: f64) -> Option<(&Place, f64)> {
+        self.nearest_index(lat, lon).map(|(i, d)| (&self.places[i as usize], d))
+    }
+
+    /// The place a position belongs to: among the places whose area holds it (a circle of the place's
+    /// population at [`DENSITY`]) the one it lies most centrally in (smallest distance / radius), else the
+    /// nearest. A point in Manhattan is New York City although Weehawken's centre across the river is nearer;
+    /// a suburb's own centre stays the suburb.
+    pub fn locate(&self, lat: f64, lon: f64) -> Option<(&Place, f64)> {
+        self.locate_with(lat, lon, DENSITY)
+    }
+
+    /// [`PlaceIndex::locate`] with another density (measurement).
+    pub fn locate_with(&self, lat: f64, lon: f64, density: f64) -> Option<(&Place, f64)> {
+        let (near, d) = self.nearest_index(lat, lon)?;
+        let radius = |pop: u32| (f64::from(pop) / (std::f64::consts::PI * density)).sqrt();
+        let reach = radius(self.max_population);
+        let rings_lat = (reach / 111.0).ceil() as i16 + 1;
+        let rings_lon = ((reach / (111.0 * lat.to_radians().cos().max(0.05))).ceil() as i16 + 1).min(180);
+        let (cy, cx) = cell(lat, lon);
+        let mut best: Option<(u32, f64, f64)> = None; // index, distance, distance / radius
+        for dy in -rings_lat..=rings_lat {
+            let y = cy + dy;
+            if !(-90..90).contains(&y) {
+                continue;
+            }
+            for dx in -rings_lon..=rings_lon {
+                for &i in self.cells.get(&(y, (cx + dx).rem_euclid(360))).into_iter().flatten() {
+                    let p = &self.places[i as usize];
+                    let di = distance_km(lat, lon, f64::from(p.lat), f64::from(p.lon));
+                    let r = radius(p.population);
+                    if di <= r && best.is_none_or(|(_, _, s)| di / r < s) {
+                        best = Some((i, di, di / r));
+                    }
+                }
+            }
+        }
+        let (i, d) = best.map_or((near, d), |(i, d, _)| (i, d));
+        Some((&self.places[i as usize], d))
+    }
+
+    fn nearest_index(&self, lat: f64, lon: f64) -> Option<(u32, f64)> {
         if self.places.is_empty() || !(-90.0..=90.0).contains(&lat) || !(-180.0..=360.0).contains(&lon) {
             return None;
         }
@@ -146,7 +195,7 @@ impl PlaceIndex {
                 }
             }
         }
-        best.map(|(i, d)| (&self.places[i as usize], d))
+        best
     }
 }
 

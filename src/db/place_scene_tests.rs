@@ -51,6 +51,12 @@ fn labels_are_replaced_per_source_and_remembered_without_any() {
     let still = picture(&db, ctx, id, 1, Some((0, 5_000)));
     db.conn.execute("INSERT INTO media_segments (document_id, t_start_ms, t_end_ms, kind, text, page_image_id) VALUES (?1, 0, 5000, 'scene', '', ?2)", [id, still]).unwrap();
     assert_eq!(db.scene_still_ids(ctx).unwrap(), vec![still]);
+    // A photo counts, a PDF's graphics page and the video still do not.
+    let photo_doc = doc(&db, ctx, "IMG_1.jpg");
+    let photo = picture(&db, ctx, photo_doc, 1, None);
+    let pdf = db.create_document(&NewDocument { context_id: ctx, name: "r.pdf".into(), zip_entry: None, byte_size: None, page_count: Some(3), content_hash: None, extracted_text: Some("x".into()) }).unwrap().id;
+    picture(&db, ctx, pdf, 2, None);
+    assert_eq!(db.photo_picture_ids(ctx).unwrap(), vec![photo]);
     let model = 7i64;
     db.conn.execute("INSERT INTO embedding_models (id, identifier, kind, native_dim, default_dim) VALUES (7, 'm', 'local_onnx', 2, 2)", []).unwrap();
     db.upsert_page_image_embedding(still, model, &[0.6, 0.8]).unwrap();
@@ -65,7 +71,7 @@ fn labels_are_replaced_per_source_and_remembered_without_any() {
     db.set_scene_labels(still, id, super::scene_labels::SOURCE_VISION, &[], None).unwrap();
     assert!(db.pictures_to_label_by_vision(&[still]).unwrap().is_empty());
     let labels = db.scene_labels_of(id, None).unwrap();
-    assert_eq!(labels, vec![("vectors".to_string(), "beach".to_string()), ("vectors".into(), "outdoors".into())]);
+    assert_eq!(labels, vec![(still, "vectors".to_string(), "beach".to_string()), (still, "vectors".into(), "outdoors".into())]);
     assert_eq!(db.scene_labels_of(id, Some((1_000, 2_000))).unwrap().len(), 2, "still visible then");
     assert!(db.scene_labels_of(id, Some((6_000, 9_000))).unwrap().is_empty(), "not visible then");
     db.conn.execute("DELETE FROM page_images WHERE id = ?1", [still]).unwrap();
@@ -116,7 +122,8 @@ fn a_copied_collection_keeps_place_and_labels() {
     db.copy_context_chunks(src, dst).unwrap();
     let copy: i64 = db.conn.query_row("SELECT id FROM documents WHERE context_id = ?1", [dst], |r| r.get(0)).unwrap();
     assert_eq!(db.document_place(copy).unwrap(), Some(place));
-    assert_eq!(db.scene_labels_of(copy, None).unwrap(), vec![("vision".to_string(), "beach".to_string())]);
+    let labels: Vec<(String, String)> = db.scene_labels_of(copy, None).unwrap().into_iter().map(|(_, s, l)| (s, l)).collect();
+    assert_eq!(labels, vec![("vision".to_string(), "beach".to_string())]);
     let copied_picture: i64 = db.conn.query_row("SELECT id FROM page_images WHERE document_id = ?1", [copy], |r| r.get(0)).unwrap();
     assert!(db.pictures_to_label_by_vision(&[copied_picture]).unwrap().is_empty(), "Vision is not asked again");
 }

@@ -1,8 +1,9 @@
 //! Scene labels of pictures (schema_v86): `scene_labels` rows per page image, label and source (`vectors` from
 //! the image vector of the collection's model, rule in `media/scene_labels.rs`; `vision` from Apple's image
 //! classification), and `scene_label_state`, which says what has been labelled so a picture without any
-//! label is not tried again. Labelled are a video's scene stills (segments of kind `scene`) and the
-//! pictures of image documents; which ones the caller picks (services `commands/scene_labels.rs`).
+//! label is not tried again. Labelled are a video's scene stills (segments of kind `scene`,
+//! [`Database::scene_still_ids`]) and the pictures of image documents ([`Database::photo_picture_ids`]); never
+//! PDF graphics pages or slides.
 //! Vectors of another model than the one the labels came from count as unlabelled, so switching the
 //! model relabels.
 
@@ -21,6 +22,17 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT s.page_image_id FROM media_segments s JOIN documents d ON d.id = s.document_id
               WHERE d.context_id = ?1 AND s.kind = 'scene' AND s.page_image_id IS NOT NULL ORDER BY s.page_image_id",
+        )?;
+        let rows = stmt.query_map([context_id], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Page images of the photos in `context_id`: the picture of an image document (a page image without a time
+    /// range of a document without pages — PDFs, whose graphics pages are page images too, have a page count).
+    pub fn photo_picture_ids(&self, context_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id FROM page_images p JOIN documents d ON d.id = p.document_id
+              WHERE p.context_id = ?1 AND p.t_start_ms IS NULL AND d.page_count IS NULL ORDER BY p.id",
         )?;
         let rows = stmt.query_map([context_id], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -77,17 +89,17 @@ impl Database {
         })
     }
 
-    /// The labels of the pictures of document `document_id`, as `(source, label)` each once; with `during`
+    /// The labels of the pictures of document `document_id` as `(page image, source, label)`; with `during`
     /// (ms) only of the stills visible then (a passage of a video), else of all its pictures.
-    pub fn scene_labels_of(&self, document_id: i64, during: Option<(i64, i64)>) -> Result<Vec<(String, String)>> {
+    pub fn scene_labels_of(&self, document_id: i64, during: Option<(i64, i64)>) -> Result<Vec<(i64, String, String)>> {
         let (from, to) = during.unwrap_or((i64::MIN, i64::MAX));
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT l.source, l.label FROM scene_labels l JOIN page_images p ON p.id = l.page_image_id
+            "SELECT l.page_image_id, l.source, l.label FROM scene_labels l JOIN page_images p ON p.id = l.page_image_id
               WHERE l.document_id = ?1
                 AND (?2 = 0 OR (p.t_start_ms IS NOT NULL AND p.t_start_ms < ?4 AND COALESCE(p.t_end_ms, p.t_start_ms) > ?3))
-              ORDER BY l.source, l.label",
+              ORDER BY l.page_image_id, l.source, l.label",
         )?;
-        let rows = stmt.query_map(params![document_id, during.is_some(), from, to], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let rows = stmt.query_map(params![document_id, during.is_some(), from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
