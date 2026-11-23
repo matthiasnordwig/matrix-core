@@ -253,4 +253,8 @@ fn resuming_the_stills_drops_those_past_done_ms() {
     let left: Vec<i64> = db.frame_times(doc).unwrap().iter().map(|f| f.page_image_id).collect();
     assert_eq!(left, [a]);
     assert_eq!(db.media_segments(doc).unwrap()[0].page_image_id, None);
+    let id = db.media_segments(doc).unwrap()[0].id;
+    db.set_media_segment_text(id, "a described scene", true).unwrap();
+    let s = &db.media_segments(doc).unwrap()[0];
+    assert_eq!((s.text.as_str(), s.generated), ("a described scene", true));
 }

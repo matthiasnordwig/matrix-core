@@ -286,6 +286,12 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Sets the text of segment `id` (a scene described by the image model: `generated`).
+    pub fn set_media_segment_text(&self, id: i64, text: &str, generated: bool) -> Result<()> {
+        self.conn.execute("UPDATE media_segments SET text = ?2, generated = ?3 WHERE id = ?1", params![id, text, generated])?;
+        Ok(())
+    }
+
     /// Gives page image `page_image_id` the time range of a video still (a bundle's stills on import).
     pub fn set_frame_time(&self, page_image_id: i64, t_start_ms: i64, t_end_ms: i64) -> Result<()> {
         self.conn.execute(
