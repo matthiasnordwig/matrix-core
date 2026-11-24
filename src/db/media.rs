@@ -130,6 +130,24 @@ impl Database {
             .optional()?)
     }
 
+    /// The audio and video documents of collections `context_ids` not yet through every phase (`complete = 0`),
+    /// with their names, in the order they were added.
+    pub fn incomplete_media_documents(&self, context_ids: &[i64]) -> Result<Vec<(String, MediaDocument)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.document_id, m.kind, m.duration_ms, m.width, m.height, m.language, m.engines, m.speakers, m.phases,
+                    m.complete, d.name
+               FROM media_documents m JOIN documents d ON d.id = m.document_id
+              WHERE m.complete = 0 AND d.context_id = ?1 ORDER BY m.document_id",
+        )?;
+        let mut out = Vec::new();
+        for &id in context_ids {
+            for row in stmt.query_map([id], |r| Ok((r.get::<_, String>(10)?, row_to_media_document(r)?)))? {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
     fn update_media<T>(&self, id: i64, f: impl FnOnce(&mut MediaDocument) -> T) -> Result<T> {
         self.in_savepoint("media_update", || {
             let mut m = self.media_document(id)?.ok_or_else(|| CoreError::NotFound(format!("media document {id}")))?;

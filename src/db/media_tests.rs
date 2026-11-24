@@ -95,6 +95,23 @@ fn media_row_round_trips_with_its_json_columns() {
 }
 
 #[test]
+fn only_unfinished_media_of_the_named_collections_are_listed() {
+    let (db, ctx, doc) = setup();
+    db.upsert_media_document(&media(doc)).unwrap();
+    let done = db.create_document(&NewDocument { context_id: ctx, name: "done.m4a".into(), zip_entry: None, byte_size: None, page_count: None, content_hash: None, extracted_text: None }).unwrap().id;
+    db.upsert_media_document(&MediaDocument { document_id: done, kind: MediaKind::Audio, complete: true, ..Default::default() }).unwrap();
+    let other = db.create_context(&NewContext { name: "other".into(), chunking_strategy: "structural".into(), ..Default::default() }).unwrap().id;
+    let elsewhere = db.create_document(&NewDocument { context_id: other, name: "memo.m4a".into(), zip_entry: None, byte_size: None, page_count: None, content_hash: None, extracted_text: None }).unwrap().id;
+    db.upsert_media_document(&MediaDocument { document_id: elsewhere, kind: MediaKind::Audio, ..Default::default() }).unwrap();
+
+    let got = db.incomplete_media_documents(&[ctx]).unwrap();
+    assert_eq!(got.iter().map(|(n, m)| (n.as_str(), m.document_id)).collect::<Vec<_>>(), [("talk.mp4", doc)]);
+    assert_eq!(db.incomplete_media_documents(&[ctx, other]).unwrap().len(), 2);
+    db.set_media_complete(doc, true).unwrap();
+    assert!(db.incomplete_media_documents(&[ctx]).unwrap().is_empty());
+}
+
+#[test]
 fn segments_come_back_in_time_order_with_their_words() {
     let (db, _, doc) = setup();
     let mut talk = seg(doc, SegmentKind::Speech, 5_000, 9_000, "Guten Morgen. Hallo.");
