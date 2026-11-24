@@ -42,8 +42,7 @@
 //!     Kreditwesengesetzes" → KWG keys (genitive only as `es`/`s` suffix);
 //!     "§ 3 des Vertrages" never matches.
 //!
-//! An article with neither a known Kürzel nor a directly following regulation
-//! long form never matches.
+//! An article with neither a known Kürzel nor a directly following regulation long form never matches.
 //!
 //! The Kürzel/long-form vocabulary is a value, not a constant ([`RefLexicon`]):
 //! `parse_refs` uses [`RefLexicon::builtin`]; DB-backed callers load their own via
@@ -424,9 +423,8 @@ const MAX_RANGE_EXPANSION: usize = 30;
 ///   - **Consecutive numbers** (`13` → `15`): iterate the integer, dropping any
 ///     letter suffixes → `13, 14, 15`.
 ///
-/// If the range is degenerate (end before start, or an unhandled mixed shape)
-/// only the start is returned. Above `MAX_RANGE_EXPANSION` individual parts,
-/// only start and end are returned (no full expansion).
+/// If the range is degenerate (end before start, or an unhandled mixed shape) only the start is returned.
+/// Above `MAX_RANGE_EXPANSION` individual parts, only start and end are returned (no full expansion).
 fn expand_range(
     start_num: &str,
     start_letter: &str,
