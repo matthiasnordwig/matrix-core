@@ -86,11 +86,6 @@ impl GgufVisionEngine {
         Ok(Self { model, mtmd, n_ctx, busy: Mutex::new(()) })
     }
 
-    /// One picture: [`Self::describe_pictures`] with `image` alone.
-    pub fn describe(&self, image: &[u8], prompt: &str, max_tokens: u32, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
-        self.describe_pictures(&[image], prompt, max_tokens, kv_quantization, cpu_threads)
-    }
-
     /// Answer `prompt` about the pictures `images` (encoded JPEG/PNG bytes, in order);
     /// at most `max_tokens` of answer. `kv_quantization` as for the chat engine
     /// (`Q8_0` / `Q4_0`, else F16). The context is sized to this call
