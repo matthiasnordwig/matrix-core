@@ -1,19 +1,25 @@
 //! Tests for the llama.cpp-free parts of `inference/` (`vlm_prompt`, `chat_text`, `prefix_reuse` incl. the
 //! choice of a place, `generation`).
-use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
+use super::vlm_prompt::{context_for, fits_context, user_turn_with_images, DEFAULT_MEDIA_MARKER};
 
 #[test]
 fn picture_marker_comes_before_the_instruction() {
-    let t = user_turn_with_image("  Describe this picture.  ", DEFAULT_MEDIA_MARKER);
+    let t = user_turn_with_images("  Describe this picture.  ", DEFAULT_MEDIA_MARKER, 1);
     assert_eq!(t, "<__media__>\nDescribe this picture.");
 }
 
 #[test]
 fn a_marker_inside_the_instruction_is_removed() {
     // A second marker would make mtmd expect a second picture.
-    let t = user_turn_with_image("What is <__media__> showing?", DEFAULT_MEDIA_MARKER);
+    let t = user_turn_with_images("What is <__media__> showing?", DEFAULT_MEDIA_MARKER, 1);
     assert_eq!(t.matches(DEFAULT_MEDIA_MARKER).count(), 1);
     assert!(t.ends_with("What is  showing?"));
+}
+
+#[test]
+fn several_pictures_get_one_marker_each_before_the_instruction() {
+    let t = user_turn_with_images("Which scenes show water?", DEFAULT_MEDIA_MARKER, 3);
+    assert_eq!(t, "<__media__>\n<__media__>\n<__media__>\nWhich scenes show water?");
 }
 
 #[test]

@@ -11,12 +11,15 @@
 /// (`mtmd_default_marker()` in llama.cpp; same value).
 pub const DEFAULT_MEDIA_MARKER: &str = "<__media__>";
 
-/// User turn text for one picture: `marker`, newline, `prompt` (trimmed). A
-/// marker already inside the prompt would make mtmd expect a second picture
-/// (bitmap count mismatch), so it is removed from the instruction first.
-pub fn user_turn_with_image(prompt: &str, marker: &str) -> String {
+/// User turn text for `count` pictures: one `marker` line per picture, then
+/// `prompt` (trimmed). A marker already inside the prompt would make mtmd
+/// expect one more picture (bitmap count mismatch), so it is removed from the
+/// instruction first.
+pub fn user_turn_with_images(prompt: &str, marker: &str, count: usize) -> String {
     let instruction = if marker.is_empty() { prompt.to_string() } else { prompt.replace(marker, "") };
-    format!("{marker}\n{}", instruction.trim())
+    let mut turn = format!("{marker}\n").repeat(count.max(1));
+    turn.push_str(instruction.trim());
+    turn
 }
 
 /// Context size for one call: prompt + answer rounded up to a multiple of 256,

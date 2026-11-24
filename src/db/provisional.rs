@@ -49,6 +49,14 @@ impl Database {
             .unwrap_or(false))
     }
 
+    /// Every collection id, provisional ones (chat attachments) included, newest first — for work
+    /// that runs over all of them (`image_describe/catch_up.rs`); lists for people use `list_contexts`.
+    pub fn all_context_ids(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM contexts ORDER BY provisional DESC, id DESC")?;
+        let ids = stmt.query_map([], |r| r.get(0))?;
+        Ok(ids.collect::<rusqlite::Result<Vec<i64>>>()?)
+    }
+
     /// The provisional collection of chat `chat_id`, if it has one (the newest).
     pub fn provisional_context_for_chat(&self, chat_id: i64) -> Result<Option<Context>> {
         let id: Option<i64> = self

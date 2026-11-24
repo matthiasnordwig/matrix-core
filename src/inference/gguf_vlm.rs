@@ -1,11 +1,11 @@
 //! Local vision model: a GGUF chat model plus its image projector file
-//! (`mmproj-*.gguf`) through llama.cpp's multimodal library (mtmd). One picture
-//! + one instruction in, text out — the on-device twin of the remote
+//! (`mmproj-*.gguf`) through llama.cpp's multimodal library (mtmd). One or more
+//! pictures (a photo; the stills of a video) + one instruction in, text out — the on-device twin of the remote
 //! vision request in the app's `llm_vision.rs`.
 //!
 //! Flow per call: picture bytes (JPEG/PNG, decoded by mtmd's own stb_image) →
-//! `MtmdBitmap::from_buffer` → user turn "marker + instruction"
-//! (`vlm_prompt::user_turn_with_image`) wrapped by the model's own chat
+//! `MtmdBitmap::from_buffer` each → user turn "one marker per picture + instruction"
+//! (`vlm_prompt::user_turn_with_images`) wrapped by the model's own chat
 //! template (`chat_template.rs`: llama.cpp's built-in list or the model's Jinja
 //! template with thinking off) → `MtmdContext::tokenize` (text and image chunks) →
 //! a context sized to prompt + answer (`vlm_prompt::context_for`, KV cache
@@ -30,7 +30,7 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText};
 use llama_cpp_2::sampling::LlamaSampler;
 
-use super::vlm_prompt::{context_for, fits_context, user_turn_with_image, DEFAULT_MEDIA_MARKER};
+use super::vlm_prompt::{context_for, fits_context, user_turn_with_images, DEFAULT_MEDIA_MARKER};
 use crate::llama_backend::backend as get_backend;
 
 /// Prompt + image chunks are decoded in batches of at most this many tokens.
@@ -86,27 +86,38 @@ impl GgufVisionEngine {
         Ok(Self { model, mtmd, n_ctx, busy: Mutex::new(()) })
     }
 
-    /// Describe the picture `image` (encoded JPEG/PNG bytes) following `prompt`;
+    /// One picture: [`Self::describe_pictures`] with `image` alone.
+    pub fn describe(&self, image: &[u8], prompt: &str, max_tokens: u32, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
+        self.describe_pictures(&[image], prompt, max_tokens, kv_quantization, cpu_threads)
+    }
+
+    /// Answer `prompt` about the pictures `images` (encoded JPEG/PNG bytes, in order);
     /// at most `max_tokens` of answer. `kv_quantization` as for the chat engine
     /// (`Q8_0` / `Q4_0`, else F16). The context is sized to this call
     /// (`vlm_prompt::context_for`), not to the endpoint's full window.
-    pub fn describe(&self, image: &[u8], prompt: &str, max_tokens: u32, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
+    pub fn describe_pictures(&self, images: &[&[u8]], prompt: &str, max_tokens: u32, kv_quantization: Option<&str>, cpu_threads: Option<i64>) -> Result<VisionAnswer, String> {
         let _guard = self.busy.lock().unwrap_or_else(|p| p.into_inner());
         let backend = get_backend()?;
 
         // Tokenize first (needs no llama context) to size the context.
-        let bitmap = MtmdBitmap::from_buffer(&self.mtmd, image).map_err(|e| format!("picture could not be read by the local model: {e}"))?;
-        let user_text = user_turn_with_image(prompt, DEFAULT_MEDIA_MARKER);
+        if images.is_empty() {
+            return Err("no picture given to the local image model".to_string());
+        }
+        let bitmaps = images
+            .iter()
+            .map(|image| MtmdBitmap::from_buffer(&self.mtmd, image).map_err(|e| format!("picture could not be read by the local model: {e}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let user_text = user_turn_with_images(prompt, DEFAULT_MEDIA_MARKER, bitmaps.len());
         let text = super::chat_template::render(&self.model, &[("user", &user_text)])?;
         let add_special = !super::chat_template::starts_with_bos(&self.model, &text);
         let chunks = self
             .mtmd
-            .tokenize(MtmdInputText { text, add_special, parse_special: true }, &[&bitmap])
+            .tokenize(MtmdInputText { text, add_special, parse_special: true }, &bitmaps.iter().collect::<Vec<_>>())
             .map_err(|e| format!("image tokenize: {e}"))?;
         let prompt_tokens = chunks.total_tokens();
         if !fits_context(prompt_tokens, max_tokens, self.n_ctx) {
             return Err(format!(
-                "Picture + prompt need {prompt_tokens} tokens plus {max_tokens} answer tokens, the endpoint's context is {} — raise its Context Window.",
+                "Pictures + prompt need {prompt_tokens} tokens plus {max_tokens} answer tokens, the endpoint's context is {} — raise its Context Window.",
                 self.n_ctx
             ));
         }

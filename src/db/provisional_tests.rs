@@ -36,6 +36,15 @@ fn provisional_collections_are_left_out_of_the_list_but_readable_by_id() {
 }
 
 #[test]
+fn all_context_ids_name_attachments_first_then_newest() {
+    let db = Database::open_in_memory().unwrap();
+    let a = own(&db, "A");
+    let b = own(&db, "B");
+    let p = db.create_provisional_context(&spec("x (chat)"), None).unwrap().id;
+    assert_eq!(db.all_context_ids().unwrap(), vec![p, b, a]);
+}
+
+#[test]
 fn a_taken_name_gets_a_number_and_counts_provisional_names_too() {
     let db = Database::open_in_memory().unwrap();
     own(&db, "x");

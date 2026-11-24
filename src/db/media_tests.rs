@@ -275,3 +275,21 @@ fn resuming_the_stills_drops_those_past_done_ms() {
     let s = &db.media_segments(doc).unwrap()[0];
     assert_eq!((s.text.as_str(), s.generated), ("a described scene", true));
 }
+
+#[test]
+fn videos_with_undescribed_scenes_follow_text_and_description_state() {
+    let (db, ctx, doc) = setup();
+    db.upsert_media_document(&media(doc)).unwrap();
+    let still = frame(&db, ctx, doc, 1, 0, 5_000);
+    let slide = frame(&db, ctx, doc, 2, 5_000, 9_000);
+    let scene = MediaSegment { page_image_id: Some(still), ..seg(doc, SegmentKind::Scene, 0, 5_000, "") };
+    let read = MediaSegment { page_image_id: Some(slide), ..seg(doc, SegmentKind::Slide, 5_000, 9_000, "") };
+    db.insert_media_segments(&[scene, read]).unwrap();
+    assert_eq!(db.videos_with_undescribed_scenes(ctx, false).unwrap(), vec![doc], "a scene without text");
+    db.set_page_description_state(still, "declined", "vlm").unwrap();
+    assert!(db.videos_with_undescribed_scenes(ctx, false).unwrap().is_empty(), "declined: not again");
+    assert_eq!(db.videos_with_undescribed_scenes(ctx, true).unwrap(), vec![doc], "unless asked to retry");
+    db.set_page_description_state(still, "described", "vlm").unwrap();
+    assert!(db.videos_with_undescribed_scenes(ctx, true).unwrap().is_empty());
+    assert!(db.videos_with_undescribed_scenes(ctx + 1, true).unwrap().is_empty(), "other collection");
+}

@@ -148,6 +148,21 @@ impl Database {
         Ok(out)
     }
 
+    /// The videos of collection `context_id` with a scene still that has no text yet and was not
+    /// described (`page_images.description_state`; a declined one only with `retry_declined`) — one
+    /// query, so looking over a collection of many documents for scenes to describe stays cheap.
+    pub fn videos_with_undescribed_scenes(&self, context_id: i64, retry_declined: bool) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT s.document_id
+               FROM media_segments s JOIN documents d ON d.id = s.document_id JOIN page_images p ON p.id = s.page_image_id
+              WHERE d.context_id = ?1 AND s.kind = 'scene' AND trim(s.text) = ''
+                AND (p.description_state IS NULL OR (?2 AND p.description_state = 'declined'))
+              ORDER BY s.document_id",
+        )?;
+        let ids = stmt.query_map(params![context_id, retry_declined], |r| r.get(0))?;
+        Ok(ids.collect::<rusqlite::Result<Vec<i64>>>()?)
+    }
+
     fn update_media<T>(&self, id: i64, f: impl FnOnce(&mut MediaDocument) -> T) -> Result<T> {
         self.in_savepoint("media_update", || {
             let mut m = self.media_document(id)?.ok_or_else(|| CoreError::NotFound(format!("media document {id}")))?;
