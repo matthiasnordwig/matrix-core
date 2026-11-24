@@ -13,6 +13,12 @@
 //!
 //! Chunks without `page_breaks` (other chunkers, or chunked before the key
 //! existed) read as lying on their start page only.
+//!
+//! **A page change without text of its own:** two entries at the same offset
+//! (`[[0, 5]]` after `page: 3`) mean that the first page's content stands on the
+//! next one — the build-up pages of a slide (`slide_steps.rs`) whose fullest page
+//! was kept. The range then names all pages of the unit (`pp. 3–5`), while the
+//! text, its `[p. N]` mark and a located quote are on the kept page.
 
 use serde_json::{json, Map, Value};
 
@@ -68,7 +74,7 @@ impl ChunkPages {
         let mut pages = ChunkPages(vec![(0, first)]);
         for b in meta.get(BREAKS_KEY).and_then(Value::as_array).into_iter().flatten() {
             let (Some(o), Some(p)) = (b.get(0).and_then(Value::as_u64), b.get(1).and_then(Value::as_i64)) else { continue };
-            if o > 0 && pages.0.last().is_some_and(|(lo, _)| (o as usize) > *lo) {
+            if pages.0.last().is_some_and(|(lo, _)| (o as usize) >= *lo) {
                 pages.line(o as usize, p);
             }
         }
@@ -112,11 +118,12 @@ impl ChunkPages {
         out
     }
 
-    /// `text` with `[p. N]` on its own line where page N begins (after the start page).
+    /// `text` with `[p. N]` on its own line where page N begins (after the start page); a page
+    /// without text of its own gets no mark.
     pub fn mark(&self, text: &str) -> String {
         let mut out = String::with_capacity(text.len() + 10 * self.0.len());
         for (i, (p, s, e)) in self.parts(text).into_iter().enumerate() {
-            if i > 0 {
+            if i > 0 && e > s {
                 out.push_str(&format!("[p. {p}]\n"));
             }
             out.push_str(&text[s..e]);

@@ -22,6 +22,7 @@ pub mod repeats;
 pub mod rules;
 pub mod scan_text;
 pub mod scan_noise;
+pub mod slide_steps;
 pub mod text_repair;
 pub mod transcript;
 

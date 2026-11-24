@@ -19,11 +19,14 @@
 //!   a definition at a sentence end) are glued to the previous chunk;
 //! - `max_chunk_chars` is only an emergency brake for very long unstructured
 //!   blocks.
+//!
 //! Each line passes `text_repair::repair_mojibake` (PDFs whose character map
 //! encodes UTF-8 read as Windows-1252) before it is classified.
 //! Offsets are byte offsets into the repaired text (see `chunking/CLAUDE.md`).
 //! Every chunk records the page of its lines (`pages::ChunkPages`): `page` is
 //! the start page, `page_breaks` the page changes inside the chunk text.
+//! Build-up pages of a slide (`slide_steps.rs`) keep only the fullest page's
+//! lines; the unit records its page range before them.
 
 use pdf_oxide::PdfDocument;
 use regex::RegexBuilder;
@@ -31,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::pages::ChunkPages;
 use super::pdf_lines::{page_lines, Glyph};
+use super::slide_steps;
 use super::sentences::split_sentences;
 use super::text_repair::repair_mojibake;
 use crate::db::models::{NewChunk, StructuralProfile};
@@ -277,6 +281,20 @@ pub fn chunk_pdf_structurally(
         }
     }
     
+    // Build-up pages of a slide (`slide_steps.rs`): only the kept page's lines stay; its first line
+    // records the run's first page before its own (`pages.rs`), so the unit names its page range.
+    let mut page_texts = vec![String::new(); page_count];
+    for l in &classified_lines {
+        if let Some(t) = page_texts.get_mut(l.page_idx) {
+            t.push_str(&l.text);
+            t.push('\n');
+        }
+    }
+    let runs = slide_steps::step_runs(&page_texts);
+    let left_out = |p: usize| runs.iter().any(|r| r.first <= p && p <= r.last && p != r.kept);
+    classified_lines.retain(|l| !left_out(l.page_idx));
+    let unit_start: HashMap<usize, usize> = runs.iter().map(|r| (r.kept, r.first)).collect();
+
     // Running lines: the same text on at least a quarter of the pages (at least 3).
     let mut pages_of: HashMap<&str, HashSet<usize>> = HashMap::new();
     for l in &classified_lines {
@@ -290,6 +308,7 @@ pub fn chunk_pdf_structurally(
     for line in classified_lines.iter() {
         let line_text_trimmed = line.text.trim();
         
+        let first_of_page = prev_line.is_none_or(|(page, _, _)| page != line.page_idx);
         let is_new_paragraph = match prev_line {
             Some((page, quarter, across)) if page == line.page_idx && quarter == line.quarter => {
                 (line.across - across).abs() as f32 / 10.0 > line.max_font_size * 1.5
@@ -375,6 +394,9 @@ pub fn chunk_pdf_structurally(
         if current_chunk_text.is_empty() {
             current_pages = ChunkPages::default();
             current_chunk_char_start = total_chars_processed;
+        }
+        if let Some(first) = unit_start.get(&line.page_idx).filter(|_| first_of_page) {
+            current_pages.line(current_chunk_text.len(), *first as i64 + 1);
         }
         current_pages.line(current_chunk_text.len(), line.page_idx as i64 + 1);
         

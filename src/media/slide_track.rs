@@ -58,19 +58,25 @@ impl SlideKey {
     }
 }
 
-/// Lower-case words of two or more letters or digits.
-fn words(text: &str) -> HashSet<String> {
+/// Lower-case words of two or more letters or digits (what slides are compared by).
+pub fn words(text: &str) -> HashSet<String> {
     text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_lowercase).collect()
+}
+
+/// The text part of the rule: `None` when either side has fewer than [`MIN_WORDS`] words (then only the
+/// picture can tell); also the rule for build-up pages of a slide PDF (`chunking/slide_steps.rs`).
+pub fn same_words(a: &HashSet<String>, b: &HashSet<String>) -> Option<bool> {
+    if a.len() < MIN_WORDS || b.len() < MIN_WORDS {
+        return None;
+    }
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let shared = short.intersection(long).count();
+    Some(shared as f32 >= SAME_WORDS * short.len() as f32)
 }
 
 /// The rule of the module comment.
 pub fn same_slide(a: &SlideKey, b: &SlideKey) -> bool {
-    if a.words.len() >= MIN_WORDS && b.words.len() >= MIN_WORDS {
-        let (short, long) = if a.words.len() <= b.words.len() { (&a.words, &b.words) } else { (&b.words, &a.words) };
-        let shared = short.intersection(long).count();
-        return shared as f32 >= SAME_WORDS * short.len() as f32;
-    }
-    a.hash_distance(b) <= SAME_HASH_BITS
+    same_words(&a.words, &b.words).unwrap_or_else(|| a.hash_distance(b) <= SAME_HASH_BITS)
 }
 
 /// One classified shot of the video.

@@ -99,3 +99,25 @@ fn the_structural_chunker_records_the_page_break_inside_a_paragraph() {
     let n = |l: &str| l.split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
     assert_eq!(n(first_on_2), n(last_on_1) + 1, "the marker sits between two consecutive lines");
 }
+
+#[test]
+fn a_page_without_text_of_its_own_widens_the_range_but_not_the_quote() {
+    // Build-up pages 3–4 of a slide kept at page 5: the unit starts the chunk.
+    let meta = r#"{"page":3,"page_breaks":[[0,5]]}"#;
+    let pages = ChunkPages::from_metadata(meta).unwrap();
+    assert_eq!(pages.label(), "pp. 3\u{2013}5");
+    let text = "Results\nTwo thirds read on the phone\n";
+    assert_eq!(pages.page_at(0), Some(5));
+    assert_eq!(pages.locate(text, |p| p.contains("Two thirds")), Some((5, 5)));
+    assert_eq!(pages.mark(text), format!("[p. 5]\n{text}"));
+    assert_eq!(stamped(&pages), meta);
+    // In the middle of a chunk: page 2's text, then the unit 3–5.
+    let mut p = ChunkPages::default();
+    p.line(0, 2);
+    p.line(8, 3);
+    p.line(8, 5);
+    let text = "Before.\nResults\n";
+    let read = ChunkPages::from_metadata(&stamped(&p)).unwrap();
+    assert_eq!(read, p);
+    assert_eq!(read.mark(text), "Before.\n[p. 5]\nResults\n");
+}
