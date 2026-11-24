@@ -42,6 +42,9 @@ pub(crate) const FILE_PRESENT_SQL: &str = "NOT EXISTS (SELECT 1 FROM source_file
 
 const FILE_COLS: &str = "document_id, context_id, path, byte_size, mtime_ns, sha256, missing_since";
 
+/// (id, file name, page count, ingested_at).
+type DocumentWithoutSource = (i64, String, Option<i64>, i64);
+
 impl Database {
     /// Remember a file or folder `add_files` read for `context_id`. Again for the
     /// same path: `recursive` only widens (a recursive add stays recursive).
@@ -198,7 +201,7 @@ impl Database {
     /// (before 0.2.3), which stored no path: `(id, file name, page count, ingested_at)`.
     /// The file name is `zip_entry` when the title differs from it, else `name`.
     /// `add_files` takes such a document over instead of adding its file a second time.
-    pub fn documents_without_source(&self, context_id: i64) -> Result<Vec<(i64, String, Option<i64>, i64)>> {
+    pub fn documents_without_source(&self, context_id: i64) -> Result<Vec<DocumentWithoutSource>> {
         let mut stmt = self.conn.prepare(
             "SELECT d.id, COALESCE(d.zip_entry, d.name), d.page_count, d.ingested_at FROM documents d
              WHERE d.context_id = ?1 AND NOT EXISTS (SELECT 1 FROM source_files s WHERE s.document_id = d.id)

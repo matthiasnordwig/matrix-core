@@ -46,12 +46,11 @@ impl Database {
 
                 let mut scored = Vec::new();
                 for item in iter {
-                    if let Ok((id, vec)) = item {
-                        if vec.len() == qvec.len() && !vec.is_empty() {
+                    if let Ok((id, vec)) = item
+                        && vec.len() == qvec.len() && !vec.is_empty() {
                             let score = crate::db::embeddings::cosine(qvec, &vec);
                             scored.push((score, id));
                         }
-                    }
                 }
                 scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                 scored.truncate(top_k_nodes);
@@ -77,12 +76,11 @@ impl Database {
 
                 let mut scored_comms = Vec::new();
                 for item in iter_comm {
-                    if let Ok((id, vec)) = item {
-                        if vec.len() == qvec.len() && !vec.is_empty() {
+                    if let Ok((id, vec)) = item
+                        && vec.len() == qvec.len() && !vec.is_empty() {
                             let score = crate::db::embeddings::cosine(qvec, &vec);
                             scored_comms.push((score, id));
                         }
-                    }
                 }
                 scored_comms.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                 scored_comms.truncate(top_k_communities);
@@ -92,7 +90,7 @@ impl Database {
 
         let mut community_summaries = Vec::new();
         if !hit_community_ids.is_empty() {
-            let placeholders = std::iter::repeat("?").take(hit_community_ids.len()).collect::<Vec<_>>().join(",");
+            let placeholders = std::iter::repeat_n("?", hit_community_ids.len()).collect::<Vec<_>>().join(",");
             // Defensive re-check of the lens filter (ids above are already
                 // lens-filtered, but keep the invariant local to the query).
                 let query = format!(
@@ -114,7 +112,7 @@ impl Database {
         }
 
         // Construct CTE query
-        let in_placeholders = std::iter::repeat("?").take(hit_node_ids.len()).collect::<Vec<_>>().join(",");
+        let in_placeholders = std::iter::repeat_n("?", hit_node_ids.len()).collect::<Vec<_>>().join(",");
 
         // The two traversal branches join each context's own `active_lens_id`
         // (edges carry `context_id` directly) so multi-context retrieval
@@ -157,7 +155,7 @@ impl Database {
             return Ok(crate::db::models::GraphContext { nodes: vec![], edges: vec![], community_summaries });
         }
 
-        let exp_placeholders = std::iter::repeat("?").take(expanded_node_ids.len()).collect::<Vec<_>>().join(",");
+        let exp_placeholders = std::iter::repeat_n("?", expanded_node_ids.len()).collect::<Vec<_>>().join(",");
 
         // Node type shown to the LLM is the active-lens-resolved type,
         // falling back to the raw type where no lens/no mapping row exists
@@ -229,7 +227,7 @@ impl Database {
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
                     Ok((id, model_id, vec))
                 })?;
-                for item in iter { if let Ok(i) = item { cached_nodes.push(i); } }
+                for i in iter.flatten() { cached_nodes.push(i); }
 
                 // Per-lens filter — same reasoning as retrieve_graph_with above.
                 let mut stmt_comm = self.conn.prepare(
@@ -243,7 +241,7 @@ impl Database {
                     let vec = crate::db::embeddings::blob_to_vector(&blob).unwrap_or_default();
                     Ok((id, model_id, vec))
                 })?;
-                for item in iter_comm { if let Ok(i) = item { cached_communities.push(i); } }
+                for i in iter_comm.flatten() { cached_communities.push(i); }
             }
         }
 
@@ -279,7 +277,7 @@ impl Database {
 
             let mut community_summaries = Vec::new();
             if !hit_community_ids.is_empty() {
-                let placeholders = std::iter::repeat("?").take(hit_community_ids.len()).collect::<Vec<_>>().join(",");
+                let placeholders = std::iter::repeat_n("?", hit_community_ids.len()).collect::<Vec<_>>().join(",");
                 // Defensive re-check of the lens filter (ids above are already
                 // lens-filtered, but keep the invariant local to the query).
                 let query = format!(
@@ -300,7 +298,7 @@ impl Database {
                 continue;
             }
 
-            let placeholders = std::iter::repeat("?").take(hit_node_ids.len()).collect::<Vec<_>>().join(",");
+            let placeholders = std::iter::repeat_n("?", hit_node_ids.len()).collect::<Vec<_>>().join(",");
             let query = format!("
                 WITH RECURSIVE traverse(node_id, depth) AS (
                     SELECT id, 0 FROM ontology_nodes WHERE id IN ({})
@@ -336,7 +334,7 @@ impl Database {
                 continue;
             }
 
-            let exp_placeholders = std::iter::repeat("?").take(expanded_node_ids.len()).collect::<Vec<_>>().join(",");
+            let exp_placeholders = std::iter::repeat_n("?", expanded_node_ids.len()).collect::<Vec<_>>().join(",");
 
             let mut n_stmt = self.conn.prepare_cached(&format!("
                 SELECT n.label, COALESCE(lnt.resolved_type, n.raw_entity_type), n.description

@@ -144,11 +144,11 @@ impl Database {
         let sql = format!("SELECT id FROM contexts WHERE provisional = 1 AND {filter}");
         let ids: Vec<i64> = {
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows = match arg {
+            
+            match arg {
                 Some(a) => stmt.query_map([a], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?,
                 None => stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?,
-            };
-            rows
+            }
         };
         let mut n = 0;
         for id in ids {

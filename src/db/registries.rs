@@ -280,18 +280,15 @@ impl Database {
             .conn
             .execute("DELETE FROM reranker_models WHERE id = ?1", [id])?
             > 0;
-        if deleted {
-            if let Ok(Some(active)) =
+        if deleted
+            && let Ok(Some(active)) =
                 self.get_setting::<i64>(super::settings::KEY_ACTIVE_RERANKER_ID)
-            {
-                if active == id {
+                && active == id {
                     self.conn.execute(
                         "DELETE FROM app_settings WHERE key = ?1",
                         [super::settings::KEY_ACTIVE_RERANKER_ID],
                     )?;
                 }
-            }
-        }
         Ok(deleted)
     }
 

@@ -83,7 +83,7 @@ fn transcript_keeps_short_turns_together_and_names_speakers() {
 
 #[test]
 fn chat_export_starts_anew_after_a_pause() {
-    let t = "[12.03.24, 14:22] Anna: Hallo\n[12.03.24, 14:25] Ben: Hi\n[12.03.24, 18:00] Anna: Später noch?\n[13.03.24, 09:00] Ben: Morgen\n".repeat(1);
+    let t = "[12.03.24, 14:22] Anna: Hallo\n[12.03.24, 14:25] Ben: Hi\n[12.03.24, 18:00] Anna: Später noch?\n[13.03.24, 09:00] Ben: Morgen\n".to_string();
     assert_eq!(kind(&t, "chat.txt"), DocKind::Chat);
     let cs = chunk_by_rules(&t, 1, 2, DocKind::Chat);
     assert_verbatim(&t, &cs);

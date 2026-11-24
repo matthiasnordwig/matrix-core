@@ -180,8 +180,7 @@ impl Database {
                 [run_id],
             )?);
         }
-        let placeholders = std::iter::repeat("?")
-            .take(keep_uids.len())
+        let placeholders = std::iter::repeat_n("?", keep_uids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(

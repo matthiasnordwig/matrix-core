@@ -13,6 +13,9 @@ use crate::db::{Database, Result};
 use crate::db::models::{OntologyNode, NewOntologyNode, MergeLogEntry};
 use rusqlite::OptionalExtension;
 
+/// (id, entity_type, label, description, vector).
+type NodeWithEmbedding = (i64, String, String, String, Vec<f32>);
+
 impl Database {
     pub fn list_ontology_nodes(&self, context_id: i64) -> Result<Vec<OntologyNode>> {
         let mut stmt = self.conn.prepare(
@@ -173,10 +176,8 @@ impl Database {
         let mut stmt = self.conn.prepare("SELECT chunk_id FROM ontology_extracted_chunks WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| row.get::<_, i64>(0))?;
         let mut set = std::collections::HashSet::new();
-        for item in iter {
-            if let Ok(id) = item {
-                set.insert(id);
-            }
+        for id in iter.flatten() {
+            set.insert(id);
         }
         Ok(set)
     }
@@ -212,7 +213,7 @@ impl Database {
         let mut stmt = self.conn.prepare("SELECT id, raw_entity_type FROM ontology_nodes WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut list = Vec::new();
-        for item in iter { if let Ok(i) = item { list.push(i); } }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -226,9 +227,7 @@ impl Database {
         })?;
 
         let mut map = std::collections::HashMap::new();
-        for item in iter {
-            if let Ok((id, val)) = item { map.insert(id, val); }
-        }
+        for (id, val) in iter.flatten() { map.insert(id, val); }
         Ok(map)
     }
 
@@ -248,9 +247,7 @@ impl Database {
         })?;
 
         let mut map = std::collections::HashMap::new();
-        for item in iter {
-            if let Ok((id, val)) = item { map.insert(id, val); }
-        }
+        for (id, val) in iter.flatten() { map.insert(id, val); }
         Ok(map)
     }
 
@@ -269,9 +266,7 @@ impl Database {
         })?;
 
         let mut list = Vec::new();
-        for item in iter {
-            if let Ok(i) = item { list.push(i); }
-        }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -289,7 +284,7 @@ impl Database {
 
     /// Nodes with a vector of the context's current model (export); vectors
     /// of another space are left out.
-    pub fn get_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
+    pub fn get_ontology_nodes_with_embeddings(&self, context_id: i64) -> Result<Vec<NodeWithEmbedding>> {
         let mut stmt = self.conn.prepare(
             "SELECT o.id, o.entity_type, o.label, o.description, o.vector_blob
                FROM ontology_nodes o JOIN contexts c ON c.id = o.context_id
@@ -308,9 +303,7 @@ impl Database {
         })?;
 
         let mut list = Vec::new();
-        for item in iter {
-            if let Ok(i) = item { list.push(i); }
-        }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -320,7 +313,7 @@ impl Database {
     /// the raw type directly — used by dedup bucketing so pair volume scales
     /// with the schema's type count, not with however many distinct raw
     /// types extraction happened to produce (see `handbuch/ontology.md` „Lens-System“).
-    pub fn get_ontology_nodes_with_embeddings_and_lens_type(&self, context_id: i64) -> Result<Vec<(i64, String, String, String, Vec<f32>)>> {
+    pub fn get_ontology_nodes_with_embeddings_and_lens_type(&self, context_id: i64) -> Result<Vec<NodeWithEmbedding>> {
         let mut stmt = self.conn.prepare(
             "SELECT o.id, COALESCE(lnt.resolved_type, o.raw_entity_type), o.label, o.description, o.vector_blob
              FROM ontology_nodes o
@@ -341,9 +334,7 @@ impl Database {
         })?;
 
         let mut list = Vec::new();
-        for item in iter {
-            if let Ok(i) = item { list.push(i); }
-        }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 

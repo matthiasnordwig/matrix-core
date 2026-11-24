@@ -160,8 +160,7 @@ impl Database {
         if context_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat("?")
-            .take(context_ids.len())
+        let placeholders = std::iter::repeat_n("?", context_ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -248,8 +247,7 @@ impl Database {
         if context_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat("?")
-            .take(context_ids.len())
+        let placeholders = std::iter::repeat_n("?", context_ids.len())
             .collect::<Vec<_>>()
             .join(",");
         // SQL pre-filter: regulation documents (gate 1) + a cheap `LIKE` on the
@@ -513,19 +511,17 @@ pub(crate) fn pick_definition_site(
         if surfaces.is_empty() {
             return false;
         }
-        if let Some(sig) = &c.signature {
-            if carries(&norm(sig), false) {
+        if let Some(sig) = &c.signature
+            && carries(&norm(sig), false) {
                 return true;
             }
-        }
         if carries(&norm(&c.text), true) {
             return true;
         }
-        if let Some(section) = super::chunks::chunk_section(c) {
-            if carries(&norm(&section), false) {
+        if let Some(section) = super::chunks::chunk_section(c)
+            && carries(&norm(&section), false) {
                 return true;
             }
-        }
         false
     };
 
@@ -568,8 +564,9 @@ pub struct ReferencedChunk {
 /// Pure ref-expansion ranking + capping. Given, per primary hit (in top-k
 /// order), the ordered list of target chunk_ids its outgoing refs resolve to,
 /// produce the extra chunks to append — obeying the LOCKED caps:
-///   - at most **1** extra chunk per top-k hit, and
-///   - at most **⌈top_k/2⌉** extra chunks total,
+/// - at most **1** extra chunk per top-k hit, and
+/// - at most **⌈top_k/2⌉** extra chunks total,
+///
 /// never re-adding a chunk already among the primary hits, and never adding the
 /// same extra chunk twice. `resolved_per_hit[i]` are the candidate targets for
 /// primary hit `i` (best-first); the first not-yet-used one is taken.

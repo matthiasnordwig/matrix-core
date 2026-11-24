@@ -9,6 +9,8 @@ use crate::db::models::OntologyRunLogEntry;
 
 impl Database {
     /// Insert one completed phase record. Returns the row id.
+    // One parameter per column of the row; the only non-test caller passes them straight through.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_ontology_run_log(
         &self,
         run_id: &str,

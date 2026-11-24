@@ -134,7 +134,7 @@ fn a_question_in_another_language_than_the_vector_hits_ignores_the_keyword_list(
     // With it the German vector hit leads and no hit carries a keyword share.
     let got = ask(english, &FusionParams::default());
     assert_eq!(got[0].chunk_id, de[0]);
-    assert!(got.iter().all(|s| s.provenance.keyword.map_or(true, |k| k.share == 0.0)));
+    assert!(got.iter().all(|s| s.provenance.keyword.is_none_or(|k| k.share == 0.0)));
     // A German question on German vector hits keeps its keyword list, bit for bit.
     let german = "Wie lange muss der Anbieter die technische Dokumentation aufbewahren?";
     let bits = |x: &[ScoredChunk]| x.iter().map(|s| (s.chunk_id, s.score.to_bits())).collect::<Vec<_>>();

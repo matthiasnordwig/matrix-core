@@ -119,9 +119,7 @@ fn text_without_header_still_chunks() {
 
 #[test]
 fn filing_lines_land_in_the_metadata_of_every_passage() {
-    let t = format!(
-        "# Wow\n\n**From:** a@example.com  \n**Date:** 2000-09-06  \n**Folder:** \\\\Arnold\\Sent Items  \n**Mailbox:** Arnold-J\n\nI agree.\n\n-----Original Message-----\nFrom: X\nSent: Today\nTo: Y\n\nWhy?\n"
-    );
+    let t = "# Wow\n\n**From:** a@example.com  \n**Date:** 2000-09-06  \n**Folder:** \\\\Arnold\\Sent Items  \n**Mailbox:** Arnold-J\n\nI agree.\n\n-----Original Message-----\nFrom: X\nSent: Today\nTo: Y\n\nWhy?\n".to_string();
     let cs = chunk(&t, 1, 2);
     assert_eq!(cs.len(), 2);
     for c in &cs {

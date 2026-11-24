@@ -188,7 +188,7 @@ impl Database {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(",");
         let sql = format!("SELECT * FROM chunks WHERE id IN ({placeholders})");
         let mut stmt = self.conn.prepare(&sql)?;
         let params = rusqlite::params_from_iter(ids.iter());

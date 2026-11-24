@@ -399,8 +399,7 @@ impl Database {
             let score = self
                 .context(c.context_id)?
                 .and_then(|ctx| ctx.embedding_model_id)
-                .and_then(|model_id| query_by_model.get(&model_id))
-                .and_then(|qvec| self.embedding_vector(c.id).ok().flatten().map(|v| (qvec, v)))
+                .and_then(|model_id| query_by_model.get(&model_id)).zip(self.embedding_vector(c.id).ok().flatten())
                 .map(|(qvec, v)| crate::db::embeddings::cosine(qvec, &v))
                 .unwrap_or(0.0);
             out.insert(c.id, score);

@@ -93,7 +93,7 @@ pub fn repair_mojibake(text: &str) -> String {
             '\u{2002}' | '\u{2003}' | '\u{2007}' | '\u{2009}' | '\u{200A}' | '\u{202F}' => out.push(' '),
             // Previous char taken from `out`: a soft hyphen before it is already gone.
             'Â' if out.chars().last().is_some_and(char::is_lowercase)
-                && decoded.get(k + 1).map_or(true, |n| n.is_lowercase() || n.is_whitespace()) => {}
+                && decoded.get(k + 1).is_none_or(|n| n.is_lowercase() || n.is_whitespace()) => {}
             _ => out.push(c),
         }
     }

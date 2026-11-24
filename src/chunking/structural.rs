@@ -90,15 +90,14 @@ pub fn chunk_pdf_structurally(
                 });
             }
         }
-        comps.sort_by(|a, b| b.priority.cmp(&a.priority));
+        comps.sort_by_key(|c| std::cmp::Reverse(c.priority));
         (p.min_chunk_chars as usize, p.max_chunk_chars as usize, comps)
     } else {
-        let mut comps = Vec::new();
-        comps.push(CompiledPattern {
+        let mut comps = vec![CompiledPattern {
             role: "ignore".to_string(),
             regex: RegexBuilder::new(r"(?:Seite|Page|Bundesgesetzblatt|Amtsblatt|BAnz)").case_insensitive(true).build().unwrap(),
             priority: 200,
-        });
+        }];
         comps.push(CompiledPattern {
             role: "heading_l1".to_string(),
             // A number (or a Roman numeral after a space) must follow the word: "at the request" or
@@ -339,10 +338,10 @@ pub fn chunk_pdf_structurally(
         }
 
         let role = matched_role.as_deref();
-        let is_heading = role.map_or(false, |r| r.starts_with("heading"));
+        let is_heading = role.is_some_and(|r| r.starts_with("heading"));
         let is_definition = role == Some("definition");
         
-        let starts_with_number = line_text_trimmed.chars().next().map_or(false, |c| c.is_ascii_digit());
+        let starts_with_number = line_text_trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
         let is_list_item = is_new_paragraph && starts_with_number;
         
         let mut force_flush = false;

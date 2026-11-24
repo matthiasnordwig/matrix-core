@@ -30,6 +30,9 @@ fn row_to_community(row: &rusqlite::Row) -> rusqlite::Result<OntologyCommunity> 
     })
 }
 
+/// (summary text, optional (embedding bytes, dimension)).
+type CachedSummary = (String, Option<(Vec<u8>, i64)>);
+
 impl Database {
     /// `lens_id` `None` = raw/unfiltered view; `members_key` `None` only for
     /// legacy-style rows that should never cache-hit (e.g. imports whose
@@ -142,7 +145,7 @@ impl Database {
         context_id: i64,
         lens_id: Option<i64>,
         members_key: &str,
-    ) -> Result<Option<(String, Option<(Vec<u8>, i64)>)>> {
+    ) -> Result<Option<CachedSummary>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT co.summary_text,
                     CASE WHEN co.vector_model_id = c.embedding_model_id THEN co.vector_blob END,

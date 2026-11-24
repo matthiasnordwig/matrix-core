@@ -36,10 +36,8 @@ impl Database {
             let avg: f64 = row.get(1)?;
             Ok((phase, avg))
         })?;
-        for r in rows {
-            if let Ok((phase, avg)) = r {
-                map.insert(phase, avg);
-            }
+        for (phase, avg) in rows.flatten() {
+            map.insert(phase, avg);
         }
         Ok(map)
     }

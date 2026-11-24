@@ -25,11 +25,9 @@ impl Database {
             let identical: bool = row.get(2)?;
             Ok((id1, id2, identical))
         })?;
-        for r in rows {
-            if let Ok((id1, id2, identical)) = r {
-                map.insert((id1, id2), identical);
-                map.insert((id2, id1), identical); // Store both directions
-            }
+        for (id1, id2, identical) in rows.flatten() {
+            map.insert((id1, id2), identical);
+            map.insert((id2, id1), identical); // Store both directions
         }
         Ok(map)
     }

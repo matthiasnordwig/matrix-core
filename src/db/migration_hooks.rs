@@ -97,8 +97,8 @@ pub(super) fn migrate_v49_to_v50_reranker(tx: &rusqlite::Transaction) -> rusqlit
         .optional()?
         .is_some();
 
-    if let Some(dir) = dir {
-        if existing_rows == 0 && !active_set {
+    if let Some(dir) = dir
+        && existing_rows == 0 && !active_set {
             tx.execute(
                 "INSERT INTO reranker_models (name, kind, model_dir, execution_provider)
                  VALUES ('Local reranker (migrated)', 'local_onnx', ?1, NULL)",
@@ -112,7 +112,6 @@ pub(super) fn migrate_v49_to_v50_reranker(tx: &rusqlite::Transaction) -> rusqlit
                 rusqlite::params![id.to_string()],
             )?;
         }
-    }
 
     // Old key is obsolete regardless of whether a row was created (idempotent).
     tx.execute("DELETE FROM app_settings WHERE key = 'reranker_model_dir'", [])?;

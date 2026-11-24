@@ -309,7 +309,7 @@ fn main() {
         vec_order.sort_by(|&a, &b| cs[b].total_cmp(&cs[a]));
         let mut img_order: Vec<(&str, f32)> = images.iter().map(|(k, _, v)| (k.as_str(), dot(&qv, v))).collect();
         img_order.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for variant in 0..4 {
+        for (variant, rr_v) in rr.iter_mut().enumerate() {
             let mut score = vec![0.0f64; chunks.len()];
             for (r, &ci) in vec_order.iter().enumerate() {
                 score[ci] += 1.0 / (k + (r + 1) as f64);
@@ -332,7 +332,7 @@ fn main() {
             let mut order: Vec<usize> = (0..chunks.len()).collect();
             order.sort_by(|&a, &b| score[b].total_cmp(&score[a]));
             if let Some(p) = order.iter().position(|&i| chunks[i].0 == target) {
-                rr[variant] += 1.0 / (p + 1) as f64;
+                *rr_v += 1.0 / (p + 1) as f64;
             }
         }
         nq += 1;

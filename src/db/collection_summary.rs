@@ -36,6 +36,9 @@ const LENS_EDGES_CTE: &str = "le AS (
     WHERE e.context_id = ?1 AND COALESCE(v.verdict, 'valid') != 'deleted'
 )";
 
+/// Preview nodes plus their (from, to) edges.
+type PreviewGraph = (Vec<PreviewNode>, Vec<(i64, i64)>);
+
 impl Database {
     /// Documents per context (contexts without documents are absent).
     pub fn count_documents_by_context(&self) -> Result<HashMap<i64, i64>> {
@@ -92,7 +95,7 @@ impl Database {
 
     /// The card miniature's graph: up to `limit` concepts chosen by
     /// [`grow_preview_selection`] (most connected first) and the links among them.
-    pub fn preview_graph(&self, context_id: i64, limit: usize) -> Result<(Vec<PreviewNode>, Vec<(i64, i64)>)> {
+    pub fn preview_graph(&self, context_id: i64, limit: usize) -> Result<PreviewGraph> {
         let nodes = self.top_ontology_nodes_by_degree(context_id, i64::MAX as usize)?;
         let links = self.ontology_links(context_id)?;
         let picked: HashSet<i64> = grow_preview_selection(&nodes, &links, limit).into_iter().collect();

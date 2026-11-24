@@ -12,6 +12,9 @@ use rusqlite::{params, OptionalExtension};
 use super::models::{Chunk, NewChunk};
 use super::{Database, Result};
 
+/// (chunk id, duplicate_of, text_key).
+type ChunkDuplicateRow = (i64, Option<i64>, Option<String>);
+
 impl Database {
     /// Stores `c`; with a `key` an earlier passage of that key in the collection makes it a repeat.
     pub fn create_chunk_once(&self, c: &NewChunk, key: Option<&str>) -> Result<Chunk> {
@@ -34,7 +37,7 @@ impl Database {
 
     /// `(chunk id, duplicate_of, text_key)` of every passage of the context that is a repeat or
     /// stands for repeats, for the export bundle.
-    pub fn chunk_duplicate_rows(&self, context_id: i64) -> Result<Vec<(i64, Option<i64>, Option<String>)>> {
+    pub fn chunk_duplicate_rows(&self, context_id: i64) -> Result<Vec<ChunkDuplicateRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, duplicate_of, text_key FROM chunks WHERE context_id = ?1 \
              AND (duplicate_of IS NOT NULL OR text_key IS NOT NULL) ORDER BY id",
@@ -72,8 +75,8 @@ impl Database {
                 "SELECT DISTINCT c.id FROM chunks c JOIN chunks r ON r.duplicate_of = c.id \
                  WHERE c.document_id = ?1 AND r.document_id <> ?1",
             )?;
-            let rows = stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?;
-            rows
+            
+            stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?
         };
         for old in held {
             let (heir, document): (i64, i64) = self.conn.query_row(

@@ -23,8 +23,8 @@ fn dedup_cache_round_trip() {
     db.cache_dedup_decision(ctx, 3, 4, false).unwrap();
 
     let cache = db.get_dedup_cache(ctx).unwrap();
-    assert_eq!(cache[&(1, 2)], true);
-    assert_eq!(cache[&(3, 4)], false);
+    assert!(cache[&(1, 2)]);
+    assert!(!cache[&(3, 4)]);
 }
 
 // --- quarantine + chunk-state resumability ----------------------------------

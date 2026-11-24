@@ -142,7 +142,7 @@ fn unsearched_sources_round_trip_and_a_rerun_overwrites_them() {
     assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched, vec![dora(), empty.clone()]);
     db.upsert_grid_run_meta("run-n", "sys2", None).unwrap();
     assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched.len(), 2);
-    db.set_grid_run_not_searched("run-n", &[empty.clone()]).unwrap();
+    db.set_grid_run_not_searched("run-n", std::slice::from_ref(&empty)).unwrap();
     assert_eq!(db.grid_run_meta("run-n").unwrap().unwrap().sources_not_searched, vec![empty]);
     db.set_grid_run_not_searched("run-n", &[]).unwrap();
     let stored: Option<String> = db

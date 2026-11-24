@@ -41,6 +41,7 @@
 //!   - paragraph + German long form: "§§ 13 bis 13c, 15 und 17 bis 22 des
 //!     Kreditwesengesetzes" → KWG keys (genitive only as `es`/`s` suffix);
 //!     "§ 3 des Vertrages" never matches.
+//!
 //! An article with neither a known Kürzel nor a directly following regulation
 //! long form never matches.
 //!
@@ -422,6 +423,7 @@ const MAX_RANGE_EXPANSION: usize = 30;
 ///     up to the end letter → `13, 13a, 13b, 13c`.
 ///   - **Consecutive numbers** (`13` → `15`): iterate the integer, dropping any
 ///     letter suffixes → `13, 14, 15`.
+///
 /// If the range is degenerate (end before start, or an unhandled mixed shape)
 /// only the start is returned. Above `MAX_RANGE_EXPANSION` individual parts,
 /// only start and end are returned (no full expansion).

@@ -7,6 +7,9 @@
 use crate::db::{Database, Result};
 use crate::db::models::{OntologyEdge, NewOntologyEdge};
 
+/// (document name, page, section heading) of one evidence chunk.
+type EvidenceLocation = (String, Option<String>, Option<String>);
+
 impl Database {
     pub fn list_ontology_edges(&self, context_id: i64) -> Result<Vec<OntologyEdge>> {
         let mut stmt = self.conn.prepare(
@@ -19,22 +22,18 @@ impl Database {
         let rows = stmt.query_map([context_id], |row| {
             let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
-            if let Some(s) = chunk_data_str {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
-                    if let Some(arr) = parsed.as_array() {
+            if let Some(s) = chunk_data_str
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s)
+                    && let Some(arr) = parsed.as_array() {
                         for item in arr {
-                            if let Some(obj) = item.as_object() {
-                                if let Some(cid_val) = obj.get("chunk_id") {
-                                    if let Some(cid) = cid_val.as_i64() {
+                            if let Some(obj) = item.as_object()
+                                && let Some(cid_val) = obj.get("chunk_id")
+                                    && let Some(cid) = cid_val.as_i64() {
                                         let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
                                         chunk_evidences.insert(cid, ev);
                                     }
-                                }
-                            }
                         }
                     }
-                }
-            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
@@ -68,22 +67,18 @@ impl Database {
         let mut rows = stmt.query_map([edge_id], |row| {
             let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
-            if let Some(s) = chunk_data_str {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
-                    if let Some(arr) = parsed.as_array() {
+            if let Some(s) = chunk_data_str
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s)
+                    && let Some(arr) = parsed.as_array() {
                         for item in arr {
-                            if let Some(obj) = item.as_object() {
-                                if let Some(cid_val) = obj.get("chunk_id") {
-                                    if let Some(cid) = cid_val.as_i64() {
+                            if let Some(obj) = item.as_object()
+                                && let Some(cid_val) = obj.get("chunk_id")
+                                    && let Some(cid) = cid_val.as_i64() {
                                         let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
                                         chunk_evidences.insert(cid, ev);
                                     }
-                                }
-                            }
                         }
                     }
-                }
-            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
@@ -130,22 +125,18 @@ impl Database {
         let rows = stmt.query_map([context_id], |row| {
             let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
-            if let Some(s) = chunk_data_str {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
-                    if let Some(arr) = parsed.as_array() {
+            if let Some(s) = chunk_data_str
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s)
+                    && let Some(arr) = parsed.as_array() {
                         for item in arr {
-                            if let Some(obj) = item.as_object() {
-                                if let Some(cid_val) = obj.get("chunk_id") {
-                                    if let Some(cid) = cid_val.as_i64() {
+                            if let Some(obj) = item.as_object()
+                                && let Some(cid_val) = obj.get("chunk_id")
+                                    && let Some(cid) = cid_val.as_i64() {
                                         let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
                                         chunk_evidences.insert(cid, ev);
                                     }
-                                }
-                            }
                         }
                     }
-                }
-            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
@@ -204,22 +195,18 @@ impl Database {
         let edge = stmt.query_row([edge_id], |row| {
             let chunk_data_str: Option<String> = row.get(6)?;
             let mut chunk_evidences = std::collections::HashMap::new();
-            if let Some(s) = chunk_data_str {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
-                    if let Some(arr) = parsed.as_array() {
+            if let Some(s) = chunk_data_str
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s)
+                    && let Some(arr) = parsed.as_array() {
                         for item in arr {
-                            if let Some(obj) = item.as_object() {
-                                if let Some(cid_val) = obj.get("chunk_id") {
-                                    if let Some(cid) = cid_val.as_i64() {
+                            if let Some(obj) = item.as_object()
+                                && let Some(cid_val) = obj.get("chunk_id")
+                                    && let Some(cid) = cid_val.as_i64() {
                                         let ev = obj.get("evidence").and_then(|v| v.as_str()).map(|s| s.to_string());
                                         chunk_evidences.insert(cid, ev);
                                     }
-                                }
-                            }
                         }
                     }
-                }
-            }
             Ok(OntologyEdge {
                 id: row.get(0)?,
                 context_id: row.get(1)?,
@@ -255,7 +242,7 @@ impl Database {
         let mut stmt = self.conn.prepare("SELECT id, relation_type FROM ontology_edges WHERE context_id = ?1")?;
         let iter = stmt.query_map([context_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut list = Vec::new();
-        for item in iter { if let Ok(i) = item { list.push(i); } }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -267,7 +254,7 @@ impl Database {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
         let mut list = Vec::new();
-        for item in iter { if let Ok(i) = item { list.push(i); } }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -283,9 +270,7 @@ impl Database {
         })?;
 
         let mut list = Vec::new();
-        for item in iter {
-            if let Ok(i) = item { list.push(i); }
-        }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -307,9 +292,7 @@ impl Database {
         })?;
 
         let mut list = Vec::new();
-        for item in iter {
-            if let Ok(i) = item { list.push(i); }
-        }
+        for i in iter.flatten() { list.push(i); }
         Ok(list)
     }
 
@@ -399,7 +382,7 @@ impl Database {
     /// metadata keys as `list_chunks_by_page` (number or text, kept as text);
     /// section from `metadata.section`. One query for the whole graph — the
     /// GraphML export needs it for every edge.
-    pub fn ontology_evidence_locations(&self, context_id: i64) -> Result<std::collections::HashMap<i64, (String, Option<String>, Option<String>)>> {
+    pub fn ontology_evidence_locations(&self, context_id: i64) -> Result<std::collections::HashMap<i64, EvidenceLocation>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT c.id, d.name,
                     CASE WHEN json_valid(c.metadata) THEN COALESCE(json_extract(c.metadata, '$.page'), json_extract(c.metadata, '$.Page'),
