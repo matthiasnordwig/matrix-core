@@ -20,10 +20,20 @@
 //!   `slide_track.rs` joins pieces showing the same slide or the same scene. A slide change inside such a
 //!   shot is placed to within [`PIECE_MS`]; a standing picture (a screen recording, a tripod on a slide)
 //!   never moves and is not split.
-//! - **Still of a shot** ([`ShotSplitter`]): the latest still that stands (distance to its neighbours in
-//!   the shot below [`MIN_SCORE`]): on a slide built up point by point that is the full slide; without one
-//!   (constant motion) the steadiest. Only that still and the ones waiting for the decision are held, so
-//!   memory does not grow with the video.
+//! - **Held views of a handheld camera:** a page held into a phone camera shakes, so every still differs
+//!   from the one before as much as a pan does (the grid sees each shift) and no cut stands out; only the
+//!   colours stay ([`colours`]). A still is *held* when it lies in [`HOLD_STILLS`] stills in a row whose
+//!   colours each moved less than [`HOLD_COLOURS`]. Where a new held view begins after motion (a pan from
+//!   one page to the next) and the shot already holds one, the shot ends there: as a cut when the colours
+//!   of the two held views differ by at least [`VIEW_CHANGE`] (a leaflet, then a letter), otherwise as a
+//!   further piece (two white pages look alike in colour; `slide_track.rs` tells them apart by their text
+//!   and joins them when it is the same page again). So every page shown gets a still of its own however
+//!   short it was held.
+//! - **Still of a shot** ([`ShotSplitter`]): held stills come first (the page, not the pan away from it or
+//!   a short pause on the desk); among them the latest that stands (distance to its neighbours in the shot
+//!   below [`MIN_SCORE`]): on a slide built up point by point that is the full slide; otherwise the
+//!   steadiest. Only that still and the ones waiting for the decision are kept, so memory does not grow
+//!   with the video.
 //!
 //! The constants are rules of the method, not measurements of a device; checked on generated clips and a
 //! real talk (`handbuch/medien.md` „Standbilder“).
@@ -51,6 +61,13 @@ pub const RATIO: f32 = 3.0;
 pub const WINDOW: usize = 2;
 /// Length of the pieces a moving shot is read in (see the module comment).
 pub const PIECE_MS: u64 = 10_000;
+/// Most moved colour mass between two stills of one held view (hand shake, the page tilting a little).
+pub const HOLD_COLOURS: f32 = 0.2;
+/// Stills in a row (one per tick) that make a held view: about two seconds of holding still.
+pub const HOLD_STILLS: usize = 3;
+/// Least moved colour mass between two held views that makes the later one a new shot (see the module
+/// comment); below it the two may still show different pages and are pieces of one shot.
+pub const VIEW_CHANGE: f32 = 0.5;
 /// At most this many pixels feed the histogram (every n-th pixel of a large picture).
 const HIST_SAMPLES: u64 = 65_536;
 
@@ -100,9 +117,15 @@ fn bin([r, g, b]: [u8; 3]) -> usize {
     (q(h, H_BINS) * S_BINS + q(s, S_BINS)) * V_BINS + q(max, V_BINS)
 }
 
+/// Share of the colour mass that moved between two stills, 0–1: blind to where things are, so a shaking
+/// camera on one view stays low.
+pub fn colours(a: &Signature, b: &Signature) -> f32 {
+    0.5 * a.hist.iter().zip(&b.hist).map(|(x, y)| (x - y).abs()).sum::<f32>()
+}
+
 /// How different two stills are, 0 (same) to 1 (see the module comment).
 pub fn distance(a: &Signature, b: &Signature) -> f32 {
-    let moved = 0.5 * a.hist.iter().zip(&b.hist).map(|(x, y)| (x - y).abs()).sum::<f32>();
+    let moved = colours(a, b);
     let mut diffs: Vec<f32> = a.grid.iter().zip(&b.grid).map(|(x, y)| y - x).collect();
     let shared = median(&mut diffs.clone());
     let n = diffs.len().max(1) as f32;
@@ -138,6 +161,9 @@ struct Pending<T> {
     t_ms: u64,
     /// Distance to the still before; `None` for the very first.
     score: Option<f32>,
+    /// Moved colour mass to the still before ([`colours`]); `None` for the very first.
+    colours: Option<f32>,
+    sig: Signature,
     payload: T,
 }
 
@@ -147,6 +173,8 @@ struct Candidate<T> {
     payload: T,
     /// Smallest distance to a neighbour in the same shot (`INFINITY` while it has none).
     steadiness: f32,
+    /// Part of a held view (see the module comment).
+    held: bool,
 }
 
 impl<T> Candidate<T> {
@@ -154,9 +182,12 @@ impl<T> Candidate<T> {
         self.steadiness < MIN_SCORE
     }
 
-    /// A standing still beats a moving one, a later standing one an earlier, otherwise the steadier.
+    /// A held still beats one in motion (a short pause on the desk between two pages stands too, but is no
+    /// view), then a standing one a moving one; among equals a later standing one an earlier, otherwise the
+    /// steadier.
     fn beats(&self, old: &Candidate<T>) -> bool {
-        if self.steady() != old.steady() { self.steady() } else { self.steady() || self.steadiness < old.steadiness }
+        let (rank, old_rank) = ((self.held, self.steady()), (old.held, old.steady()));
+        if rank != old_rank { rank > old_rank } else { self.steady() || self.steadiness < old.steadiness }
     }
 }
 
@@ -170,16 +201,19 @@ struct OpenShot<T> {
     last: Candidate<T>,
     chosen: Option<Candidate<T>>,
     stills: usize,
+    /// Holds a held view (see the module comment).
+    has_hold: bool,
 }
 
 impl<T> OpenShot<T> {
-    fn new(start_ms: u64, after_cut: bool, t_ms: u64, payload: T) -> Self {
-        let last = Candidate { t_ms, payload, steadiness: f32::INFINITY };
-        OpenShot { start_ms, after_cut, continues: false, last, chosen: None, stills: 1 }
+    fn new(start_ms: u64, after_cut: bool, t_ms: u64, payload: T, held: bool) -> Self {
+        let last = Candidate { t_ms, payload, steadiness: f32::INFINITY, held };
+        OpenShot { start_ms, after_cut, continues: false, last, chosen: None, stills: 1, has_hold: held }
     }
 
-    fn add(&mut self, t_ms: u64, score: f32, payload: T) {
-        let mut done = std::mem::replace(&mut self.last, Candidate { t_ms, payload, steadiness: score });
+    fn add(&mut self, t_ms: u64, score: f32, payload: T, held: bool) {
+        self.has_hold |= held;
+        let mut done = std::mem::replace(&mut self.last, Candidate { t_ms, payload, steadiness: score, held });
         done.steadiness = done.steadiness.min(score);
         self.offer(done);
         self.stills += 1;
@@ -209,12 +243,26 @@ pub struct ShotSplitter<T> {
     pending: VecDeque<Pending<T>>,
     /// Distances of the last decided stills (the neighbours before a candidate).
     before: VecDeque<f32>,
+    /// Moved colour mass of the last decided stills to the one before each ([`HOLD_STILLS`] − 2 of them).
+    colours_before: VecDeque<Option<f32>>,
+    /// Whether the last decided still was held.
+    prev_held: bool,
+    /// The latest held still (what a new held view is compared with).
+    last_hold: Option<Signature>,
     open: Option<OpenShot<T>>,
 }
 
 impl<T> Default for ShotSplitter<T> {
     fn default() -> Self {
-        ShotSplitter { prev: None, pending: VecDeque::new(), before: VecDeque::new(), open: None }
+        ShotSplitter {
+            prev: None,
+            pending: VecDeque::new(),
+            before: VecDeque::new(),
+            colours_before: VecDeque::new(),
+            prev_held: false,
+            last_hold: None,
+            open: None,
+        }
     }
 }
 
@@ -226,8 +274,9 @@ impl<T> ShotSplitter<T> {
     /// Add the still at `t_ms` (time order); returns the shots this closed.
     pub fn push(&mut self, t_ms: u64, sig: Signature, payload: T) -> Vec<Shot<T>> {
         let score = self.prev.as_ref().map(|p| distance(p, &sig));
-        self.prev = Some(sig);
-        self.pending.push_back(Pending { t_ms, score, payload });
+        let colours = self.prev.as_ref().map(|p| colours(p, &sig));
+        self.prev = Some(sig.clone());
+        self.pending.push_back(Pending { t_ms, score, colours, sig, payload });
         let mut out = Vec::new();
         while self.pending.len() > WINDOW {
             self.decide_front(&mut out);
@@ -257,25 +306,56 @@ impl<T> ShotSplitter<T> {
                 self.before.pop_front();
             }
         }
+        let held = self.held(p.colours);
+        // A new held view after motion, in a shot that already holds one (see the module comment).
+        let same_hold = self.prev_held && p.colours.is_some_and(|c| c < HOLD_COLOURS);
+        let new_view = held && !same_hold && self.open.as_ref().is_some_and(|o| o.has_hold);
+        let view_cut = new_view && self.last_hold.as_ref().is_some_and(|h| colours(h, &p.sig) >= VIEW_CHANGE);
+        self.colours_before.push_back(p.colours);
+        if self.colours_before.len() > HOLD_STILLS - 2 {
+            self.colours_before.pop_front();
+        }
+        self.prev_held = held;
+        if held {
+            self.last_hold = Some(p.sig);
+        }
         self.open = Some(match self.open.take() {
-            None => OpenShot::new(p.t_ms, false, p.t_ms, p.payload),
+            None => OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held),
+            Some(open) if !cut && new_view => {
+                out.push(open.close(p.t_ms));
+                let mut piece = OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held);
+                piece.continues = !view_cut;
+                piece
+            }
             Some(open) if !cut && p.score.is_some_and(|s| s >= MIN_SCORE) && p.t_ms >= open.start_ms + PIECE_MS => {
                 out.push(open.close(p.t_ms));
-                let mut piece = OpenShot::new(p.t_ms, false, p.t_ms, p.payload);
+                let mut piece = OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held);
                 piece.continues = true;
                 piece
             }
             Some(mut open) if !cut => {
-                open.add(p.t_ms, p.score.unwrap_or(0.0), p.payload);
+                open.add(p.t_ms, p.score.unwrap_or(0.0), p.payload, held);
                 open
             }
             // One still between two cuts is a transition (fade, slide animation): it joins this shot.
-            Some(open) if open.after_cut && open.stills == 1 => OpenShot::new(open.start_ms, true, p.t_ms, p.payload),
+            Some(open) if open.after_cut && open.stills == 1 => OpenShot::new(open.start_ms, true, p.t_ms, p.payload, held),
             Some(open) => {
                 out.push(open.close(p.t_ms));
-                OpenShot::new(p.t_ms, true, p.t_ms, p.payload)
+                OpenShot::new(p.t_ms, true, p.t_ms, p.payload, held)
             }
         });
+    }
+
+    /// Whether the still being decided, `colours` from the one before, lies in [`HOLD_STILLS`] stills in a
+    /// row whose colours each moved less than [`HOLD_COLOURS`] (the waiting stills are the ones after it).
+    fn held(&self, colours: Option<f32>) -> bool {
+        // Colour steps around the still, padded so that the step into it has HOLD_STILLS − 2 before it: then
+        // every window of HOLD_STILLS − 1 steps holds this still.
+        let mut steps = vec![None; (HOLD_STILLS - 2).saturating_sub(self.colours_before.len())];
+        steps.extend(self.colours_before.iter().copied());
+        steps.push(colours);
+        steps.extend(self.pending.iter().take(HOLD_STILLS - 1).map(|p| p.colours));
+        steps.windows(HOLD_STILLS - 1).any(|w| w.iter().all(|c| c.is_some_and(|c| c < HOLD_COLOURS)))
     }
 
     /// The rule of the module comment for a candidate with distance `s`; the neighbours after it are the

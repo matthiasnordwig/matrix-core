@@ -1,5 +1,6 @@
 //! Tests of `scenes.rs` on made-up stills: what counts as a change, cuts between shots, a panning camera
-//! without cuts, a single transition still, and which still stands for a shot.
+//! without cuts, a single transition still, which still stands for a shot, and pages held into a shaking
+//! phone with a pan between.
 
 use super::*;
 use crate::media::test_pictures::{plain, scene, slide};
@@ -114,4 +115,87 @@ fn a_slide_built_up_line_by_line_keeps_its_fullest_still() {
 fn one_still_alone_is_one_shot() {
     let got = shots(&[slide(W, H, &[0.5], 1)]);
     assert_eq!(got, vec![(0, 1000, 0, false)]);
+}
+
+/// `b` moved `dx` pixels sideways (wrapping): a hand shaking the camera.
+fn shaken(b: &RgbBuf, dx: u32) -> RgbBuf {
+    let mut out = b.clone();
+    for y in 0..b.height {
+        for x in 0..b.width {
+            let (src, dst) = ((y * b.width + (x + dx) % b.width) as usize * 3, (y * b.width + x) as usize * 3);
+            out.rgb[dst..dst + 3].copy_from_slice(&b.rgb[src..src + 3]);
+        }
+    }
+    out
+}
+
+/// Held `page` for `n` stills with a shaking hand.
+fn held(page: &RgbBuf, n: usize) -> Vec<RgbBuf> {
+    [0, 7, 2, 9, 4].iter().cycle().take(n).map(|dx| shaken(page, *dx)).collect()
+}
+
+fn split(stills: &[RgbBuf]) -> Vec<Shot<usize>> {
+    let mut s = ShotSplitter::new();
+    let mut out = Vec::new();
+    for (i, b) in stills.iter().enumerate() {
+        out.extend(s.push(i as u64 * 1000, sig(b), i));
+    }
+    out.extend(s.finish(stills.len() as u64 * 1000));
+    out
+}
+
+#[test]
+fn a_shaking_camera_on_one_page_differs_like_a_pan_but_keeps_its_colours() {
+    let page = slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1);
+    let (a, b) = (sig(&page), sig(&shaken(&page, 7)));
+    assert!(distance(&a, &b) >= MIN_SCORE, "the grid sees the shake: {}", distance(&a, &b));
+    assert!(colours(&a, &b) < HOLD_COLOURS, "{}", colours(&a, &b));
+}
+
+/// User finding: page, pan, page — shorter than a piece of a moving shot (`PIECE_MS`), so only the held
+/// views part them. Two white pages look alike in colour: a further piece, told apart by their text later.
+#[test]
+fn two_held_pages_with_a_pan_between_are_two_shots() {
+    let (a, b) = (slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1), slide(W, H, &[0.4, 0.9, 0.3, 0.8, 0.6], 2));
+    let mut stills = held(&a, 4);
+    stills.extend([scene(W, H, 11, 0), scene(W, H, 11, 90)]);
+    stills.extend(held(&b, 3));
+    let got = split(&stills);
+    let spans: Vec<(u64, u64, usize, bool)> = got.iter().map(|s| (s.t_start_ms, s.t_end_ms, s.still, s.continues)).collect();
+    assert_eq!(got.len(), 2, "{spans:?}");
+    assert_eq!((got[1].t_start_ms, got[1].t_end_ms), (6000, 9000), "{spans:?}");
+    assert!(got[0].still < 4, "the page, not the pan away from it: {spans:?}");
+    assert!(got[1].still >= 6, "{spans:?}");
+    assert!(got[1].continues, "no cut stood out; the held view parted them: {spans:?}");
+}
+
+#[test]
+fn a_held_view_in_other_colours_is_a_new_shot() {
+    // A leaflet (many colours) held, the same pan, then a white letter: a new shot, not a further piece.
+    let mut stills: Vec<RgbBuf> = [0, 7, 2, 9].iter().map(|dx| scene(W, H, 4, *dx)).collect();
+    stills.extend([scene(W, H, 11, 0), scene(W, H, 11, 90)]);
+    stills.extend(held(&slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1), 3));
+    let got = split(&stills);
+    let spans: Vec<(u64, u64, usize, bool)> = got.iter().map(|s| (s.t_start_ms, s.t_end_ms, s.still, s.continues)).collect();
+    assert_eq!(spans, vec![(0, 6000, spans[0].2, false), (6000, 9000, spans[1].2, false)]);
+    assert!(spans[0].2 < 4 && spans[1].2 >= 6, "{spans:?}");
+}
+
+#[test]
+fn a_short_pause_on_the_desk_does_not_stand_for_the_page_after_it() {
+    // Letter, a plain desk for two stills (standing: nothing moves on it), the next letter.
+    let desk = plain(W, H, [120, 78, 45]);
+    let mut stills = held(&slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1), 3);
+    stills.extend([desk.clone(), desk]);
+    stills.extend(held(&slide(W, H, &[0.4, 0.9, 0.3, 0.8, 0.6], 2), 3));
+    let chosen: Vec<usize> = split(&stills).iter().map(|s| s.still).collect();
+    assert!(chosen.first().is_some_and(|c| *c < 3) && chosen.last().is_some_and(|c| *c >= 5), "{chosen:?}");
+    assert!(!chosen.contains(&3) && !chosen.contains(&4), "{chosen:?}");
+}
+
+#[test]
+fn a_page_held_on_and_on_stays_one_shot() {
+    let page = slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1);
+    let got = split(&held(&page, 8));
+    assert_eq!(got.iter().map(|s| (s.t_start_ms, s.t_end_ms)).collect::<Vec<_>>(), vec![(0, 8000)]);
 }
