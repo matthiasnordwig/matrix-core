@@ -117,12 +117,12 @@ fn one_still_alone_is_one_shot() {
     assert_eq!(got, vec![(0, 1000, 0, false)]);
 }
 
-/// `b` moved `dx` pixels sideways (wrapping): a hand shaking the camera.
+/// `b` moved `dx` pixels to the left, the last column repeated at the right edge: a hand shaking the camera.
 fn shaken(b: &RgbBuf, dx: u32) -> RgbBuf {
     let mut out = b.clone();
     for y in 0..b.height {
         for x in 0..b.width {
-            let (src, dst) = ((y * b.width + (x + dx) % b.width) as usize * 3, (y * b.width + x) as usize * 3);
+            let (src, dst) = ((y * b.width + (x + dx).min(b.width - 1)) as usize * 3, (y * b.width + x) as usize * 3);
             out.rgb[dst..dst + 3].copy_from_slice(&b.rgb[src..src + 3]);
         }
     }
@@ -166,7 +166,7 @@ fn two_held_pages_with_a_pan_between_are_two_shots() {
     assert_eq!((got[1].t_start_ms, got[1].t_end_ms), (6000, 9000), "{spans:?}");
     assert!(got[0].still < 4, "the page, not the pan away from it: {spans:?}");
     assert!(got[1].still >= 6, "{spans:?}");
-    assert!(got[1].continues, "no cut stood out; the held view parted them: {spans:?}");
+    assert!(!got[1].continues, "a new held view is a shot of its own, never a piece for its colours: {spans:?}");
 }
 
 #[test]
@@ -198,4 +198,18 @@ fn a_page_held_on_and_on_stays_one_shot() {
     let page = slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1);
     let got = split(&held(&page, 8));
     assert_eq!(got.iter().map(|s| (s.t_start_ms, s.t_end_ms)).collect::<Vec<_>>(), vec![(0, 8000)]);
+}
+
+#[test]
+fn the_same_view_after_a_shake_is_the_same_two_white_pages_are_not() {
+    let view = |b: &RgbBuf| View::of(&b.picture());
+    let (a, b) = (slide(W, H, &[0.8, 0.6, 0.7, 0.5], 1), slide(W, H, &[0.4, 0.9, 0.3, 0.8, 0.6], 2));
+    let leaflet = scene(W, H, 4, 0);
+    // Moved by whole cells of the view (320 px / 96 cells): nothing else changed.
+    assert!(same_view(&view(&a), &view(&shaken(&a, 10))), "{}", view_difference(&view(&a), &view(&shaken(&a, 10))));
+    assert!(same_view(&view(&leaflet), &view(&shaken(&leaflet, 20))));
+    // Alike in colour, but another page: never the same view.
+    assert!(colours(&sig(&a), &sig(&b)) < HOLD_COLOURS);
+    assert!(!same_view(&view(&a), &view(&shaken(&b, 4))), "{}", view_difference(&view(&a), &view(&shaken(&b, 4))));
+    assert!(!same_view(&view(&leaflet), &view(&a)));
 }

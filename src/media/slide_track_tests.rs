@@ -11,7 +11,7 @@ fn key(b: &RgbBuf, text: &str) -> SlideKey {
 
 fn shot(t: u64, kind: FrameKind, b: &RgbBuf, text: &str, id: u32) -> ShotStill<u32> {
     let key = (kind == FrameKind::Slide).then(|| key(b, text));
-    ShotStill { t_start_ms: t * 1000, t_end_ms: (t + 1) * 1000, kind, key, text: text.into(), payload: id, continues: false }
+    ShotStill { t_start_ms: t * 1000, t_end_ms: (t + 1) * 1000, kind, key, text: text.into(), payload: id, continues: false, look: None }
 }
 
 fn run(shots: Vec<ShotStill<u32>>) -> Vec<(u64, u64, FrameKind, u32, usize)> {
@@ -92,4 +92,23 @@ fn a_poorly_read_still_does_not_chain_two_slides_together() {
     ];
     let got = run(shots);
     assert_eq!(got.iter().map(|u| (u.0, u.1)).collect::<Vec<_>>(), vec![(0, 2000), (2000, 3000)]);
+}
+
+fn seen(t: u64, b: &RgbBuf, id: u32) -> ShotStill<u32> {
+    ShotStill { look: Some(crate::media::scenes::View::of(&b.picture())), ..shot(t, FrameKind::Scene, b, "", id) }
+}
+
+/// Without text recognition every page is a scene: two pages alike in colour stay two units.
+#[test]
+fn two_scenes_alike_in_colour_but_not_the_same_view_stay_two() {
+    let (a, b) = (slide(320, 180, &[0.8, 0.6, 0.7, 0.5], 1), slide(320, 180, &[0.4, 0.9, 0.3, 0.8, 0.6], 2));
+    let got = run(vec![seen(0, &a, 0), seen(1, &b, 1)]);
+    assert_eq!(got.len(), 2, "{got:?}");
+}
+
+#[test]
+fn a_scene_held_again_after_a_shake_is_one_unit() {
+    // Moved by three cells of the view (320 px / 96 cells).
+    let got = run(vec![seen(0, &scene(320, 180, 4, 0), 0), seen(1, &scene(320, 180, 4, 10), 1)]);
+    assert_eq!(got.iter().map(|u| (u.0, u.1, u.4)).collect::<Vec<_>>(), vec![(0, 2000, 2)]);
 }

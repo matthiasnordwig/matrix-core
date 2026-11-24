@@ -14,13 +14,15 @@
 //! still was read with fewer than [`MIN_WORDS`] words while an earlier one had more (a speaker in front of
 //! the screen): then the earlier words stay the comparison, so a chain of poorly read stills cannot join
 //! different slides by their similar pictures. A scene shot
-//! ends the slide. Scenes join only as pieces of one moving shot (`scenes.rs`, [`ShotStill::continues`]);
-//! after a cut a scene is a unit of its own. The thresholds are rules of the method,
+//! ends the slide. Scenes join as pieces of one moving shot (`scenes.rs`, [`ShotStill::continues`]), or
+//! when their stills show the same view (`scenes::same_view`: a scene held again after a shake of the
+//! hand); otherwise a scene is a unit of its own — in doubt two stills rather than one lost. The thresholds are rules of the method,
 //! checked on generated clips and real talks (`handbuch/medien.md` „Standbilder“).
 
 use std::collections::HashSet;
 
 use super::frame_kind::FrameKind;
+use super::scenes::{same_view, View};
 use super::Picture;
 
 /// Least words on both stills to compare by text.
@@ -92,6 +94,8 @@ pub struct ShotStill<T> {
     pub payload: T,
     /// A further piece of the shot before (no cut between).
     pub continues: bool,
+    /// What the still looks like (`scenes::View`), for a scene held again; `None` = never the same view.
+    pub look: Option<View>,
 }
 
 /// A slide standing over a time range, or one scene shot.
@@ -113,6 +117,8 @@ struct Open<T> {
     kept_words: usize,
     /// Latest still of an open slide; `None` for an open scene.
     latest: Option<SlideKey>,
+    /// Look of the latest still of an open scene.
+    look: Option<View>,
 }
 
 /// Joins consecutive shots of the same slide, and the pieces of one moving scene (see the module comment).
@@ -136,11 +142,13 @@ impl<T> Tracker<T> {
         let key = if s.kind == FrameKind::Slide { s.key } else { None };
         let joins = self.open.as_ref().is_some_and(|o| match (&o.latest, &key) {
             (Some(a), Some(b)) => same_slide(a, b),
-            (None, None) => s.continues,
+            (None, None) => s.continues || o.look.as_ref().zip(s.look.as_ref()).is_some_and(|(a, b)| same_view(a, b)),
             _ => false,
         });
         let n_words = key.as_ref().map_or(0, |k| k.words.len());
+        let look = if key.is_none() { s.look } else { None };
         if joins && let Some(open) = &mut self.open {
+            open.look = look;
             let u = &mut open.unit;
             u.t_end_ms = u.t_end_ms.max(s.t_end_ms);
             u.shots += 1;
@@ -160,7 +168,7 @@ impl<T> Tracker<T> {
         }
         let kind = if key.is_some() { FrameKind::Slide } else { FrameKind::Scene };
         let unit = Unit { t_start_ms: s.t_start_ms, t_end_ms: s.t_end_ms, kind, text: s.text, payload: s.payload, shots: 1 };
-        let closed = self.open.replace(Open { unit, kept_words: n_words, latest: key });
+        let closed = self.open.replace(Open { unit, kept_words: n_words, latest: key, look });
         closed.map(|o| o.unit).into_iter().collect()
     }
 

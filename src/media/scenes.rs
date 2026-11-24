@@ -24,11 +24,11 @@
 //!   from the one before as much as a pan does (the grid sees each shift) and no cut stands out; only the
 //!   colours stay ([`colours`]). A still is *held* when it lies in [`HOLD_STILLS`] stills in a row whose
 //!   colours each moved less than [`HOLD_COLOURS`]. Where a new held view begins after motion (a pan from
-//!   one page to the next) and the shot already holds one, the shot ends there: as a cut when the colours
-//!   of the two held views differ by at least [`VIEW_CHANGE`] (a leaflet, then a letter), otherwise as a
-//!   further piece (two white pages look alike in colour; `slide_track.rs` tells them apart by their text
-//!   and joins them when it is the same page again). So every page shown gets a still of its own however
-//!   short it was held.
+//!   one page to the next) and the shot already holds one, a new shot begins there — never a further piece
+//!   for looking alike in colour: two white pages do. `slide_track.rs` joins the shots again only where
+//!   their stills show the same: a slide by its text, a scene by [`same_view`] (a finer picture at its
+//!   best overlap, so a hand shake between them does not count). So every page shown gets a still of its own
+//!   however short it was held, with or without text recognition.
 //! - **Still of a shot** ([`ShotSplitter`]): held stills come first (the page, not the pan away from it or
 //!   a short pause on the desk); among them the latest that stands (distance to its neighbours in the shot
 //!   below [`MIN_SCORE`]): on a slide built up point by point that is the full slide; otherwise the
@@ -65,9 +65,15 @@ pub const PIECE_MS: u64 = 10_000;
 pub const HOLD_COLOURS: f32 = 0.2;
 /// Stills in a row (one per tick) that make a held view: about two seconds of holding still.
 pub const HOLD_STILLS: usize = 3;
-/// Least moved colour mass between two held views that makes the later one a new shot (see the module
-/// comment); below it the two may still show different pages and are pieces of one shot.
-pub const VIEW_CHANGE: f32 = 0.5;
+/// Cells of a [`View`]: fine enough to see lines of text, coarse enough to ignore compression noise.
+pub const VIEW_W: i32 = 96;
+pub const VIEW_H: i32 = 54;
+/// Brightness change of a view cell (levels of 255) that counts as other content.
+pub const VIEW_CELL_CHANGE: f32 = 24.0;
+/// Most share of view cells that may differ for the same view ([`same_view`]): two pages with other text
+/// differed in 7 % and more (`pages.mp4`), a still held twice in 1–11 % (iPhone videos) — so only nearly
+/// unmoved stills count as the same; the rest stays two stills.
+pub const SAME_VIEW_SHARE: f32 = 0.01;
 /// At most this many pixels feed the histogram (every n-th pixel of a large picture).
 const HIST_SAMPLES: u64 = 65_536;
 
@@ -123,6 +129,49 @@ pub fn colours(a: &Signature, b: &Signature) -> f32 {
     0.5 * a.hist.iter().zip(&b.hist).map(|(x, y)| (x - y).abs()).sum::<f32>()
 }
 
+/// A chosen still in detail, to tell whether two held views show the same ([`same_view`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    sig: Signature,
+    /// Brightness of [`VIEW_W`] × [`VIEW_H`] cells.
+    fine: Vec<f32>,
+}
+
+impl View {
+    pub fn of(p: &Picture) -> Self {
+        View { sig: Signature::of(p), fine: p.luma_area(VIEW_W as u32, VIEW_H as u32).px }
+    }
+}
+
+/// Share of the cells of two views that differ by more than [`VIEW_CELL_CHANGE`] where the views overlap
+/// best, one moved by up to a twelfth of each side (a hand shake), after taking out the change all cells
+/// share (exposure). No tolerance for a shift by part of a cell: with it, two pages of regular lines of
+/// text matched each other.
+pub fn view_difference(a: &View, b: &View) -> f32 {
+    let (w, h) = (VIEW_W, VIEW_H);
+    let mut best = 1f32;
+    for dy in -(h / 12)..=h / 12 {
+        for dx in -(w / 12)..=w / 12 {
+            let mut diffs: Vec<f32> = (0.max(-dy)..h.min(h - dy))
+                .flat_map(|y| (0.max(-dx)..w.min(w - dx)).map(move |x| (x, y)))
+                .map(|(x, y)| b.fine[((y + dy) * w + x + dx) as usize] - a.fine[(y * w + x) as usize])
+                .collect();
+            let n = diffs.len().max(1);
+            let shared = *diffs.clone().select_nth_unstable_by(n / 2, f32::total_cmp).1;
+            diffs.retain(|d| (d - shared).abs() > VIEW_CELL_CHANGE);
+            best = best.min(diffs.len() as f32 / n as f32);
+        }
+    }
+    best
+}
+
+/// Whether two stills show the same view, the camera shaken between them: the same colours and nearly
+/// every cell the same at their best overlap. In doubt not — a still twice costs less than a still lost;
+/// two white pages with other text are not the same view.
+pub fn same_view(a: &View, b: &View) -> bool {
+    colours(&a.sig, &b.sig) < HOLD_COLOURS && view_difference(a, b) <= SAME_VIEW_SHARE
+}
+
 /// How different two stills are, 0 (same) to 1 (see the module comment).
 pub fn distance(a: &Signature, b: &Signature) -> f32 {
     let moved = colours(a, b);
@@ -163,7 +212,6 @@ struct Pending<T> {
     score: Option<f32>,
     /// Moved colour mass to the still before ([`colours`]); `None` for the very first.
     colours: Option<f32>,
-    sig: Signature,
     payload: T,
 }
 
@@ -247,8 +295,6 @@ pub struct ShotSplitter<T> {
     colours_before: VecDeque<Option<f32>>,
     /// Whether the last decided still was held.
     prev_held: bool,
-    /// The latest held still (what a new held view is compared with).
-    last_hold: Option<Signature>,
     open: Option<OpenShot<T>>,
 }
 
@@ -260,7 +306,6 @@ impl<T> Default for ShotSplitter<T> {
             before: VecDeque::new(),
             colours_before: VecDeque::new(),
             prev_held: false,
-            last_hold: None,
             open: None,
         }
     }
@@ -275,8 +320,8 @@ impl<T> ShotSplitter<T> {
     pub fn push(&mut self, t_ms: u64, sig: Signature, payload: T) -> Vec<Shot<T>> {
         let score = self.prev.as_ref().map(|p| distance(p, &sig));
         let colours = self.prev.as_ref().map(|p| colours(p, &sig));
-        self.prev = Some(sig.clone());
-        self.pending.push_back(Pending { t_ms, score, colours, sig, payload });
+        self.prev = Some(sig);
+        self.pending.push_back(Pending { t_ms, score, colours, payload });
         let mut out = Vec::new();
         while self.pending.len() > WINDOW {
             self.decide_front(&mut out);
@@ -310,38 +355,33 @@ impl<T> ShotSplitter<T> {
         // A new held view after motion, in a shot that already holds one (see the module comment).
         let same_hold = self.prev_held && p.colours.is_some_and(|c| c < HOLD_COLOURS);
         let new_view = held && !same_hold && self.open.as_ref().is_some_and(|o| o.has_hold);
-        let view_cut = new_view && self.last_hold.as_ref().is_some_and(|h| colours(h, &p.sig) >= VIEW_CHANGE);
         self.colours_before.push_back(p.colours);
         if self.colours_before.len() > HOLD_STILLS - 2 {
             self.colours_before.pop_front();
         }
         self.prev_held = held;
-        if held {
-            self.last_hold = Some(p.sig);
-        }
+        let (t, payload) = (p.t_ms, p.payload);
         self.open = Some(match self.open.take() {
-            None => OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held),
+            None => OpenShot::new(t, false, t, payload, held),
             Some(open) if !cut && new_view => {
-                out.push(open.close(p.t_ms));
-                let mut piece = OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held);
-                piece.continues = !view_cut;
-                piece
+                out.push(open.close(t));
+                OpenShot::new(t, false, t, payload, held)
             }
-            Some(open) if !cut && p.score.is_some_and(|s| s >= MIN_SCORE) && p.t_ms >= open.start_ms + PIECE_MS => {
-                out.push(open.close(p.t_ms));
-                let mut piece = OpenShot::new(p.t_ms, false, p.t_ms, p.payload, held);
+            Some(open) if !cut && p.score.is_some_and(|s| s >= MIN_SCORE) && t >= open.start_ms + PIECE_MS => {
+                out.push(open.close(t));
+                let mut piece = OpenShot::new(t, false, t, payload, held);
                 piece.continues = true;
                 piece
             }
             Some(mut open) if !cut => {
-                open.add(p.t_ms, p.score.unwrap_or(0.0), p.payload, held);
+                open.add(t, p.score.unwrap_or(0.0), payload, held);
                 open
             }
             // One still between two cuts is a transition (fade, slide animation): it joins this shot.
-            Some(open) if open.after_cut && open.stills == 1 => OpenShot::new(open.start_ms, true, p.t_ms, p.payload, held),
+            Some(open) if open.after_cut && open.stills == 1 => OpenShot::new(open.start_ms, true, t, payload, held),
             Some(open) => {
-                out.push(open.close(p.t_ms));
-                OpenShot::new(p.t_ms, true, p.t_ms, p.payload, held)
+                out.push(open.close(t));
+                OpenShot::new(t, true, t, payload, held)
             }
         });
     }
