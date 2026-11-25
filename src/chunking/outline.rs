@@ -95,6 +95,8 @@ struct Heading {
     end: usize,
     /// Articles and controls number their paragraphs / enhancements.
     numbers_paragraphs: bool,
+    /// Numbering of a numbered section ([2, 1] for "2.1"), else empty.
+    numbers: Vec<u32>,
 }
 
 #[derive(Clone)]
@@ -258,14 +260,24 @@ struct Builder {
 impl Builder {
     /// Opens a heading when `line` is one; `true` = the line is a heading.
     fn heading(&mut self, line: &str, markdown: bool, pos: usize) -> bool {
-        let found = if markdown { markdown_heading(line) } else { None }
-            .or_else(|| self.legal_heading(line))
-            .or_else(|| if self.legal { None } else { self.numbered_heading(line) });
+        let mut numbers = Vec::new();
+        let found = match if markdown { markdown_heading(line) } else { None }.or_else(|| self.legal_heading(line)) {
+            Some(found) => Some(found),
+            None if self.legal => None,
+            None => self.numbered_heading(line).inspect(|f| {
+                if f.0 != CONTROL_RANK {
+                    numbers.clone_from(&self.numbers);
+                }
+            }),
+        };
         let Some((rank, label, kind, numbers_paragraphs)) = found else {
             return false;
         };
+        // A numbered section also closes the numbered sections it does not continue: "3.1" after
+        // "2.2" leaves "2." although it is one level deeper.
         while let Some(&top) = self.stack.last() {
-            if self.headings[top].rank < rank {
+            let h = &self.headings[top];
+            if h.rank < rank && (numbers.is_empty() || h.numbers.is_empty() || numbers.starts_with(&h.numbers)) {
                 break;
             }
             self.headings[top].end = pos;
@@ -273,7 +285,7 @@ impl Builder {
         }
         let idx = self.headings.len();
         let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
-        self.headings.push(Heading { rank, label, title: None, parent: self.stack.last().copied(), start: pos, end: pos, numbers_paragraphs });
+        self.headings.push(Heading { rank, label, title: None, parent: self.stack.last().copied(), start: pos, end: pos, numbers_paragraphs, numbers });
         self.stack.push(idx);
         self.paras = Paras::default();
         self.expect_title = (kind == Kind::TitledNext).then_some(idx);

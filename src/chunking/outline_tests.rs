@@ -136,3 +136,62 @@ fn plain_prose_has_no_path() {
     assert_eq!(o.path(1), None);
     assert_eq!(o.section(2), None);
 }
+
+#[test]
+fn group_words_rank_title_above_chapter_and_subsection_below_section() {
+    let o = outline(&[
+        "TITEL I\nAllgemeines\nKAPITEL 1\nGrundsätze\nABSCHNITT 1\nZiele\nUNTERABSCHNITT 1\nEinzelnes",
+        "Artikel 1\nGegenstand\n(1) Diese Verordnung regelt das.",
+        "Artikel 2\nZiel\n(1) Text.\nArtikel 3\nInkrafttreten\n(1) Text.",
+    ]);
+    assert_eq!(o.path(2).as_deref(), Some("TITEL I › KAPITEL 1 › ABSCHNITT 1 › UNTERABSCHNITT 1 › Artikel 1 – Gegenstand › (1)"));
+}
+
+#[test]
+fn each_exclusion_alone_keeps_a_numbered_line_from_being_a_heading() {
+    let long_words = "Einleitungsabschnittsüberschriftsverlängerung Beispielfallsammlung Sonderregelungsverzeichnisse Anhangtabellen";
+    for line in [
+        "2 Ergebnisse".to_string(),
+        format!("2. {long_words}"),
+        "2. einleitung folgt".into(),
+        "2. Ergebnisse folgen:".into(),
+        "2. Ergebnisse [Entwurf]".into(),
+        "2. Ergebnisse. Weiter geht es".into(),
+        "2. Eins Zwei Drei Vier Fünf Sechs Sieben Acht Neun Zehn Elf Zwölf Dreizehn".into(),
+    ] {
+        let o = outline(&["1. Einleitung\nText eins.", &format!("{line}\nText zwei.")]);
+        assert_eq!(o.path(2).as_deref(), Some("1. Einleitung"), "{line}");
+    }
+    assert!(format!("2. {long_words}").chars().count() > 100);
+}
+
+#[test]
+fn paragraphs_count_one_by_one_in_one_style() {
+    let rest = ["Artikel 2\nZiel\n(1) Text.", "Artikel 3\nEnde\n(1) Text."];
+    for (body, want) in [("(1) Eins.\n(3) Drei.", "(1)"), ("(1) Eins.\n2. Zwei.", "(1)"), ("(1) Eins.\n(2) Zwei.", "(1)–(2)")] {
+        let first = format!("Artikel 1\nTitel\n{body}");
+        let o = outline(&[&first, rest[0], rest[1]]);
+        assert_eq!(o.path(1), Some(format!("Artikel 1 – Titel › {want}")), "{body}");
+    }
+}
+
+/// Found while closing the mutation gaps: "3.1" continues "2.2" one level up, but it stayed
+/// under "2." (same depth as "2.2"), so its path read "2. Zwei › 3.1 Weiter" and section 2 ran on
+/// into chapter 3.
+#[test]
+fn regression_rule_outline_3_1_after_2_2_leaves_section_2() {
+    let chunks = |last: &str| vec!["2. Zwei\nText.".to_string(), "2.1 Eins\nText.".into(), "2.2 Zwei\nText.".into(), format!("{last}\nText.")];
+    let o = outline(&chunks("3.1 Weiter").iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(o.path(4).as_deref(), Some("3.1 Weiter"));
+    let o = outline(&chunks("3.2 Falsch").iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(o.path(4).as_deref(), Some("2. Zwei › 2.2 Zwei"));
+}
+
+#[test]
+fn a_line_after_an_article_is_its_title_only_when_it_reads_like_one() {
+    let rest = ["Artikel 2\nZiel\n(1) Text.", "Artikel 3\nEnde\n(1) Text."];
+    for (first, want) in [("Artikel 1\n(1) Der Text gilt.", "Artikel 1 › (1)"), ("Artikel 1\na) erster Punkt", "Artikel 1")] {
+        let o = outline(&[first, rest[0], rest[1]]);
+        assert_eq!(o.path(1).as_deref(), Some(want), "{first}");
+    }
+}
