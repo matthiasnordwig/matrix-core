@@ -244,7 +244,7 @@ fn long_line_inside_a_code_fence_stays_whole() {
 
 #[test]
 fn hashtag_after_text_and_short_fence_marks_are_no_headings_or_fences() {
-    let t = "# A\nbody\n#hashtag\n";
+    let t = "# A\nbody\n#hashtag\nmehr\n";
     assert_eq!(chunk(t, 1, 1, 1000).len(), 1, "#hashtag is no heading");
     let t = "# A\n~~durchgestrichen~~ Text\n\n## B\nx\n";
     assert_eq!(chunk(t, 1, 1, 1000).iter().map(path).collect::<Vec<_>>(), ["A", "A › B"], "two tildes open no fence");
@@ -260,7 +260,8 @@ fn a_hash_inside_a_title_stays() {
 #[test]
 fn an_oversized_list_is_cut_before_items_of_every_marker() {
     for marker in ["- ", "* ", "+ ", "1. ", "1) "] {
-        let item = |i: usize| format!("{marker}Punkt {i} {}\n  2024 ging es weiter {}\n  kurz\n", "a".repeat(50), "b".repeat(30));
+        // A short first line and two long ones: packing line by line would cut inside an item.
+        let item = |i: usize| format!("{marker}P{i}\n  {}\n  2024 ging es weiter {}\n", "a".repeat(66), "b".repeat(46));
         let t = format!("# L\n{}", (0..12).map(item).collect::<String>());
         let cs = chunk(&t, 1, 1, 400);
         assert_offsets(&t, &cs);
@@ -275,7 +276,7 @@ fn an_oversized_list_is_cut_before_items_of_every_marker() {
 fn a_heading_never_stands_alone_in_a_part() {
     let para = format!("{}\n", "z".repeat(60)).repeat(4);
     for t in [format!("Vorwort.\n\n## Teil\n\n{para}\nNoch ein Absatz.\n"), format!("Vorwort.\n\n## Teil\n- {}\n- zwei\n", para.trim_end())] {
-        let cs = chunk(&t, 1, 1, 260);
+        let cs = chunk(&t, 1, 1, 250);
         assert_offsets(&t, &cs);
         assert!(cs.iter().all(|c| c.text.trim() != "## Teil"), "{:?}", cs.iter().map(|c| &c.text).collect::<Vec<_>>());
     }

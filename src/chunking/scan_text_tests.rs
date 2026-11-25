@@ -273,3 +273,96 @@ fn right_to_left_text_has_its_start_edge_on_the_right() {
     let ltr: Vec<ScanRow> = rows.iter().map(|r| ScanRow { text: "Text".into(), ..r.clone() }).collect();
     assert!(!lines_from_rows(&ltr, 0.03)[0].indent);
 }
+
+#[test]
+fn small_footnote_rows_do_not_make_body_paragraphs_headings() {
+    let h = 0.02;
+    let mut rows: Vec<ScanRow> = Vec::new();
+    for p in 0..3 {
+        let top = 0.1 + p as f64 * 0.12;
+        rows.push(row("Ein Absatz beginnt hier und läuft über die ganze", 0.1, top, 0.8, h));
+        rows.push(row("Breite der Seite bis zum Ende des Satzes hin.", 0.1, top + 0.025, 0.8, h));
+    }
+    for k in 0..4 {
+        rows.push(row("1) Fußnote in kleiner Schrift am Seitenende.", 0.1, 0.6 + k as f64 * 0.015, 0.8, 0.012));
+    }
+    let lines = page_lines(&[(1, rows)]);
+    assert!(lines[0].1.iter().all(|l| !l.heading), "{:?}", lines[0].1);
+}
+
+#[test]
+fn margins_and_centre_come_from_the_full_lines_only() {
+    let h = 0.02;
+    let mut rows = vec![row("Eine volle Zeile über die ganze Breite der Seite hin.", 0.1, 0.1, 0.8, h), row("Noch eine volle Zeile über die ganze Breite hin.", 0.1, 0.125, 0.8, h)];
+    rows.push(row("§ 3. Der Titel.", 0.35, 0.15, 0.3, h)); // centred, no gap above
+    for k in 0..6 {
+        rows.push(row("Kurze Verszeile, eingerückt.", 0.2, 0.175 + k as f64 * 0.025, 0.4, h));
+    }
+    let lines = lines_from_rows(&rows, h);
+    assert!(lines[2].heading, "centred between the edges of the full lines");
+    assert!(lines[3..].iter().all(|l| l.indent), "indented against the full lines: {lines:?}");
+}
+
+#[test]
+fn outline_headings_at_the_margin_and_short_lines_only_between_rows() {
+    let h = 0.02;
+    let full = |t: &str, top: f64| row(t, 0.1, top, 0.8, h);
+    let rows = vec![
+        row("Kopfzeile", 0.1, 0.05, 0.2, h), // first row: no heading for being short
+        full("Ein Absatz über die ganze Breite der Seite hin und her.", 0.1),
+        row("3.2 Ziele", 0.1, 0.16, 0.2, h), // outline number at the margin, gap above
+        full("Weiter im Text über die ganze Breite der Seite hin und her.", 0.19),
+        row("II.", 0.1, 0.25, 0.05, h), // bare number with a full stop, gap above
+        full("Weiter im Text über die ganze Breite der Seite hin und her.", 0.28),
+        row("Eine mittellange Zeile ohne Satzende", 0.1, 0.34, 0.6, h), // gaps around, but wider than 0.6 of a line
+        full("Weiter im Text über die ganze Breite der Seite hin und her.", 0.40),
+        row("Anna Maier", 0.1, 0.46, 0.2, h), // last row
+    ];
+    let heads: Vec<bool> = lines_from_rows(&rows, h).iter().map(|l| l.heading).collect();
+    assert_eq!(heads, vec![false, false, true, false, true, false, false, false, false]);
+}
+
+#[test]
+fn right_to_left_needs_most_of_the_letters() {
+    assert!(!is_rtl_text(["Ein langer deutscher Satz mit einem Wort عربي darin"]));
+    assert!(!is_rtl_text(["A"]));
+    assert!(is_rtl_text(["هذا نص عربي"]));
+}
+
+#[test]
+fn levenshtein_of_known_pairs() {
+    let d = |a: &str, b: &str| levenshtein(&a.chars().collect::<Vec<_>>(), &b.chars().collect::<Vec<_>>());
+    assert_eq!((d("kitten", "sitting"), d("", "abc"), d("abc", ""), d("abc", "abc"), d("flaw", "lawn")), (3, 3, 3, 0, 2));
+}
+
+#[test]
+fn misread_copies_go_only_within_a_quarter_of_the_line() {
+    let w = ["Anna", "Berta", "Carl", "Dora", "Emil", "Fritz", "Gustav", "Heinrich", "Ida", "Julius"];
+    let foot = |p: usize| match p {
+        8 => "Dig1tized by Goog1e", // two letters misread
+        9 => "Kapitel neun Anfang", // another line of the same length
+        _ => "Digitized by Google",
+    };
+    let mut pages: Vec<(i64, Vec<PageLine>)> =
+        (0..10).map(|p| (p as i64, vec![pl(&format!("Text {}", w[p]), true), pl(&format!("weiter {}.", w[p]), false), pl(foot(p), true)])).collect();
+    clean_pages(&mut pages);
+    assert_eq!(pages[8].1.len(), 2, "the misread copy goes");
+    assert_eq!(pages[9].1.last().unwrap().text, "Kapitel neun Anfang");
+}
+
+#[test]
+fn in_a_long_run_a_line_on_less_than_a_quarter_of_the_pages_stays() {
+    let mut pages: Vec<(i64, Vec<PageLine>)> =
+        (0..20).map(|p| (p as i64, vec![pl(if p < 4 { "Vorbemerkung" } else { "anders" }, true), pl(&format!("Satz {p}."), false)])).collect();
+    clean_pages(&mut pages);
+    assert_eq!(pages[0].1[0].text, "Vorbemerkung", "4 of 20 pages");
+}
+
+#[test]
+fn a_page_break_between_two_words_starts_the_page_at_its_first_word() {
+    let a = assemble(&[(1, vec![pl("Er ging nach", true)]), (2, vec![pl("Hause und schlief.", false)])]);
+    assert_eq!(a.stored, "Er ging nach\nHause und schlief.");
+    assert_eq!(a.page_starts, vec![(0, 1), (13, 2)]);
+    let p = pages_of_range(&[(0, 5), (40, 6), (90, 7)], 50, 120);
+    assert_eq!(p.page_at(39), Some(6));
+}

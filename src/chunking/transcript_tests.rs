@@ -249,3 +249,108 @@ fn times_stay_put_over_re_cuts_and_stills_keep_hitting_the_same_moment() {
     let b = chunk_transcript("v.mp4", &m, &segs, ctx, doc_id, 120);
     assert_eq!((a.text, a.chunks.iter().map(|c| (&c.text, &c.metadata)).collect::<Vec<_>>()), (b.text, b.chunks.iter().map(|c| (&c.text, &c.metadata)).collect::<Vec<_>>()));
 }
+
+fn sub(t0: i64, t1: i64, text: &str) -> MediaSegment {
+    MediaSegment { language: Some("de".into()), ..other(SegmentKind::Subtitle, t0, t1, text) }
+}
+
+#[test]
+fn a_slide_over_the_limit_is_cut_at_its_sentence_ends_counting_the_spaces() {
+    let slide = other(SegmentKind::Slide, 0, 20_000, "Satz eins. Satz zwei. Satz drei.");
+    let cut = chunk_transcript("v.mp4", &doc(), std::slice::from_ref(&slide), 0, DOC, 31);
+    assert_eq!(texts(&cut), ["Satz eins. Satz zwei.", "Satz drei."]);
+    let whole = chunk_transcript("v.mp4", &doc(), &[slide], 0, DOC, 32);
+    assert_eq!(texts(&whole), ["Satz eins. Satz zwei. Satz drei."]);
+}
+
+#[test]
+fn a_sentence_without_word_times_gets_its_time_by_position() {
+    // Words located for the first sentence only; the second takes its time from its place in the
+    // segment, not from the words around it.
+    let mut seg = talk(1_000, None, "Hallo zusammen.");
+    seg.text = "Hallo zusammen. Heute geht es los.".into();
+    seg.t_start_ms = 0;
+    seg.t_end_ms = 6_000;
+    let cut = chunk_transcript("a.m4a", &doc(), &[seg.clone()], 0, DOC, 20);
+    assert_eq!(texts(&cut), ["Hallo zusammen.", "Heute geht es los."]);
+    let at = seg.text.find("Heute").unwrap() as i64;
+    assert_eq!(times(&cut.chunks[1]), (6_000 * at / seg.text.len() as i64, 6_000));
+    // Subtitles carry no words at all: the second sentence of a cue starts inside it.
+    let cut = chunk_transcript("v.mp4", &doc(), &[sub(0, 10_000, "Erster Satz hier. Zweiter Satz da.")], 0, DOC, 20);
+    let at = "Erster Satz hier. ".len() as i64;
+    assert_eq!(times(&cut.chunks[1]).0, 10_000 * at / "Erster Satz hier. Zweiter Satz da.".len() as i64);
+}
+
+#[test]
+fn after_a_speaker_change_in_one_window_the_words_give_the_time() {
+    let mut window = talk(0, Some(0), "Wie war es? Gut, danke.");
+    for (w, (t0, t1)) in window.words[3..].iter_mut().zip([(3_000, 3_300), (3_400, 3_700)]) {
+        (w.speaker, w.t0_ms, w.t1_ms) = (Some(1), t0, t1);
+    }
+    window.t_end_ms = 5_000;
+    let cut = chunk_transcript("talk.m4a", &doc(), &[window], 0, DOC, 20);
+    assert_eq!(times(&cut.chunks[1]), (3_000, 3_700));
+}
+
+#[test]
+fn an_unpunctuated_stretch_after_a_sentence_is_split_at_its_pauses() {
+    let segs = vec![talk(0, None, "Erster Satz."), talk(1_000, None, "ohne punkt und komma geht es los"), talk(4_000, None, "und weiter ohne ende hier"), talk(10_000, None, "nach der langen pause")];
+    let cut = chunk_transcript("a.m4a", &doc(), &segs, 0, DOC, 70);
+    assert_eq!(texts(&cut), ["Erster Satz.", "ohne punkt und komma geht es los und weiter ohne ende hier", "nach der langen pause"]);
+    // Without words: the segments are the timed stretches.
+    let subs = vec![sub(0, 1_000, "Erster Satz."), sub(1_000, 3_000, "ohne punkt und komma"), sub(3_000, 5_000, "geht es weiter"), sub(9_000, 11_000, "nach der langen pause")];
+    let cut = chunk_transcript("v.mp4", &doc(), &subs, 0, DOC, 40);
+    assert_eq!(texts(&cut), ["Erster Satz.", "ohne punkt und komma geht es weiter", "nach der langen pause"]);
+}
+
+#[test]
+fn an_unpunctuated_stretch_is_split_again_inside_both_halves() {
+    let subs = vec![sub(0, 2_000, "eins zwei drei"), sub(3_000, 5_000, "vier fünf sechs"), sub(10_000, 12_000, "sieben acht neun"), sub(14_000, 16_000, "zehn elf zwölf")];
+    let cut = chunk_transcript("v.mp4", &doc(), &subs, 0, DOC, 16);
+    assert_eq!(texts(&cut), ["eins zwei drei", "vier fünf sechs", "sieben acht neun", "zehn elf zwölf"]);
+    assert_eq!(cut.chunks.iter().map(times).collect::<Vec<_>>(), [(0, 2_000), (3_000, 5_000), (10_000, 12_000), (14_000, 16_000)]);
+    let two = vec![sub(0, 3_000, "ohne punkt und komma geht es"), sub(9_000, 12_000, "weiter ohne ende hier jetzt")];
+    assert_eq!(chunk_transcript("v.mp4", &doc(), &two, 0, DOC, 30).chunks.len(), 2, "two stretches are enough to split");
+}
+
+#[test]
+fn quantiles_of_known_rows() {
+    assert_eq!(quantile(&[1, 2, 3, 4, 5], 0.5), 3.0);
+    assert_eq!(quantile(&[1, 2, 3, 4, 5], 0.75), 4.0);
+    assert_eq!(quantile(&[10, 20, 30, 40], 0.25), 17.5);
+    assert_eq!(quantile(&[10, 20, 30, 40], 0.6), 28.0);
+    assert_eq!((quantile(&[10, 20, 30, 40], 0.0), quantile(&[10, 20, 30, 40], 1.0)), (10.0, 40.0));
+}
+
+/// Where the second passage of 12 sentences starts, with the pause before sentence 6 `pause`
+/// and the other pauses from `usual`.
+fn second_start(usual: impl Fn(usize) -> i64, pause: i64) -> String {
+    let cut = chunk_transcript("a.m4a", &doc(), &sentences(12, |i| if i == 6 { pause } else { usual(i) }), 0, DOC, 200);
+    cut.chunks[1].text.chars().take(14).collect()
+}
+
+#[test]
+fn the_pause_fences_follow_the_real_pauses_of_the_file() {
+    let usual = |i: usize| 400 + (i as i64 % 3) * 100;
+    assert_eq!(second_start(usual, 1_200), "Satz nummer 09", "1.2 s is no long pause beside 0.4–0.6 s");
+    // Gaps of 0 (interpolated times) say nothing about the pauses.
+    let mostly_zero = |i: usize| if i.is_multiple_of(3) { 400 + (i as i64 % 2) * 200 } else { 0 };
+    assert_eq!(second_start(mostly_zero, 600), "Satz nummer 09");
+    // Pauses of 0.1 s and 2 s alike: the spread is the quartile distance, not the median.
+    let bimodal = |i: usize| if i.is_multiple_of(2) { 100 } else { 2_000 };
+    assert_eq!(second_start(bimodal, 4_000), "Satz nummer 09");
+    // A long pause between the fences is preferred, but does not force a cut by itself.
+    let calm = chunk_transcript("a.m4a", &doc(), &sentences(12, |i| if i == 6 { 1_700 } else { usual(i) }), 0, DOC, 0);
+    assert_eq!(calm.chunks.len(), 1);
+}
+
+#[test]
+fn a_change_of_speaker_is_preferred_to_a_plain_sentence_end() {
+    let mut segs = sentences(12, |i| 400 + (i as i64 % 3) * 100);
+    for (i, s) in segs.iter_mut().enumerate() {
+        s.speaker = Some(i64::from(i >= 6));
+    }
+    let cut = chunk_transcript("a.m4a", &doc(), &segs, 0, DOC, 200);
+    assert!(cut.chunks[1].text.contains("Satz nummer 06"), "{:?}", texts(&cut));
+    assert!(!cut.chunks[0].text.contains("Satz nummer 06"), "{:?}", texts(&cut));
+}

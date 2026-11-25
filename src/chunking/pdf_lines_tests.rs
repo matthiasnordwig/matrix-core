@@ -89,3 +89,31 @@ fn letter_salad_is_told_from_chart_axes_and_prose() {
     assert!(!looks_like_letter_salad(&ticks_in_prose));
     assert!(!looks_like_letter_salad("a\nb\nc\n"), "too short to tell");
 }
+
+#[test]
+fn wide_gap_on_an_upright_line_is_kept_measurable() {
+    let mut g = word("TIME", 72.0, 700.0, 0.0);
+    g.extend(word("SOURCE", 200.0, 700.0, 0.0));
+    let lines = page_lines(&g);
+    assert_eq!(lines.len(), 1);
+    let l = &lines[0];
+    assert!(l.glyphs[4].along - l.glyphs[3].end > 12.0 * 3.0);
+    assert!(l.glyphs[1].along - l.glyphs[0].end < 12.0, "letters of one word stay close");
+}
+
+#[test]
+fn text_turned_by_180_degrees_reads_right_to_left_line_by_line() {
+    let mut g = word("erste", 500.0, 300.0, 180.0);
+    g.extend(word("zweite", 500.0, 320.0, 180.0));
+    g.reverse();
+    assert_eq!(texts(&g), ["erste", "zweite"]);
+}
+
+#[test]
+fn many_long_lines_or_short_lines_of_digits_are_no_letter_salad() {
+    use super::pdf_lines::looks_like_letter_salad;
+    let mostly_short = format!("{}{}", "T\nh\ne\nf\n".repeat(11), "A normal line of text.\n".repeat(6));
+    assert!(!looks_like_letter_salad(&mostly_short), "only 88 % short lines");
+    let digits = format!("{}{}", "a\nb\nc\n".repeat(13), "7\n".repeat(11));
+    assert!(!looks_like_letter_salad(&digits), "only 78 % of the short lines letters");
+}

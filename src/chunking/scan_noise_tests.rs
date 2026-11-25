@@ -55,3 +55,38 @@ fn vietnamese_text_is_left_alone() {
     assert!(!is_foreign(["Tôi đã ở lại đây một ngày"]));
     assert!(is_foreign(["Ein langer deutscher Satz mit vielen Wörtern und genau einem Fehler hierạ am Ende des Satzes, der noch weiter läuft und läuft."]));
 }
+
+#[test]
+fn an_i_between_noise_letters_is_noise_and_two_runs_stay_apart() {
+    assert_eq!(repaired(vec![pl("am Tisch des Oberạiạ", true), pl("kassiers stand er.", false)]), "am Tisch des Oberkassiers stand er.");
+    assert_eq!(repaired(vec![pl("Er sagte ạJaạ und ging.", true)]), "Er sagte Ja und ging.");
+}
+
+#[test]
+fn noise_inside_a_line_is_a_space_whatever_the_next_line() {
+    assert_eq!(repaired(vec![pl("Das war der Heizeriạ sagte er", true), pl("leise weiter.", false)]), "Das war der Heizer sagte er leise weiter.");
+}
+
+#[test]
+fn a_lone_i_before_noise_stays() {
+    assert_eq!(repaired(vec![pl("Then Iạ went home.", true)]), "Then I went home.");
+}
+
+fn repaired_with(extra: &[&str], lines: Vec<PageLine>) -> String {
+    let mut first = filler();
+    first.extend(extra.iter().map(|t| pl(t, true)));
+    let mut pages = vec![(1, first), (2, lines)];
+    let mut r = clean_pages(&mut pages);
+    r.running_examples.clear();
+    assemble(&pages[1..]).stored
+}
+
+#[test]
+fn the_line_end_decision_follows_the_words_of_the_text() {
+    // The glued form with i is a word of the text: keep the i and glue.
+    assert_eq!(repaired_with(&["Die Freiheit ist groß."], vec![pl("Sie liebt die freiạ", true), pl("heit über alles.", false)]), "Sie liebt die freiheit über alles.");
+    // The word with i is the text's, the next one too, glued they are none: a space.
+    assert_eq!(repaired_with(&["Er war frei und froh, so frei wie nie."], vec![pl("Nun war er freiạ", true), pl("und froh.", false)]), "Nun war er frei und froh.");
+    // The left part occurs only here, the next word twice: still one word.
+    assert_eq!(repaired_with(&["Des Kassiers Stand war leer."], vec![pl("am Tisch des OberạẠạ", true), pl("kassiers stand er.", false)]), "am Tisch des Oberkassiers stand er.");
+}

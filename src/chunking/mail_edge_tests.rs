@@ -23,7 +23,8 @@ fn a_mail_without_text_or_with_a_huge_header_only_still_chunks() {
 #[test]
 fn phone_numbers_opening_with_plus_or_bracket_mark_a_signature() {
     for sig in ["Tel: +49 69 1234 5678\nFax: +49 69 1234 5679\nStand: 12.03.2001", "Phone: (713) 853 1234\nFax: (713) 646 3490\nUpdated: 03/12/2001"] {
-        assert_eq!(starts(&format!("{HEAD}Bis morgen.\n\n{sig}\n")), Vec::<String>::new(), "{sig}");
+        // Text below: a last header with nothing under it would stay with the mail anyway.
+        assert_eq!(starts(&format!("{HEAD}Bis morgen.\n\n{sig}\n\nP.S. Noch etwas.\n")), Vec::<String>::new(), "{sig}");
     }
 }
 
@@ -55,8 +56,9 @@ fn recipients_on_wrapped_lines_make_a_header_without_date() {
 fn a_reply_line_needs_a_colon_a_time_or_address_and_a_quote_below() {
     let t = format!("{HEAD}Okay.\n\nAm 14.05.2026 um 09:00 schrieb Anna Maier:\n> Der Plan steht.\n");
     assert_eq!(starts(&t), ["Am 14.05.2026 um 09:00 schrieb Anna Maier:"]);
+    // Own text above: a block right at the start of the body would join the mail's header anyway.
     for text in ["Folgendes ist wichtig:\nDer Plan steht.\n", "Siehe unten\n> zitierter Text\n", "Stand 14.05.2026:\nDer Plan steht.\n"] {
-        assert_eq!(chunk(&format!("{HEAD}{text}"), 1, 2).len(), 1, "{text}");
+        assert_eq!(chunk(&format!("{HEAD}Hallo.\n\n{text}"), 1, 2).len(), 1, "{text}");
     }
 }
 
@@ -130,8 +132,12 @@ const LONG_TEXT: &str = "The plan stands, and we go ahead with it as discussed o
 fn the_key_skips_every_kind_of_header_line() {
     let key = |t: &str, i: usize| duplicate_key(&chunk(t, 1, 2)[i]).unwrap();
     let own = key(&format!("{HEAD}{LONG_TEXT}\n"), 0);
-    let attached = HEAD.replacen("**From:**", "**Attachments (2):** plan.pdf  \n**From:**", 1);
-    assert_eq!(key(&format!("{attached}{LONG_TEXT}\n"), 0), own, "a bold line that is no Label: line");
+    let attached = HEAD.replace("-07:00\n\n", "-07:00  \n**Attachments (2):** plan.pdf\n\n");
+    assert_eq!(key(&format!("{attached}{LONG_TEXT}\n"), 0), own, "a bold line that is no Label: line, below the header lines");
+    let lotus = format!("{HEAD}See below.\n\nFrom:  Lexi Elliott @ ENRON   10/16/2000 06:33 PM\n\n\nTo: Mike McConnell/HOU/ECT@ECT\n\ncc:\n\nSubject: Wow\n\n{LONG_TEXT}\n");
+    assert_eq!(key(&lotus, 1), own, "empty lines inside a Lotus header");
+    let two_dashes = format!("{HEAD}Agreed.\n\n-- Forwarded by Ben Roth on 05/14/2001\n\nAnna Maier\n05/13/2001 08:00 AM\nTo: Ben Roth/HOU/ECT@ECT\ncc:\nSubject: Wow\n\n{LONG_TEXT}\n");
+    assert_eq!(key(&two_dashes, 1), own, "a forward line with two dashes only");
     let reply = format!("{HEAD}Okay.\n\nAm 14.05.2026 um 09:00 schrieb Anna Maier:\n{}\n", LONG_TEXT.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n"));
     assert_eq!(key(&reply, 1), own, "a reply line");
     let first = |line: &str| key(&format!("{HEAD}{line}\nHinweis: bitte lesen\n{LONG_TEXT}\n"), 0);
@@ -178,6 +184,7 @@ fn boilerplate_paragraphs_of_every_kind() {
         "# Betreff der Mail",
         "**Gesendet:** Montag, 14. Mai 2026",
         "--- Forwarded by Ben Roth/HOU/ECT on 05/14/2001",
+        "-- Forwarded by Ben Roth on Monday the 14th of May 2001 at nine",
         "____Reply Separator____",
         "Anna Maier\nTel.: +49 69 1234 5678",
         "Anna Maier\n+49 69 1234 5678",
