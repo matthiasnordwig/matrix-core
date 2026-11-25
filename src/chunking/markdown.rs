@@ -356,7 +356,11 @@ pub(super) fn pack_at(text: &str, start: usize, end: usize, cuts: &[usize], max_
     for &cut in cuts.iter().filter(|&&c| c > start).chain(std::iter::once(&end)) {
         let step = text[last..cut].chars().count();
         if run + step > max_chars && last > cur {
-            ranges.push((cur, trimmed_end(text, cur, last)));
+            // Whitespace alone (an indented line before a long piece) is no range.
+            let stop = trimmed_end(text, cur, last);
+            if stop > cur {
+                ranges.push((cur, stop));
+            }
             cur = last;
             run = 0;
         }

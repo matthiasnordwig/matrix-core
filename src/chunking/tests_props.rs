@@ -1,0 +1,346 @@
+//! Property tests (proptest) for the chunkers: rules that must hold for every
+//! text, not just the examples in the `*_tests.rs` files. Case count per test
+//! comes from `PROPTEST_CASES` (stage 2 default here: 32; stage 3: 2000), see
+//! `handbuch/arbeitsablauf.md` "Teststufen". Counterexamples are stored in
+//! `core/proptest-regressions/chunking/` (checked in) and get a named example
+//! test at the end of this file.
+//!
+//! Rules (each from the module or doc comment named in brackets):
+//! (1) `split_sentences`: no panic; `text[byte_start..byte_end] == text`,
+//!     ascending, non-overlapping, `index` 0..n ("Offsets are byte offsets into
+//!     the original string so callers can slice it directly").
+//! (2) `split_segments`: `raw[byte_start..byte_end] == text`, starts strictly
+//!     rising, no `\n` inside a segment ("broken at every newline AND every
+//!     sentence end", "Byte offsets are absolute").
+//! (3) `build_windows`: windows cover all segments without a gap, window starts
+//!     strictly rise (the loop ends), each window stays within `window_tokens`
+//!     unless it is a single segment; any `overlap_ratio` (also NaN) is safe.
+//! (4) `assemble`: any starts/leave-outs (also out of range): no panic, spans
+//!     ascending, `chunk_index` sequential; without leave-outs the chunks
+//!     partition the segments from segment 0 on ("gapless by construction").
+//! (5) `chunk_markdown_structurally`, `chunk_by_rules` (every kind it handles),
+//!     `chunk_mail`: chunks are verbatim, ascending, non-overlapping, non-empty
+//!     slices (markdown.rs: "`text[char_start..char_end] == chunk.text` holds
+//!     exactly"; rules.rs and mail.rs: "as in `markdown.rs`").
+//! (6) `split_long_text`: ranges inside `[start, end)`, on char boundaries,
+//!     ascending, each at most `max_chars` chars ("into ranges of at most
+//!     `max_chars`").
+//! (7) `ChunkPages`: `from_metadata(stamp(p)) == p`; `mark`/`locate` never panic
+//!     for any recorded offsets ("A recorded offset that does not start a line
+//!     of `text` is ignored").
+//! (8) `repair_mojibake`: no panic; pure ASCII stays unchanged (every repair
+//!     target is non-ASCII).
+//! (9) `parse_scan_marker(scan_marker(a, b)) == Some((a, b))` for pages ≥ 0;
+//!     `chunk_view` keeps the byte length and only turns lone `\n` into spaces.
+//! (10) `step_runs`: runs ascending and disjoint, `first < last`, the kept page
+//!     inside the run, and every other page of the run covered by the kept one.
+
+use proptest::prelude::*;
+use serde_json::{Map, Value};
+
+use super::kind::DocKind;
+use super::markdown::{chunk_markdown_structurally, split_long_text};
+use super::mail::chunk_mail;
+use super::pages::ChunkPages;
+use super::rules::{chunk_by_rules, handles};
+use super::scan_text::{chunk_view, parse_scan_marker, scan_marker};
+use super::slide_steps::{covers, step_runs};
+use super::text_repair::repair_mojibake;
+use super::{assemble, build_windows, split_segments, split_sentences, LlmChunkResponse, StartItem};
+use crate::db::models::NewChunk;
+
+/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
+fn config() -> ProptestConfig {
+    let mut c = ProptestConfig::default();
+    if std::env::var("PROPTEST_CASES").is_err() {
+        c.cases = 32;
+    }
+    c
+}
+
+/// Pieces that drive the chunkers' rules: sentence ends, abbreviations,
+/// numbers, line and paragraph breaks, headings, fences, list items and the
+/// line marks of every kind `rules.rs` handles, plus multi-byte text.
+const PIECES: &[&str] = &[
+    "Wort", "satz", "ä", "€", "𝄞", "日本", "x", "Dr.", "z.B.", "3.14", "A.", " ", " ", " ", "  ", "\t",
+    ".", ". ", "!", "? ", "…", "\"", ")", "»", "\n", "\n", "\n\n", "\r\n", " \n", "# ", "## ", "### Titel\n",
+    "```\n", "~~~\n", "- ", "* ", "1. ", "2) ", "> ", "§ 3 ", "Art. 5 ", "(1) ", "Teil 2\n", "TOP 1 ",
+    "Anna Muster: ", "Kapitel 3\n", "[01.02.2024, 10:00] ", "[01.02.2024, 11:15] ", "fn x() {}\n", "def f():\n",
+    "**From:** a@b.de  \n", "**Date:** 2000-09-06 04:46\n", "**To:** c@d.de\n", "-----Original Message-----\n",
+    "Von: X\n", "Gesendet: 1.2.2020 10:00\n", "An: Y\n", "Betreff: Z\n", "On Mon, Bob wrote:\n",
+];
+
+fn doc_text(max_pieces: usize) -> impl Strategy<Value = String> {
+    prop_oneof![
+        4 => prop::collection::vec(prop::sample::select(PIECES), 0..max_pieces).prop_map(|v| v.concat()),
+        1 => any::<String>(),
+    ]
+}
+
+fn mail_text(max_pieces: usize) -> impl Strategy<Value = String> {
+    doc_text(max_pieces).prop_map(|body| format!("# Betreff\n\n**From:** a@example.com  \n**Date:** 2000-09-06\n\n{body}"))
+}
+
+/// Rule (5) for any chunker's output.
+fn check_verbatim(text: &str, chunks: &[NewChunk]) -> Result<(), TestCaseError> {
+    let mut prev_end = 0usize;
+    for (i, c) in chunks.iter().enumerate() {
+        let (s, e) = (c.char_start as usize, c.char_end as usize);
+        prop_assert_eq!(c.chunk_index, i as i64);
+        prop_assert!(s < e, "empty or reversed chunk {}..{} in {:?}", s, e, text);
+        prop_assert!(e <= text.len() && text.is_char_boundary(s) && text.is_char_boundary(e), "bad span {}..{} in {:?}", s, e, text);
+        prop_assert_eq!(&text[s..e], c.text.as_str(), "chunk {} not verbatim in {:?}", i, text);
+        prop_assert!(s >= prev_end, "chunk {} overlaps the one before in {:?}", i, text);
+        prev_end = e;
+    }
+    Ok(())
+}
+
+/// Rule (6), shared by the stage-2 and stage-3 variants.
+fn check_split_long_text(text: &str, a: usize, b: usize, max_chars: usize) -> Result<(), TestCaseError> {
+    let bs: Vec<usize> = text.char_indices().map(|(i, _)| i).chain(std::iter::once(text.len())).collect();
+    let (mut s, mut e) = (bs[a % bs.len()], bs[b % bs.len()]);
+    if s > e {
+        std::mem::swap(&mut s, &mut e);
+    }
+    let ranges = split_long_text(text, s, e, max_chars);
+    let mut prev = s;
+    for &(rs, re) in &ranges {
+        prop_assert!(prev <= rs && rs <= re && re <= e, "range {}..{} outside {}..{} or not ascending in {:?}", rs, re, s, e, text);
+        prop_assert!(text.is_char_boundary(rs) && text.is_char_boundary(re));
+        let n = text[rs..re].chars().count();
+        prop_assert!(n <= max_chars, "range {}..{} has {} > {} chars in {:?}", rs, re, n, max_chars, text);
+        prev = re;
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    /// Rules (1) and (2).
+    #[test]
+    fn rule_1_2_sentences_and_segments_are_verbatim(t in doc_text(60)) {
+        let sentences = split_sentences(&t);
+        let mut prev = 0;
+        for (i, s) in sentences.iter().enumerate() {
+            prop_assert_eq!(s.index, i);
+            prop_assert!(prev <= s.byte_start && s.byte_start < s.byte_end, "sentence {} at {}..{} in {:?}", i, s.byte_start, s.byte_end, t);
+            prop_assert_eq!(&t[s.byte_start..s.byte_end], s.text.as_str());
+            prev = s.byte_end;
+        }
+        let segments = split_segments(&t);
+        let mut prev: Option<usize> = None;
+        for (i, s) in segments.iter().enumerate() {
+            prop_assert_eq!(s.index, i);
+            prop_assert!(prev.is_none_or(|p| p < s.byte_start), "segment starts do not rise in {:?}", t);
+            prop_assert_eq!(&t[s.byte_start..s.byte_end], s.text.as_str());
+            prop_assert!(!s.text.contains('\n'), "segment {} holds a newline in {:?}", i, t);
+            prev = Some(s.byte_start);
+        }
+    }
+
+    /// Rule (3).
+    #[test]
+    fn rule_3_windows_cover_all_segments(
+        t in doc_text(80),
+        window_tokens in 0usize..40,
+        overlap in prop_oneof![-1.0f64..2.0, Just(f64::NAN), Just(f64::INFINITY)],
+    ) {
+        let segments = split_segments(&t);
+        let windows = build_windows(&segments, window_tokens, overlap);
+        if segments.is_empty() || window_tokens == 0 {
+            prop_assert!(windows.is_empty());
+            return Ok(());
+        }
+        prop_assert_eq!(windows[0].start_segment, 0);
+        prop_assert_eq!(windows.last().unwrap().end_segment, segments.len() - 1);
+        for (k, w) in windows.iter().enumerate() {
+            prop_assert_eq!(w.idx, k);
+            prop_assert!(w.start_segment <= w.end_segment);
+            prop_assert_eq!(w.byte_start, segments[w.start_segment].byte_start);
+            prop_assert_eq!(w.byte_end, segments[w.end_segment].byte_end);
+            let tokens: usize = segments[w.start_segment..=w.end_segment]
+                .iter()
+                .map(|s| crate::token_estimate::estimate_tokens(&s.text))
+                .sum();
+            prop_assert!(w.start_segment == w.end_segment || tokens <= window_tokens, "window {} has {} > {} tokens", k, tokens, window_tokens);
+            if k > 0 {
+                let before = &windows[k - 1];
+                prop_assert!(w.start_segment > before.start_segment, "window starts do not rise");
+                prop_assert!(w.start_segment <= before.end_segment + 1, "gap between windows {} and {}", k - 1, k);
+            }
+        }
+    }
+
+    /// Rule (4).
+    #[test]
+    fn rule_4_assemble_any_starts(
+        t in doc_text(60),
+        starts in prop::collection::vec(prop_oneof![0usize..30, any::<usize>()], 0..10),
+        leave_out in prop::collection::vec(prop_oneof![0usize..30, any::<usize>()], 0..6),
+        use_leave_out in any::<bool>(),
+    ) {
+        let response = LlmChunkResponse {
+            starts: starts.iter().map(|&i| StartItem::Index(i)).collect(),
+            leave_out: if use_leave_out { leave_out } else { Vec::new() },
+        };
+        let chunks = assemble(&t, 1, 2, std::slice::from_ref(&response));
+        let segments = split_segments(&t);
+        let mut prev_end = 0i64;
+        for (i, c) in chunks.iter().enumerate() {
+            prop_assert_eq!(c.chunk_index, i as i64);
+            prop_assert!(prev_end <= c.char_start && c.char_start <= c.char_end, "spans not ascending in {:?}", t);
+            prev_end = c.char_end;
+        }
+        if response.leave_out.is_empty() && !segments.is_empty() {
+            let seg_of_start = |b: i64| segments.iter().position(|s| s.byte_start as i64 == b);
+            let seg_of_end = |b: i64| segments.iter().rposition(|s| s.byte_end as i64 == b);
+            prop_assert_eq!(seg_of_start(chunks[0].char_start), Some(0));
+            prop_assert_eq!(seg_of_end(chunks.last().unwrap().char_end), Some(segments.len() - 1));
+            for w in chunks.windows(2) {
+                let end = seg_of_end(w[0].char_end).unwrap();
+                prop_assert_eq!(seg_of_start(w[1].char_start), Some(end + 1), "gap or overlap in {:?}", t);
+            }
+            let distinct: std::collections::BTreeSet<usize> =
+                starts.iter().copied().filter(|&i| i < segments.len()).chain(std::iter::once(0)).collect();
+            prop_assert_eq!(chunks.len(), distinct.len());
+        }
+    }
+
+    /// Rule (5): markdown with any `max_chars` (0 = default), all rule kinds, mail.
+    #[test]
+    fn rule_5_chunkers_cut_verbatim_slices(
+        t in doc_text(80),
+        m in mail_text(60),
+        max_chars in prop_oneof![0usize..1, 1usize..60, 60usize..400],
+    ) {
+        check_verbatim(&t, &chunk_markdown_structurally(&t, 1, 2, max_chars))?;
+        for kind in [DocKind::Legal, DocKind::Minutes, DocKind::Transcript, DocKind::Book, DocKind::Chat, DocKind::Code] {
+            prop_assert!(handles(kind));
+            check_verbatim(&t, &chunk_by_rules(&t, 1, 2, kind))?;
+        }
+        check_verbatim(&t, &chunk_mail(&t, 1, 2))?;
+        check_verbatim(&m, &chunk_mail(&m, 1, 2))?;
+    }
+
+    /// Rule (6).
+    #[test]
+    fn rule_6_split_long_text_respects_max(
+        t in doc_text(80),
+        a in any::<usize>(),
+        b in any::<usize>(),
+        max_chars in 1usize..40,
+    ) {
+        check_split_long_text(&t, a, b, max_chars)?;
+    }
+
+    /// Rule (7): round trip of the page metadata, and no panic in `mark`/`locate`.
+    #[test]
+    fn rule_7_chunk_pages_round_trip_and_never_panic(
+        t in doc_text(40),
+        lines in prop::collection::vec((0usize..200, 1i64..50), 1..8),
+        raw_breaks in prop::collection::vec((any::<u64>(), any::<i64>()), 0..6),
+        first in any::<i64>(),
+        needle in "[a-zä ]{0,4}",
+    ) {
+        let mut sorted = lines.clone();
+        sorted.sort_by_key(|&(o, _)| o);
+        let mut pages = ChunkPages::default();
+        pages.line(0, sorted[0].1);
+        for &(o, p) in &sorted[1..] {
+            pages.line(o, p);
+        }
+        let mut meta = Map::new();
+        pages.stamp(&mut meta);
+        prop_assert_eq!(ChunkPages::from_metadata(&Value::Object(meta).to_string()), Some(pages.clone()));
+        let _ = pages.mark(&t);
+        let _ = pages.locate(&t, |s| s.contains(needle.as_str()));
+
+        let json = serde_json::json!({ "page": first, "page_breaks": raw_breaks.iter().map(|(o, p)| serde_json::json!([o, p])).collect::<Vec<_>>() });
+        if let Some(read) = ChunkPages::from_metadata(&json.to_string()) {
+            let _ = read.mark(&t);
+            let _ = read.locate(&t, |s| s.contains(needle.as_str()));
+            let _ = read.label();
+        }
+    }
+
+    /// Rules (8) and (9).
+    #[test]
+    fn rule_8_9_repair_scan_marker_chunk_view(
+        t in prop_oneof![doc_text(40), "[â€‰Â­Ã¤¼½ ‰a-z\n]{0,30}"],
+        ascii in "[ -~\t\n]{0,60}",
+        a in 0i64..i64::MAX,
+        b in 0i64..i64::MAX,
+    ) {
+        let _ = repair_mojibake(&t);
+        prop_assert_eq!(repair_mojibake(&ascii), ascii.clone());
+        prop_assert_eq!(parse_scan_marker(&scan_marker(a, b)), Some((a, b)));
+        prop_assert_eq!(parse_scan_marker(&scan_marker(a, a)), Some((a, a)));
+        let view = chunk_view(&t);
+        prop_assert_eq!(view.len(), t.len());
+        for (i, (x, y)) in t.bytes().zip(view.bytes()).enumerate() {
+            if x != y {
+                let lone = x == b'\n' && y == b' '
+                    && (i == 0 || t.as_bytes()[i - 1] != b'\n')
+                    && t.as_bytes().get(i + 1) != Some(&b'\n');
+                prop_assert!(lone, "byte {} changed {:?} → {:?} in {:?}", i, x as char, y as char, t);
+            }
+        }
+    }
+
+    /// Rule (10): pages built from a small vocabulary so that runs form.
+    #[test]
+    fn rule_10_step_runs_lose_nothing(
+        pages in prop::collection::vec(prop::collection::vec(prop::sample::select(vec!["Umsatz", "Ziel", "Plan", "5", "6", "Team", "neu"]), 0..8), 0..10),
+    ) {
+        let pages: Vec<String> = pages.into_iter().map(|w| w.join(" ")).collect();
+        let runs = step_runs(&pages);
+        let mut prev_last: Option<usize> = None;
+        for r in &runs {
+            prop_assert!(r.first < r.last && r.last < pages.len());
+            prop_assert!(prev_last.is_none_or(|p| p < r.first), "runs overlap: {:?}", runs);
+            prop_assert!(r.first <= r.kept && r.kept <= r.last);
+            for p in r.first..=r.last {
+                prop_assert!(p == r.kept || covers(&pages[r.kept], &pages[p]), "page {} not covered by {} in {:?}", p, r.kept, pages);
+            }
+            prev_last = Some(r.last);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    /// Stage 3: rules (5) and (6) on long texts, where `chunk_by_rules` and
+    /// `chunk_mail` reach their size cuts too.
+    #[test]
+    #[ignore = "Stufe 3"]
+    fn stufe3_rule_5_6_long_texts(
+        t in doc_text(3000),
+        a in any::<usize>(),
+        b in any::<usize>(),
+        max_chars in 1usize..400,
+    ) {
+        check_verbatim(&t, &chunk_markdown_structurally(&t, 1, 2, max_chars))?;
+        for kind in [DocKind::Legal, DocKind::Minutes, DocKind::Transcript, DocKind::Book, DocKind::Chat, DocKind::Code] {
+            check_verbatim(&t, &chunk_by_rules(&t, 1, 2, kind))?;
+        }
+        check_verbatim(&t, &chunk_mail(&t, 1, 2))?;
+        check_split_long_text(&t, a, b, max_chars)?;
+    }
+}
+
+// Counterexamples proptest found, replayed verbatim (seeds in
+// `core/proptest-regressions/chunking/tests_props.txt`).
+
+/// Rules (5) and (6): a range that opens with whitespace (an indented line)
+/// and is followed by a piece too long to join was cut right after the
+/// whitespace; trimming that left an empty chunk `0..0`.
+#[test]
+fn regression_rule_5_indented_long_line_gives_no_empty_chunk() {
+    let t = " WortAnna Muster: ";
+    let chunks = chunk_markdown_structurally(t, 1, 2, 1);
+    check_verbatim(t, &chunks).unwrap();
+    assert!(split_long_text(t, 0, t.len(), 1).iter().all(|&(s, e)| s < e));
+}

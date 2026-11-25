@@ -60,3 +60,5 @@ mod repeats_tests;
 mod scan_text_tests;
 #[cfg(test)]
 mod scan_noise_tests;
+#[cfg(test)]
+mod tests_props;
