@@ -13,6 +13,9 @@
 //!      number always first; every part's number inside the range; no part
 //!      twice; a range up to the cap expands in full (consecutive numbers, or
 //!      the start letter and every letter after it).
+//! (11b) A lexicon seeded from `builtin_seed_entries` (as `services::seed` fills the
+//!      registry) parses every text exactly like `RefLexicon::builtin` ("the seed
+//!      must cover the full Kürzel list"), every long form included.
 //! (13) `equivalent_ref_keys`: the input first, never duplicates, and each key
 //!      of the result yields the same set ("both directions").
 
@@ -20,7 +23,9 @@ use std::collections::HashSet;
 
 use proptest::prelude::*;
 
-use super::{equivalent_ref_keys, expand_range, parse_refs, MAX_RANGE_EXPANSION};
+use super::{
+    builtin_seed_entries, equivalent_ref_keys, expand_range, parse_refs, parse_refs_with, RefLexicon, MAX_RANGE_EXPANSION,
+};
 
 /// Pieces of real citations plus noise, so that ranges, enumerations, long
 /// forms and Kürzel bindings all occur.
@@ -66,6 +71,25 @@ proptest! {
             prop_assert!(t.is_char_boundary(r.start) && t.is_char_boundary(r.end));
             prev = r.start;
         }
+    }
+
+    /// Rule (11b).
+    #[test]
+    fn rule_11b_seeded_lexicon_parses_like_builtin(t in ref_text(40)) {
+        let seed = builtin_seed_entries();
+        let seeded = RefLexicon::new(
+            seed.iter().map(|(k, _)| k.to_string()),
+            seed.iter().flat_map(|(k, longs)| longs.iter().map(|l| (l.to_string(), k.to_string()))),
+        );
+        prop_assert_eq!(parse_refs_with(&t, &seeded), parse_refs(&t));
+        prop_assert!(!parse_refs("§ 25a KWG").is_empty());
+        for (k, longs) in &seed {
+            for cite in std::iter::once(format!("§ 1 {}", k.to_uppercase())).chain(longs.iter().map(|l| format!("§ 1 des {l}"))) {
+                prop_assert_eq!(parse_refs_with(&cite, &seeded), parse_refs(&cite), "{}", cite);
+            }
+        }
+        let kuerzel: HashSet<&str> = seed.iter().map(|(k, _)| *k).collect();
+        prop_assert_eq!(kuerzel, super::law_abbrevs::KNOWN.iter().copied().collect::<HashSet<&str>>());
     }
 
     /// Rule (12).

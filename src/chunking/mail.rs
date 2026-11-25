@@ -429,12 +429,6 @@ fn fold(lines: &[Line]) -> String {
     lines.iter().filter(|l| !is_filing(l.text)).flat_map(|l| l.text.split_whitespace()).collect::<Vec<_>>().join(" ")
 }
 
-/// Body of a passage as `duplicate_key` compares it.
-pub fn passage_body(text: &str) -> String {
-    let lines = scan(text);
-    fold(without_footer(&lines[after_header(&lines).min(lines.len())..]))
-}
-
 /// A body without what mail systems add at its end, which differs from copy to copy.
 fn without_footer<'a, 'b>(lines: &'a [Line<'b>]) -> &'a [Line<'b>] {
     let mut end = lines.len();
