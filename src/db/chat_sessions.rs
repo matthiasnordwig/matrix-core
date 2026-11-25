@@ -6,7 +6,8 @@
 //! `delete_session` relies on the `ON DELETE CASCADE` FK to drop its messages.
 //! Assistant turns additionally carry `ChatTurnMeta` (schema_v57: model /
 //! reasoning effort / answer payload) and — for agentic turns — the tool-loop
-//! trace in the `tool_*` columns.
+//! trace in the `tool_*` columns. A session's running summary of its earlier turns
+//! (schema_v87) is read and written on its own (`chat_summary`, `set_chat_summary`).
 
 use rusqlite::{params, OptionalExtension, Row};
 
@@ -189,6 +190,29 @@ impl Database {
         )?;
         let rows = stmt.query_map([session_id], row_to_message)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The chat's running summary (schema_v87) and the id of the last message it covers;
+    /// `None` when there is none yet (or no such session).
+    pub fn chat_summary(&self, session_id: i64) -> Result<Option<(String, i64)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT summary, summary_through FROM chat_sessions WHERE id = ?1 AND summary IS NOT NULL AND summary_through IS NOT NULL",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// Replaces the chat's summary; never moves it backwards (a slower summary of fewer
+    /// turns, finishing after a newer one, is ignored). Leaves `updated_at` alone: no new turn.
+    pub fn set_chat_summary(&self, session_id: i64, summary: &str, through: i64) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE chat_sessions SET summary = ?2, summary_through = ?3 \
+             WHERE id = ?1 AND (summary_through IS NULL OR summary_through < ?3)",
+            params![session_id, summary, through],
+        )? > 0)
     }
 }
 

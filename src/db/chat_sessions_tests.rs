@@ -185,3 +185,18 @@ fn list_leaves_out_sessions_without_messages() {
     // Still reachable directly (the UI deletes it after the failure).
     assert!(db.chat_session(empty.id).unwrap().is_some());
 }
+
+#[test]
+fn summary_round_trip_never_moves_backwards() {
+    let db = db();
+    let s = db.create_chat_session("Q").unwrap();
+    assert_eq!(db.chat_summary(s.id).unwrap(), None);
+    let before = db.chat_session(s.id).unwrap().unwrap().updated_at;
+    assert!(db.set_chat_summary(s.id, "They talked about Vienna.", 4).unwrap());
+    assert_eq!(db.chat_summary(s.id).unwrap(), Some(("They talked about Vienna.".to_string(), 4)));
+    assert!(!db.set_chat_summary(s.id, "older", 2).unwrap(), "a summary of fewer turns is ignored");
+    assert!(db.set_chat_summary(s.id, "newer", 6).unwrap());
+    assert_eq!(db.chat_summary(s.id).unwrap(), Some(("newer".to_string(), 6)));
+    assert_eq!(db.chat_session(s.id).unwrap().unwrap().updated_at, before, "no new turn, no re-sort");
+    assert_eq!(db.chat_summary(9999).unwrap(), None);
+}
