@@ -84,3 +84,43 @@ fn image_prompt_wraps_soft_tokens() {
     assert_eq!(image_prompt(2), "<|image><|image|><|image|><image|>");
     assert_eq!(image_prompt(0), "<|image><image|>");
 }
+
+#[test]
+fn target_size_tall_thin_image_gets_one_strip_capped() {
+    // Spiegelbild des breiten Falls: h/w = 500 > 280 Token → tw = 0 → eine
+    // 48er-Spalte, th = ⌊500⌋·48 = 24 000, gedeckelt auf 280·48 = 13 440.
+    let mp = max_patches(MAX_SOFT_TOKENS, POOL);
+    assert_eq!(target_size(5000, 10, PATCH, mp, POOL), (280 * 48, 48));
+}
+
+#[test]
+fn target_size_tiny_budget_falls_back_to_one_square() {
+    // Budget 1 Kachel (256 px²), Bild 10×10: factor = √(256/100) = 1,6 →
+    // ⌊16/48⌋ = 0 auf beiden Seiten → ein 48×48-Quadrat.
+    assert_eq!(target_size(10, 10, PATCH, 1, POOL), (48, 48));
+}
+
+#[test]
+fn patchify_walks_grid_rows_of_multi_pixel_patches() {
+    // patch=2 auf einem 4×2-Bild (h=4, w=2): zwei Kacheln übereinander; die
+    // zweite beginnt in Bildzeile gr·patch = 2.
+    let mut img = vec![0u8; 4 * 2 * 3];
+    for y in 0..4 {
+        for x in 0..2 {
+            img[(y * 2 + x) * 3] = (y * 10 + x) as u8;
+        }
+    }
+    let p = patchify(&img, 4, 2, 2);
+    let red: Vec<u8> = p.chunks(3).map(|c| (c[0] * 255.0).round() as u8).collect();
+    assert_eq!(red, vec![0, 1, 10, 11, 20, 21, 30, 31]);
+}
+
+#[test]
+fn pad_leaves_a_full_budget_untouched() {
+    // 3 Kacheln bei einem Ziel von 2: nichts wird aufgefüllt oder abgeschnitten.
+    let mut patches = vec![0.5f32; 3 * 4];
+    let mut pos = vec![0i64, 0, 1, 0, 2, 0];
+    pad_to(&mut patches, &mut pos, 4, 2);
+    assert_eq!(patches, vec![0.5f32; 12]);
+    assert_eq!(pos, vec![0, 0, 1, 0, 2, 0]);
+}

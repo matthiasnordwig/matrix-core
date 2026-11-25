@@ -221,6 +221,13 @@ mod tests {
     }
 
     #[test]
+    fn mean_pool_empty_input_never_panics() {
+        // No tokens → zero vector of the hidden size; hidden 0 → empty vector.
+        assert_eq!(mean_pool(&[], 0, 3, &[]), vec![0.0; 3]);
+        assert_eq!(mean_pool(&[], 2, 0, &[1, 1]), Vec::<f32>::new());
+    }
+
+    #[test]
     fn l2_normalize_unit_length() {
         let mut v = vec![3.0f32, 4.0];
         l2_normalize(&mut v);

@@ -154,3 +154,17 @@ fn hybrid_hits_carry_list_ranks_and_shares_summing_to_the_score() {
     // Pure vector retrieval leaves provenance empty.
     assert!(db.retrieve_with(&ctxs, &q, 10, None).unwrap().iter().all(|h| h.provenance.is_empty()));
 }
+
+#[test]
+fn two_lists_of_the_same_kind_add_their_shares_and_keep_the_best_rank() {
+    // Chunk 7 steht in zwei Vektorlisten (zwei Räume) auf Rang 2 und Rang 1:
+    // Anteil = 1/(10+2) + 1/(10+1), bester Rang 1.
+    let first = [3i64, 7];
+    let second = [7i64];
+    let lists = [(Some(ListKind::Vector), &first[..], 1.0), (Some(ListKind::Vector), &second[..], 1.0)];
+    let seven = rrf_fuse_traced(&lists, K, 10).into_iter().find(|s| s.chunk_id == 7).unwrap();
+    let hit = seven.provenance.vector.unwrap();
+    assert_eq!(hit.rank, 1);
+    assert_eq!(hit.share, 1.0 / 12.0 + 1.0 / 11.0);
+    assert_eq!(hit.share.to_bits(), seven.score.to_bits());
+}

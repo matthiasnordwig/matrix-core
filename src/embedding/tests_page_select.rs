@@ -200,3 +200,164 @@ fn text_less_page_maps_to_the_chunks_touching_its_position() {
     // Inside a chunk: that chunk.
     assert_eq!(chunks_for_page(&spans, 1, Some((15, 15))), vec![2]);
 }
+
+// ---- Jede Spalte von page_stats nachgerechnet -------------------------------
+// Bisher prüften die Tests von page_stats vor allem `solid` und das Endurteil.
+// Die folgenden Seiten sind so gebaut, dass sich jede Spalte von Hand
+// nachrechnen lässt; die Rechnung steht jeweils daneben.
+
+/// 40×20 px Raster für eine 80×40-pt-Seite: 0,5 px je pt, damit eine
+/// verwechselte Multiplikation/Division in der Umrechnung auffällt.
+fn half_scale<'a>(rgba: &'a [u8], chars: &'a [BoxPt], paths: &'a [PathInfo], images: &'a [BoxPt]) -> PageInput<'a> {
+    PageInput { rgba, width: 40, height: 20, page_w: 80.0, page_h: 40.0, chars, paths, images, glyphs_as_boxes: false }
+}
+
+fn path(x: f32, y: f32, width: f32, height: f32, ops: Vec<PathOp>, dark_fill: bool) -> PathInfo {
+    PathInfo { bbox: BoxPt { x, y, width, height }, ops, dark_fill }
+}
+
+fn set(buf: &mut [u8], w: usize, x: usize, y: usize, rgb: [u8; 3]) {
+    fill(buf, w, x, x + 1, y, y + 1, rgb);
+}
+
+#[test]
+fn page_stats_measures_every_column_on_a_scaled_page() {
+    // Zeichenkasten x 20..28, y 10..18 pt, um 1,5 pt verbreitert, in Pixeln:
+    // x0 = ⌊18,5·0,5⌋ = 9, x1 = ⌈29,5·0,5⌉ = 15,
+    // y0 = ⌊(40 − 19,5)·0,5⌋ = 10, y1 = ⌈(40 − 8,5)·0,5⌉ = 16 → 6×6 = 36 Textpixel.
+    let chars = [BoxPt { x: 20.0, y: 10.0, width: 8.0, height: 8.0 }];
+    let mut buf = vec![255u8; 40 * 20 * 4];
+    set(&mut buf, 40, 0, 0, [0, 0, 0]); // Tinte (min 0 < 230), keine Farbe
+    set(&mut buf, 40, 1, 0, [230, 230, 230]); // min genau 230: keine Tinte
+    set(&mut buf, 40, 2, 0, [229, 255, 255]); // Tinte, Spanne 26: keine Farbe
+    set(&mut buf, 40, 3, 0, [100, 140, 255]); // Tinte und Farbe (Spanne 155)
+    set(&mut buf, 40, 4, 0, [215, 255, 255]); // Tinte, Spanne genau 40: keine Farbe
+    set(&mut buf, 40, 5, 0, [0, 0, 255]); // Tinte und Farbe (Spanne 255)
+    set(&mut buf, 40, 10, 11, [0, 200, 0]); // im Text: Tinte und Farbe
+    set(&mut buf, 40, 11, 11, [0, 0, 0]); // im Text: Tinte
+    set(&mut buf, 40, 12, 10, [0, 0, 0]); // erste Textzeile (y0 = 10): Tinte im Text
+    set(&mut buf, 40, 12, 15, [0, 0, 0]); // letzte Textzeile (y1 − 1 = 15): Tinte im Text
+    set(&mut buf, 40, 9, 12, [0, 0, 0]); // erste Textspalte (x0 = 9): Tinte im Text
+    let paths = [
+        // Pixel x 12..14, y 12..14 → Mitte (13, 13) liegt im Text: übersprungen.
+        path(24.0, 12.0, 4.0, 4.0, vec![PathOp::CurveTo; 3], true),
+        // Pixel x 12..20, y 12..14 (16 px), Mitte (16, 13) außerhalb des Texts;
+        // 3×2 px davon liegen im Text → 10 px Pfadfläche. 1 Diagonale, 2 Kurven.
+        path(24.0, 12.0, 16.0, 4.0, vec![PathOp::MoveTo(24.0, 12.0), PathOp::LineTo(40.0, 16.0), PathOp::CurveTo, PathOp::CurveTo], true),
+        // Senkrechte Linie: x0 = x1 = 34, y 2..18 → zählt, deckt eine Spalte = 16 px.
+        path(68.0, 4.0, 0.0, 32.0, vec![PathOp::MoveTo(68.0, 4.0), PathOp::LineTo(68.0, 36.0)], false),
+        // Waagrechte Linie: y0 = y1 = 15, x 2..8 → zählt, deckt eine Zeile = 6 px.
+        path(4.0, 10.0, 12.0, 0.0, vec![PathOp::MoveTo(4.0, 10.0), PathOp::LineTo(16.0, 10.0)], false),
+        // Punkt (x0 = x1 = 35, y0 = y1 = 5): ohne Ausdehnung, übersprungen.
+        path(70.0, 30.0, 0.0, 0.0, vec![PathOp::CurveTo; 5], true),
+    ];
+    // Bild x 20..60, y 20..40 pt → Pixel x 10..30, y 0..10 = 200 px.
+    let images = [BoxPt { x: 20.0, y: 20.0, width: 40.0, height: 20.0 }];
+    let s = page_stats(&half_scale(&buf, &chars, &paths, &images));
+    let px = |v: f64| v / 800.0;
+    let expected = PageStats {
+        ink: px(10.0),       // (0,0) (2,0) (3,0) (4,0) (5,0) + 5 im Text
+        ink_free: px(5.0),   // ohne die 5 im Text
+        color: px(3.0),      // (3,0) (5,0) und (10,11)
+        color_free: px(2.0), // (3,0) und (5,0)
+        solid: 0.0,          // nur Einzelpixel, kein 3×3-Block
+        paths: 3,
+        curves: 2,
+        fills: 1,
+        boxes: 0, // keiner ist in beiden Richtungen ≥ 6 pt
+        diag: 1,
+        path_area: px(10.0 + 16.0 + 6.0),
+        img_area: px(200.0),
+        chars: 1,
+    };
+    assert_eq!(s, expected);
+}
+
+#[test]
+fn solid_counts_exactly_the_strong_three_by_three_blocks() {
+    // Je ein 3×3-Block zählt mit seinem Mittelpunkt, wenn alle 9 Pixel „stark“ sind:
+    // Helligkeit (299 r + 587 g + 114 b) / 1000 < 200 oder Sättigung max − min > 60.
+    let mut buf = white(40, 20);
+    let blocks: [(usize, usize, [u8; 3]); 6] = [
+        (0, 0, [20, 20, 20]),     // in der Ecke, dunkel: zählt (Mitte (1,1))
+        (5, 5, [199, 199, 199]),  // Helligkeit 199: zählt
+        (10, 5, [200, 200, 200]), // Helligkeit genau 200: zählt nicht
+        (15, 5, [255, 255, 195]), // Sättigung genau 60 (Helligkeit 248): zählt nicht
+        (20, 5, [255, 255, 0]),   // Sättigung 255, Helligkeit 225: zählt
+        (25, 5, [255, 255, 100]), // Sättigung 155, Helligkeit 237: zählt
+    ];
+    for (x, y, rgb) in blocks {
+        fill(&mut buf, 40, x, x + 3, y, y + 3, rgb);
+    }
+    let s = page_stats(&input(&buf, 40, 20, &[], &[], &[]));
+    assert_eq!(s.solid, 4.0 / 800.0);
+}
+
+#[test]
+fn degenerate_renders_report_only_the_character_count() {
+    let chars = [BoxPt { x: 1.0, y: 1.0, width: 2.0, height: 2.0 }; 3];
+    let only_chars = PageStats { chars: 3, ..PageStats::default() };
+    // Breite 0, Höhe 0, oder ein Puffer, dem ein Byte fehlt: keine Messung.
+    assert_eq!(page_stats(&input(&[], 0, 5, &chars, &[], &[])), only_chars);
+    assert_eq!(page_stats(&input(&[], 5, 0, &chars, &[], &[])), only_chars);
+    let short = vec![0u8; 10 * 10 * 4 - 1];
+    assert_eq!(page_stats(&input(&short, 10, 10, &chars, &[], &[])), only_chars);
+    // Ein längerer Puffer wird gemessen (nur die ersten w·h·4 Bytes).
+    let long = vec![0u8; 10 * 10 * 4 + 4];
+    assert_eq!(page_stats(&input(&long, 10, 10, &[], &[], &[])).ink, 1.0);
+}
+
+#[test]
+fn paths_at_the_page_edge_take_their_centre_inside_the_page() {
+    let buf = white(40, 20);
+    let paths = [
+        // Senkrechte Linie am rechten Rand: x0 = x1 = 40, y 18..20 → Mitte
+        // x = 40 wird auf 39 begrenzt; zählt (Fläche 0, keine Spalte im Bild).
+        path(40.0, 0.0, 0.0, 2.0, vec![PathOp::CurveTo], false),
+        // Unter dem unteren Rand: y0 = 22, y1 = 20 → Mitte y = 21 wird auf 19
+        // begrenzt. Die Fläche rechnet mit Überlauf ((14−10)·(20−22) ≫ 90 %),
+        // also gilt der Pfad wie ein Seitenhintergrund und zählt nicht.
+        path(10.0, -2.0, 4.0, 0.0, vec![PathOp::CurveTo], false),
+    ];
+    let s = page_stats(&input(&buf, 40, 20, &[], &paths, &[]));
+    assert_eq!((s.paths, s.curves, s.path_area), (1, 1, 0.0));
+}
+
+#[test]
+fn background_limit_is_more_than_ninety_percent() {
+    // 40×18 px = 720 px = genau 90 % von 800: noch eine Zeichnung.
+    let buf = white(40, 20);
+    let at_limit = [path(0.0, 0.0, 40.0, 18.0, vec![PathOp::CurveTo], false)];
+    assert_eq!(page_stats(&input(&buf, 40, 20, &[], &at_limit, &[])).paths, 1);
+}
+
+#[test]
+fn boxes_need_six_points_each_way_and_less_than_a_third_of_the_page_width() {
+    // 60×60-pt-Seite, 1 px je pt: ein Drittel der Breite = 20 pt.
+    let buf = white(60, 60);
+    let paths = [
+        path(2.0, 2.0, 6.0, 6.0, vec![], false),    // 6×6: Kasten
+        path(2.0, 20.0, 5.0, 10.0, vec![], false),  // zu schmal
+        path(2.0, 40.0, 10.0, 5.0, vec![], false),  // zu flach
+        path(15.0, 2.0, 19.0, 10.0, vec![], true),  // 19 < 20: Kasten
+        path(15.0, 20.0, 20.0, 10.0, vec![], true), // genau ein Drittel: kein Kasten
+        path(15.0, 40.0, 40.0, 10.0, vec![], false), // breiter: kein Kasten
+    ];
+    let s = page_stats(&input(&buf, 60, 60, &[], &paths, &[]));
+    assert_eq!((s.paths, s.boxes, s.fills), (6, 2, 2));
+}
+
+#[test]
+fn diagonal_needs_more_than_0_3_pt_in_each_direction_from_the_last_point() {
+    let ops = [
+        // genau 0,3 pt in einer Richtung (und weit in der anderen): noch keine Diagonale
+        PathOp::MoveTo(0.0, 0.0),
+        PathOp::LineTo(0.3, 5.0),
+        PathOp::MoveTo(0.0, 0.0),
+        PathOp::LineTo(5.0, 0.3),
+        // senkrecht ab (10, 10): dx = 0 (nicht x + letzter Punkt, nicht x / letzter Punkt)
+        PathOp::MoveTo(10.0, 10.0),
+        PathOp::LineTo(10.0, 20.0),
+    ];
+    assert_eq!(count_curves_and_diagonals(&ops), (0, 0));
+}

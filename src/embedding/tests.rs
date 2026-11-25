@@ -248,6 +248,11 @@ fn hybrid_without_a_question_vector_searches_that_space_by_keywords_only() {
     assert!(b.iter().all(|id| ids.contains(id)), "B found by its keywords: {ids:?}");
     let from_b: Vec<&ScoredChunk> = hits.iter().filter(|h| b.contains(&h.chunk_id)).collect();
     assert!(from_b.iter().all(|h| h.provenance.vector.is_none()), "no vector list in B's space");
+    // B's score is exactly its keyword share (positive), folded into the global total.
+    for h in &from_b {
+        let kw = h.provenance.keyword.unwrap().share;
+        assert!(kw > 0.0 && h.score == kw, "chunk {}: score {} vs keyword share {kw}", h.chunk_id, h.score);
+    }
     assert!(ids.contains(&a[0]), "A still searched by its vector: {ids:?}");
     // Without any vector the vector path finds nothing there, the hybrid one still the keywords.
     let none = std::collections::HashMap::new();
