@@ -253,3 +253,7 @@ pub fn is_plausible(text: &str, chunks: &[NewChunk], max_chars: usize) -> bool {
     let crumbs = sorted.len() >= MIN_CRUMB_CHECK && sorted[sorted.len() / 2] < CRUMB_CHARS;
     !one_block && !crumbs && covered >= total * MIN_COVERED
 }
+
+#[cfg(test)]
+#[path = "kind_tests.rs"]
+mod kind_tests;

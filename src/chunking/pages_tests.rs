@@ -35,6 +35,7 @@ fn a_chunk_over_a_page_break_keeps_both_pages() {
 
 #[test]
 fn a_one_page_chunk_has_empty_breaks_and_is_unchanged() {
+    assert_eq!(ChunkPages::from_metadata(r#"{"page":0}"#), None, "page 0 is no page");
     let pages = ChunkPages::from_metadata(r#"{"page":7,"file":"a.pdf"}"#).unwrap();
     assert_eq!((pages.range(), pages.label()), ((7, 7), "p. 7".to_string()));
     assert_eq!(pages.mark("Text.\n"), "Text.\n");

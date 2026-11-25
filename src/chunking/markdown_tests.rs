@@ -1,4 +1,4 @@
-use super::markdown::{chunk_markdown_structurally as chunk, DEFAULT_MAX_CHARS};
+use super::markdown::{chunk_markdown_structurally as chunk, split_long_text, DEFAULT_MAX_CHARS};
 use crate::db::models::NewChunk;
 
 fn meta(c: &NewChunk) -> serde_json::Value {
@@ -240,4 +240,81 @@ fn long_line_inside_a_code_fence_stays_whole() {
     let cs = chunk(&t, 1, 2, 100);
     assert_offsets(&t, &cs);
     assert_eq!(cs.len(), 1);
+}
+
+#[test]
+fn hashtag_after_text_and_short_fence_marks_are_no_headings_or_fences() {
+    let t = "# A\nbody\n#hashtag\n";
+    assert_eq!(chunk(t, 1, 1, 1000).len(), 1, "#hashtag is no heading");
+    let t = "# A\n~~durchgestrichen~~ Text\n\n## B\nx\n";
+    assert_eq!(chunk(t, 1, 1, 1000).iter().map(path).collect::<Vec<_>>(), ["A", "A › B"], "two tildes open no fence");
+    let t = "# A\n```js`x`\n\n## B\nx\n";
+    assert_eq!(chunk(t, 1, 1, 1000).iter().map(path).collect::<Vec<_>>(), ["A", "A › B"], "a backtick in the info string opens no fence");
+}
+
+#[test]
+fn a_hash_inside_a_title_stays() {
+    assert_eq!(path(&chunk("## C#\nbody\n", 1, 1, 1000)[0]), "C#");
+}
+
+#[test]
+fn an_oversized_list_is_cut_before_items_of_every_marker() {
+    for marker in ["- ", "* ", "+ ", "1. ", "1) "] {
+        let item = |i: usize| format!("{marker}Punkt {i} {}\n  2024 ging es weiter {}\n  kurz\n", "a".repeat(50), "b".repeat(30));
+        let t = format!("# L\n{}", (0..12).map(item).collect::<String>());
+        let cs = chunk(&t, 1, 1, 400);
+        assert_offsets(&t, &cs);
+        assert!(cs.len() > 2, "{marker}");
+        for c in cs.iter().skip(1) {
+            assert!(c.text.starts_with(marker), "{marker}: cut inside an item: {:?}", &c.text[..12]);
+        }
+    }
+}
+
+#[test]
+fn a_heading_never_stands_alone_in_a_part() {
+    let para = format!("{}\n", "z".repeat(60)).repeat(4);
+    for t in [format!("Vorwort.\n\n## Teil\n\n{para}\nNoch ein Absatz.\n"), format!("Vorwort.\n\n## Teil\n- {}\n- zwei\n", para.trim_end())] {
+        let cs = chunk(&t, 1, 1, 260);
+        assert_offsets(&t, &cs);
+        assert!(cs.iter().all(|c| c.text.trim() != "## Teil"), "{:?}", cs.iter().map(|c| &c.text).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn a_block_that_fits_is_never_cut() {
+    let block = format!("{}\n", "y".repeat(55)).repeat(5);
+    let block = block.trim_end();
+    let t = format!("Vorwort.\n\n## H\n\nEinleitung in zwei\nZeilen.\n\nKurze Zeile.\n\n{block}\n");
+    let cs = chunk(&t, 1, 1, 300);
+    assert_offsets(&t, &cs);
+    assert!(cs.iter().any(|c| c.text.trim_end() == block), "{:?}", cs.iter().map(|c| &c.text).collect::<Vec<_>>());
+}
+
+#[test]
+fn an_item_over_the_limit_is_cut_at_its_line_ends_and_parts_are_filled() {
+    let long_item = format!("- {}\n", format!("{}\n", "wort ".repeat(12).trim_end()).repeat(10).trim_end().replace('\n', "\n  "));
+    let t = format!("# L\n- eins\n{long_item}- drei\n");
+    let cs = chunk(&t, 1, 1, 200);
+    assert_offsets(&t, &cs);
+    for c in &cs {
+        let e = c.char_end as usize;
+        assert!(e == t.trim_end().len() || t[e..].starts_with('\n'), "cut inside a line: {:?}", c.text);
+    }
+    for w in cs.windows(2) {
+        assert!(t[w[0].char_start as usize..w[1].char_end as usize].chars().count() > 200, "two neighbours would fit together");
+    }
+}
+
+#[test]
+fn a_long_text_without_sentence_ends_is_cut_between_words() {
+    for space in [" ", "\u{a0}", "\u{3000}"] {
+        let t = format!("wort{space}").repeat(100);
+        for (s, e) in split_long_text(&t, 0, t.len(), 23) {
+            let before = t[..s].chars().next_back();
+            let after = t[e..].chars().next();
+            assert!(before.is_none_or(char::is_whitespace), "{space:?}: range starts inside a word");
+            assert!(after.is_none_or(char::is_whitespace), "{space:?}: range ends inside a word");
+        }
+    }
 }

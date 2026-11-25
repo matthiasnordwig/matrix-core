@@ -191,3 +191,52 @@ fn a_transcript_with_line_numbers_is_told_by_its_speakers() {
     assert_eq!(kind(&t, "argument.txt"), DocKind::Transcript);
     assert_eq!(path(&chunk_by_rules(&t, 1, 2, DocKind::Transcript)[0]), "JUSTICE KAGAN");
 }
+
+#[test]
+fn a_pause_inside_one_hour_starts_a_new_chat_session() {
+    let t = "[01.02.24, 14:05] Anna: Hallo\n[01.02.24, 14:06] Ben: Hi\n[01.02.24, 14:55] Anna: Noch da?\n".to_string();
+    let cs = chunk_by_rules(&t, 1, 2, DocKind::Chat);
+    assert_verbatim(&t, &cs);
+    assert_eq!(cs.len(), 2, "49 minutes of silence within the hour");
+    assert!(cs[1].text.starts_with("[01.02.24, 14:55]"));
+}
+
+#[test]
+fn a_long_chat_session_is_cut_at_messages_within_its_limit() {
+    let t: String = (0..300).map(|i| format!("[01.02.24, 10:{:02}] Anna: Nachricht {i} mit etwas Text darin\n", i % 60)).collect();
+    let cs = chunk_by_rules(&t, 1, 2, DocKind::Chat);
+    assert_verbatim(&t, &cs);
+    assert!(cs.len() > 1);
+    for c in &cs {
+        assert!(c.text.chars().count() <= max_chars(DocKind::Chat), "{} chars", c.text.chars().count());
+        assert!(c.text.starts_with("[01.02.24, "), "cut inside a message: {:?}", &c.text[..30]);
+    }
+}
+
+#[test]
+fn a_code_file_opening_with_a_comment_keeps_it_with_its_first_definition() {
+    let body = "    let a = 1;\n".repeat(20);
+    let t = format!("// Erste Funktion.\nfn a() {{\n{body}}}\n\n// Zweite.\nfn b() {{\n{body}}}\n");
+    let cs = chunk_by_rules(&t, 1, 2, DocKind::Code);
+    assert_verbatim(&t, &cs);
+    assert!(cs[0].text.starts_with("// Erste Funktion."));
+    assert!(cs.last().unwrap().text.starts_with("// Zweite."));
+}
+
+#[test]
+fn a_long_unit_is_cut_at_its_paragraphs_and_numbers_its_parts() {
+    // Paragraphs of several lines without a sentence end: only a blank line is a fair cut.
+    let para = |i: usize| format!("{}ENDE{i}", "wort wort wort wort wort wort wort wort wort wort\n".repeat(30));
+    let t = format!("§ 1 Lang\n\n{}\n", (0..12).map(para).collect::<Vec<_>>().join("\n\n"));
+    let cs = chunk_by_rules(&t, 1, 2, DocKind::Legal);
+    assert_verbatim(&t, &cs);
+    assert!(cs.len() > 1);
+    let n = cs.len() as u64;
+    for (i, c) in cs.iter().enumerate() {
+        assert!(c.text.chars().count() <= max_chars(DocKind::Legal));
+        let last = c.text.lines().last().unwrap();
+        assert!(last.starts_with("ENDE"), "part {i} ends inside a paragraph: {last:?}");
+        let m: serde_json::Value = serde_json::from_str(&c.metadata).unwrap();
+        assert_eq!((m["part"].as_u64(), m["parts"].as_u64()), (Some(i as u64 + 1), Some(n)));
+    }
+}

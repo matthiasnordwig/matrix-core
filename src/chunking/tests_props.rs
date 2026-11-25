@@ -15,13 +15,21 @@
 //! (3) `build_windows`: windows cover all segments without a gap, window starts
 //!     strictly rise (the loop ends), each window stays within `window_tokens`
 //!     unless it is a single segment; any `overlap_ratio` (also NaN) is safe.
+//!     The next window starts as far back as the overlap needs and no further:
+//!     its segments up to the previous window's end hold at least
+//!     `window_tokens × overlap_ratio` (clamped to 0..0.95) tokens unless it is
+//!     only one segment past the previous start, and one segment fewer would hold
+//!     less. `prepare_windows` is `build_windows` over `split_segments`.
 //! (4) `assemble`: any starts/leave-outs (also out of range): no panic, spans
 //!     ascending, `chunk_index` sequential; without leave-outs the chunks
 //!     partition the segments from segment 0 on ("gapless by construction").
 //! (5) `chunk_markdown_structurally`, `chunk_by_rules` (every kind it handles),
 //!     `chunk_mail`: chunks are verbatim, ascending, non-overlapping, non-empty
 //!     slices (markdown.rs: "`text[char_start..char_end] == chunk.text` holds
-//!     exactly"; rules.rs and mail.rs: "as in `markdown.rs`").
+//!     exactly"; rules.rs and mail.rs: "as in `markdown.rs`"), and together they
+//!     hold every non-whitespace character of the text (nothing is lost: a
+//!     preamble before the first mark, a short last unit). A kind without a
+//!     table yields nothing from `chunk_by_rules`.
 //! (6) `split_long_text`: ranges inside `[start, end)`, on char boundaries,
 //!     ascending, each at most `max_chars` chars ("into ranges of at most
 //!     `max_chars`").
@@ -34,6 +42,16 @@
 //!     `chunk_view` keeps the byte length and only turns lone `\n` into spaces.
 //! (10) `step_runs`: runs ascending and disjoint, `first < last`, the kept page
 //!     inside the run, and every other page of the run covered by the kept one.
+//! (11) `ChunkPages::split_at(at, skip)`: every byte keeps its page — the head
+//!     for bytes before `at` (and ends on the page of byte `at - 1`), the tail
+//!     for bytes from `at + skip` on.
+//! (12) `split_sentences` on sentences of a known form (words with numbers,
+//!     abbreviations and versions inside, a run of terminators, closing marks)
+//!     returns exactly those sentences ("Absorb consecutive terminators and
+//!     closing punctuation").
+//! (13) `repair_mojibake`: every character of the target ranges (U+0080–U+017F,
+//!     U+2000–U+2FFF), written as UTF-8 and read as Windows-1252, comes back
+//!     (soft hyphen dropped, typographic spaces as a space).
 
 use proptest::prelude::*;
 use serde_json::{Map, Value};
@@ -46,7 +64,7 @@ use super::rules::{chunk_by_rules, handles};
 use super::scan_text::{chunk_view, parse_scan_marker, scan_marker};
 use super::slide_steps::{covers, step_runs};
 use super::text_repair::repair_mojibake;
-use super::{assemble, build_windows, split_segments, split_sentences, LlmChunkResponse, StartItem};
+use super::{assemble, build_windows, prepare_windows, split_segments, split_sentences, LlmChunkResponse, StartItem};
 use crate::db::models::NewChunk;
 
 /// Pieces that drive the chunkers' rules: sentence ends, abbreviations,
@@ -84,6 +102,17 @@ fn check_verbatim(text: &str, chunks: &[NewChunk]) -> Result<(), TestCaseError> 
         prop_assert!(s >= prev_end, "chunk {} overlaps the one before in {:?}", i, text);
         prev_end = e;
     }
+    Ok(())
+}
+
+/// Kinds `chunk_by_rules` has a table for.
+const RULE_KINDS: [DocKind; 6] = [DocKind::Legal, DocKind::Minutes, DocKind::Transcript, DocKind::Book, DocKind::Chat, DocKind::Code];
+
+/// Rule (5), second half: the chunks hold every non-whitespace character of the text.
+fn check_complete(text: &str, chunks: &[NewChunk]) -> Result<(), TestCaseError> {
+    let solid = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let kept: String = chunks.iter().map(|c| solid(&c.text)).collect();
+    prop_assert_eq!(kept, solid(text), "text lost in {:?}", text);
     Ok(())
 }
 
@@ -140,6 +169,8 @@ proptest! {
     ) {
         let segments = split_segments(&t);
         let windows = build_windows(&segments, window_tokens, overlap);
+        let shape = |ws: &[super::Window]| ws.iter().map(|w| (w.start_segment, w.end_segment, w.text.clone())).collect::<Vec<_>>();
+        prop_assert_eq!(shape(&prepare_windows(&t, window_tokens, overlap)), shape(&windows));
         if segments.is_empty() || window_tokens == 0 {
             prop_assert!(windows.is_empty());
             return Ok(());
@@ -160,6 +191,11 @@ proptest! {
                 let before = &windows[k - 1];
                 prop_assert!(w.start_segment > before.start_segment, "window starts do not rise");
                 prop_assert!(w.start_segment <= before.end_segment + 1, "gap between windows {} and {}", k - 1, k);
+                let wanted = ((window_tokens as f64) * overlap.clamp(0.0, 0.95)) as usize;
+                let back = |from: usize| -> usize { segments.get(from..=before.end_segment).map_or(0, |s| s.iter().map(|s| crate::token_estimate::estimate_tokens(&s.text)).sum()) };
+                let s = w.start_segment;
+                prop_assert!(s == before.start_segment + 1 || back(s) >= wanted, "window {} overlaps {} < {} tokens", k, back(s), wanted);
+                prop_assert!(s > before.end_segment || back(s + 1) < wanted, "window {} starts further back than {} tokens need", k, wanted);
             }
         }
     }
@@ -207,12 +243,22 @@ proptest! {
         max_chars in prop_oneof![0usize..1, 1usize..60, 60usize..400],
     ) {
         check_verbatim(&t, &chunk_markdown_structurally(&t, 1, 2, max_chars))?;
-        for kind in [DocKind::Legal, DocKind::Minutes, DocKind::Transcript, DocKind::Book, DocKind::Chat, DocKind::Code] {
-            prop_assert!(handles(kind));
-            check_verbatim(&t, &chunk_by_rules(&t, 1, 2, kind))?;
+        check_complete(&t, &chunk_markdown_structurally(&t, 1, 2, max_chars))?;
+        for kind in DocKind::ALL {
+            let chunks = chunk_by_rules(&t, 1, 2, kind);
+            prop_assert_eq!(handles(kind), RULE_KINDS.contains(&kind));
+            if !handles(kind) {
+                prop_assert!(chunks.is_empty(), "{:?} has no table but got chunks", kind);
+                continue;
+            }
+            check_verbatim(&t, &chunks)?;
+            check_complete(&t, &chunks)?;
         }
-        check_verbatim(&t, &chunk_mail(&t, 1, 2))?;
-        check_verbatim(&m, &chunk_mail(&m, 1, 2))?;
+        for text in [&t, &m] {
+            let chunks = chunk_mail(text, 1, 2);
+            check_verbatim(text, &chunks)?;
+            check_complete(text, &chunks)?;
+        }
     }
 
     /// Rule (6).
@@ -298,6 +344,52 @@ proptest! {
             prev_last = Some(r.last);
         }
     }
+
+    /// Rule (11).
+    #[test]
+    fn rule_11_split_at_keeps_the_page_of_every_byte(
+        lines in prop::collection::vec((0usize..200, 1i64..50), 1..8),
+        at in prop_oneof![(0usize..220).prop_map(Err), (0usize..8).prop_map(Ok)],
+        skip in 0usize..6,
+    ) {
+        let mut sorted = lines.clone();
+        sorted.sort_by_key(|&(o, _)| o);
+        // Half the cuts fall exactly on a page change.
+        let at = match at {
+            Ok(k) => sorted[k % sorted.len()].0,
+            Err(raw) => raw,
+        };
+        let mut pages = ChunkPages::default();
+        pages.line(0, sorted[0].1);
+        for &(o, p) in &sorted[1..] {
+            pages.line(o, p);
+        }
+        let (head, tail) = pages.split_at(at, skip);
+        for x in 0..at {
+            prop_assert_eq!(head.page_at(x), pages.page_at(x), "head byte {} of {:?} cut at {}", x, pages, at);
+        }
+        if at > 0 {
+            prop_assert_eq!(Some(head.range().1), pages.page_at(at - 1), "head of {:?} cut at {} ends on another page", pages, at);
+        }
+        for y in 0..250 {
+            prop_assert_eq!(tail.page_at(y), pages.page_at(at + skip + y), "tail byte {} of {:?} cut at {}+{}", y, pages, at, skip);
+        }
+    }
+
+    /// Rule (12).
+    #[test]
+    fn rule_12_sentences_of_a_known_form_split_exactly(
+        sentences in prop::collection::vec((
+            prop::collection::vec(prop::sample::select(vec!["Haus", "lief", "2020", "Dr. Weber", "e.g. this", "v1.5", "Ärger"]), 1..5),
+            prop::sample::select(vec![".", "!", "?", "?!", "...", "…", "!!"]),
+            prop::sample::select(vec!["", "\"", ")", "»", "’", "\")"]),
+        ), 1..6),
+    ) {
+        let parts: Vec<String> = sentences.iter().map(|(words, end, close)| format!("{}{end}{close}", words.join(" "))).collect();
+        let text = parts.join(" ");
+        let got: Vec<String> = split_sentences(&text).into_iter().map(|s| s.text).collect();
+        prop_assert_eq!(got, parts);
+    }
 }
 
 proptest! {
@@ -314,11 +406,34 @@ proptest! {
         max_chars in 1usize..400,
     ) {
         check_verbatim(&t, &chunk_markdown_structurally(&t, 1, 2, max_chars))?;
-        for kind in [DocKind::Legal, DocKind::Minutes, DocKind::Transcript, DocKind::Book, DocKind::Chat, DocKind::Code] {
-            check_verbatim(&t, &chunk_by_rules(&t, 1, 2, kind))?;
+        for kind in RULE_KINDS {
+            let chunks = chunk_by_rules(&t, 1, 2, kind);
+            check_verbatim(&t, &chunks)?;
+            check_complete(&t, &chunks)?;
         }
         check_verbatim(&t, &chunk_mail(&t, 1, 2))?;
         check_split_long_text(&t, a, b, max_chars)?;
+    }
+}
+
+/// Rule (13): exhaustive over the target ranges, so a plain test.
+#[test]
+fn rule_13_every_target_char_read_as_cp1252_comes_back() {
+    // Windows-1252 0x80–0x9F; the five undefined slots pass through as C1 controls.
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8D}', 'Ž', '\u{8F}',
+        '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9D}', 'ž', 'Ÿ',
+    ];
+    let as_cp1252 = |b: u8| if b >= 0xA0 { char::from(b) } else { HIGH[usize::from(b - 0x80)] };
+    for c in ('\u{80}'..='\u{17F}').chain('\u{2000}'..='\u{2FFF}') {
+        let mut buf = [0u8; 4];
+        let garbled: String = c.encode_utf8(&mut buf).bytes().map(as_cp1252).collect();
+        let want = match c {
+            '\u{AD}' => String::new(),
+            '\u{2002}' | '\u{2003}' | '\u{2007}' | '\u{2009}' | '\u{200A}' | '\u{202F}' => " ".to_string(),
+            _ => c.to_string(),
+        };
+        assert_eq!(repair_mojibake(&format!(" {garbled} ")), format!(" {want} "), "U+{:04X} read as {garbled:?}", c as u32);
     }
 }
 
