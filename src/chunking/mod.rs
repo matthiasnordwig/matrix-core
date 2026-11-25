@@ -45,6 +45,8 @@ mod markdown_tests;
 #[cfg(test)]
 mod mail_tests;
 #[cfg(test)]
+mod mail_edge_tests;
+#[cfg(test)]
 mod rules_tests;
 #[cfg(test)]
 mod outline_tests;

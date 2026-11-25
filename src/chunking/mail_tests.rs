@@ -3,17 +3,17 @@
 use super::mail::{chunk_mail as chunk, duplicate_key, embedding_text, MAIL_MAX_CHARS};
 use crate::db::models::NewChunk;
 
-const HEAD: &str = "# Wow\n\n**From:** a@example.com  \n**To:** b@example.com  \n**Date:** 2000-09-06 04:46 -07:00\n\n";
+pub(super) const HEAD: &str = "# Wow\n\n**From:** a@example.com  \n**To:** b@example.com  \n**Date:** 2000-09-06 04:46 -07:00\n\n";
 
-fn meta(c: &NewChunk) -> serde_json::Value {
+pub(super) fn meta(c: &NewChunk) -> serde_json::Value {
     serde_json::from_str(&c.metadata).unwrap()
 }
 
-fn kinds(cs: &[NewChunk]) -> Vec<String> {
+pub(super) fn kinds(cs: &[NewChunk]) -> Vec<String> {
     cs.iter().map(|c| meta(c)["chunk_type"].as_str().unwrap().to_string()).collect()
 }
 
-fn assert_offsets(t: &str, cs: &[NewChunk]) {
+pub(super) fn assert_offsets(t: &str, cs: &[NewChunk]) {
     let mut prev = 0;
     for (i, c) in cs.iter().enumerate() {
         assert_eq!(c.chunk_index, i as i64);
@@ -207,7 +207,7 @@ fn an_embedded_mail_is_embedded_with_its_subject_and_sender() {
     assert_eq!(embedding_text("plain", "{}"), "plain");
 }
 
-fn quoted(t: &str) -> Vec<NewChunk> {
+pub(super) fn quoted(t: &str) -> Vec<NewChunk> {
     let cs = chunk(t, 1, 2);
     assert_offsets(t, &cs);
     cs
@@ -322,7 +322,7 @@ fn a_mail_in_arabic_or_japanese_without_a_block_stays_whole() {
     assert_eq!(chunk(&format!("{HEAD}計画は確定です。\n\n月曜日に始めます。\n"), 1, 2).len(), 1);
 }
 
-fn starts(t: &str) -> Vec<String> {
+pub(super) fn starts(t: &str) -> Vec<String> {
     quoted(t).iter().skip(1).map(|c| c.text.lines().next().unwrap().trim().to_string()).collect()
 }
 
@@ -414,7 +414,7 @@ fn a_korean_date_counts() {
     assert_eq!(kinds(&quoted(&t)), ["mail_message", "mail_quoted"]);
 }
 
-fn sender_of(t: &str) -> Option<String> {
+pub(super) fn sender_of(t: &str) -> Option<String> {
     meta(chunk(t, 1, 2).last().unwrap())["quoted_from"].as_str().map(str::to_string)
 }
 

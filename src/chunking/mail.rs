@@ -397,7 +397,8 @@ fn after_header(lines: &[Line]) -> usize {
         let marker = t.is_empty() || l.text.starts_with("# ") || l.text.starts_with("**") || ORIGINAL.is_match(t) || FORWARD.is_match(t) || BANNER.is_match(t);
         let head = HEADER_LINE.is_match(t) || t.starts_with("---") || (t.ends_with(':') && t.len() < MAX_INTRO_CHARS);
         if marker || head {
-            in_header |= head;
+            // A rule or forward banner is no header line: Lotus sender lines may still follow it.
+            in_header |= head && !t.starts_with("---");
             i += 1;
             continue;
         }
