@@ -675,3 +675,5 @@ pub fn parse_refs_with(text: &str, lexicon: &RefLexicon) -> Vec<NormRef> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_props;
