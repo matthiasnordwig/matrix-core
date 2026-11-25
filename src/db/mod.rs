@@ -367,6 +367,8 @@ impl Database {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_props;
+#[cfg(test)]
 mod grid_run_info_tests;
 #[cfg(test)]
 mod structural_profile_migration_tests;
