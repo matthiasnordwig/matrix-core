@@ -181,8 +181,7 @@ const ACT_ALIASES: &[(&str, &str)] = &[("CRR", "EU:2013/575"), ("DORA", "EU:2022
 /// return the key itself plus its alias form under [`ACT_ALIASES`] (both
 /// directions). All other keys — including bare `§`-paragraph keys, since no
 /// EU act in the corpus is ever cited by Kürzel-only paragraph — come back
-/// unchanged as a single-element vec. Order: the input key first, then the
-/// alias (if any); never duplicates.
+/// unchanged as a single-element vec. Order: the input key first, then the alias (if any); never duplicates.
 pub fn equivalent_ref_keys(ref_key: &str) -> Vec<String> {
     let Some((prefix, art)) = ref_key.split_once(":Art.") else {
         return vec![ref_key.to_string()];
@@ -233,8 +232,7 @@ pub enum RefKind {
 /// the leading number+optional letter, the *end* of a `bis`/`-`/`–` range (so
 /// the range can be expanded into individual refs), and separately whatever
 /// Kürzel follows so the caller can decide whether it is a real law. Abs./Satz/
-/// Nr. sub-parts are consumed (so they don't get mis-parsed as the Kürzel) but
-/// dropped from the key.
+/// Nr. sub-parts are consumed (so they don't get mis-parsed as the Kürzel) but dropped from the key.
 ///
 /// `extra` (added for TOOL_TIER_PLAN.md Teil B) consumes a `§§`-style
 /// enumeration of FURTHER paragraph numbers/ranges after the first, joined by
