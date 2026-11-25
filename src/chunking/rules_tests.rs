@@ -164,6 +164,19 @@ fn plausibility_rejects_one_huge_block_and_crumbs() {
     assert!(!is_plausible(&"ab ".repeat(30), &crumbs, 3000));
 }
 
+/// Coverage counts the same characters on both sides: chunks holding 80 % of a prose text's
+/// letters (spaces included) once passed as "90 % covered", because the text side left its spaces out.
+#[test]
+fn plausibility_counts_coverage_without_whitespace_on_both_sides() {
+    let text = "wort ".repeat(400);
+    let part: String = text.chars().take(text.chars().count() * 8 / 10).collect();
+    let chunk = NewChunk {
+        context_id: 1, document_id: 2, chunk_index: 0, char_start: 0, char_end: part.len() as i64,
+        text: part, signature: None, is_omitted: false, metadata: "{}".into(),
+    };
+    assert!(!is_plausible(&text, std::slice::from_ref(&chunk), 3000));
+}
+
 #[test]
 fn a_licence_with_numbered_sections_at_the_end_of_a_book_is_no_law() {
     let chapters = (1..=4).map(|i| format!("Chapter {i}\n\n{}\n\n", prose(60))).collect::<String>();

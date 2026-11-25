@@ -244,7 +244,8 @@ pub fn is_plausible(text: &str, chunks: &[NewChunk], max_chars: usize) -> bool {
         return text.trim().is_empty();
     }
     let lengths: Vec<usize> = chunks.iter().map(|c| c.text.chars().count()).collect();
-    let covered = lengths.iter().sum::<usize>() as f64;
+    // Both sides without whitespace: chunks may drop blank lines and trimmed ends, not text.
+    let covered = chunks.iter().map(|c| c.text.chars().filter(|c| !c.is_whitespace()).count()).sum::<usize>() as f64;
     let total = text.chars().filter(|c| !c.is_whitespace()).count() as f64;
     let one_block = chunks.len() == 1 && lengths[0] > max_chars;
     let mut sorted = lengths;
