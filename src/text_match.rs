@@ -49,9 +49,14 @@ pub fn normalize(text: &str) -> (String, Vec<usize>) {
 
         // (b) Whitespace run (that isn't the dehyphenation case above)
         // collapses to a single space.
+        // A run right after a dropped line wrap that itself followed
+        // whitespace (" -\n\n") continues the space already written: one
+        // space, so normalize stays idempotent (rule (b), tests_props.rs).
         if ch.is_whitespace() {
-            out.push(' ');
-            index_map.push(byte_pos);
+            if !out.ends_with(' ') {
+                out.push(' ');
+                index_map.push(byte_pos);
+            }
             let mut j = i + 1;
             while j < char_indices.len() && char_indices[j].1.is_whitespace() {
                 j += 1;
@@ -85,8 +90,32 @@ pub fn normalized_contains(haystack: &str, needle: &str) -> bool {
     norm_haystack.contains(&norm_needle)
 }
 
+/// Trims a fragment, but keeps a trailing line wrap (`-` + `[ \t]*` + `\n`)
+/// whole so [`normalize`] still drops it: plain `trim` would cut "Daten-\n"
+/// to "Daten-", which is not in the dehyphenated chunk ("Datenschutz").
+/// Rule (a) in `text_match/tests_props.rs`. `scripts/eval_extraction.py`
+/// mirrors this by dropping such wraps before it splits.
+fn trim_keep_wrap(s: &str) -> &str {
+    let t = s.trim_start();
+    let end = t.trim_end();
+    if end.ends_with('-') {
+        let tail = &t[end.len()..];
+        let after_tabs = tail.trim_start_matches([' ', '\t']);
+        if after_tabs.starts_with('\n') {
+            return &t[..t.len() - after_tabs.len() + 1];
+        }
+    }
+    end
+}
+
+fn is_blank(fragment: &str) -> bool {
+    fragment.is_empty() || normalize(fragment).0.is_empty()
+}
+
 /// Splits evidence text on the ellipsis convention ("…" or "...", optionally
-/// surrounded by spaces) into non-empty fragments, in order.
+/// surrounded by spaces) into non-empty fragments, in order. A fragment that
+/// ends in a line wrap keeps it (see [`trim_keep_wrap`]); one that is nothing
+/// but wraps ("-\n-\n") normalizes to nothing and counts as blank.
 pub fn split_ellipsis_fragments(evidence: &str) -> Vec<&str> {
     let mut fragments = Vec::new();
     let mut rest = evidence;
@@ -97,15 +126,15 @@ pub fn split_ellipsis_fragments(evidence: &str) -> Vec<&str> {
         match next {
             Some((pos, marker_len)) => {
                 let (before, after) = rest.split_at(pos);
-                let frag = before.trim();
-                if !frag.is_empty() {
+                let frag = trim_keep_wrap(before);
+                if !is_blank(frag) {
                     fragments.push(frag);
                 }
                 rest = after[marker_len..].trim_start();
             }
             None => {
-                let frag = rest.trim();
-                if !frag.is_empty() {
+                let frag = trim_keep_wrap(rest);
+                if !is_blank(frag) {
                     fragments.push(frag);
                 }
                 break;
@@ -151,3 +180,5 @@ pub fn fold(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_props;

@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9419f00466dcd462b7c1c2de27b8cbee7379e652c92e9216b2354c887899bdcc # shrinks to t = "aaaaaaaaa\n..aaä\n-\u{2028}  ä…-\r\u{a0}\t\n…\u{2028}\n\nZ", i = Index(9049423071177060008), j = Index(6058720764189875769), inserts = [(Index(16313889202339990204), Wrap { pre: "\t\t", post: "" }), (Index(10966217829813856579), Space("\t")), (Index(14462103361231129290), Space(" ")), (Index(16530780736489645020), Wrap { pre: "\t", post: "" }), (Index(15996946016681379975), Space(" \n")), (Index(17887295089758151683), Wrap { pre: "", post: "  " })]
+cc 653bc6d5b580939641f243919720e4aa7d022f56cdf041226760aa99f5510464 # shrinks to t = " -\n\n"
+cc f014ccaa5009fd74b2a733e08253dd23b02c13a0d8b4ac2b6b4f3daef58f1649 # shrinks to t = "a\t𝄞\u{2028}.. €Z 1\r……… -.Z𝄞b€\n-€a.\r ………ä𝄞\n\t …ä-\t\n \n\n\r.\r  \u{a0}\r1.\u{2028}", i = Index(10547131440274283988), j = Index(14633210593131842179), inserts = [(Index(11529321238131550850), Space("\t"))]
+cc 5833a8e0fb08a197f86a7e075a0df80ee44388dc41a54a252baec3e7912a8506 # shrinks to t = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… -\n-\n…aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", i = 15899992093383979192, j = 0, inserts = []
