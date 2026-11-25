@@ -10,7 +10,9 @@
 //!      (`start` never falls), spans valid char-boundary ranges of the text.
 //! (12) `expand_range`: at most `MAX_RANGE_EXPANSION` parts; above it exactly
 //!      start and end ("only the start and end ref are emitted"); the start
-//!      number always first; every part's number inside the range.
+//!      number always first; every part's number inside the range; no part
+//!      twice; a range up to the cap expands in full (consecutive numbers, or
+//!      the start letter and every letter after it).
 //! (13) `equivalent_ref_keys`: the input first, never duplicates, and each key
 //!      of the result yields the same set ("both directions").
 
@@ -68,8 +70,24 @@ proptest! {
 
     /// Rule (12).
     #[test]
-    fn rule_12_range_expansion_is_capped(sn in number(), sl in letter(), en in number(), el in letter()) {
+    fn rule_12_range_expansion_is_capped(
+        sn in number(),
+        sl in letter(),
+        en in number(),
+        el in letter(),
+        near_cap in prop_oneof![
+            1 => Just(None),
+            3 => prop_oneof![Just(0u32), Just(29), Just(30), Just(31), 0u32..40].prop_map(Some),
+        ],
+    ) {
+        // Often an end right around the cap, where the count decides between both forms.
+        let en = match (near_cap, sn.parse::<u32>()) {
+            (Some(d), Ok(s)) => s.saturating_add(d).to_string(),
+            _ => en,
+        };
         let parts = expand_range(&sn, &sl, &en, &el);
+        let distinct: HashSet<&(String, String)> = parts.iter().collect();
+        prop_assert_eq!(distinct.len(), parts.len(), "a part twice: {:?}", parts);
         prop_assert!(!parts.is_empty() && parts.len() <= MAX_RANGE_EXPANSION, "{} parts", parts.len());
         let (Ok(s), Ok(e)) = (sn.parse::<u32>(), en.parse::<u32>()) else {
             prop_assert_eq!(parts, vec![(sn.clone(), sl.clone())]);
@@ -82,6 +100,12 @@ proptest! {
         }
         if e > s && (e - s) as usize >= MAX_RANGE_EXPANSION {
             prop_assert_eq!(parts, vec![(s.to_string(), String::new()), (e.to_string(), String::new())]);
+        } else if e > s {
+            prop_assert_eq!(parts.len() as u32, e - s + 1, "range {}..={} not expanded in full", s, e);
+        } else if e == s && let Some(end) = el.chars().next().filter(char::is_ascii_lowercase) {
+            let from = sl.chars().next().map_or(b'a', |c| c as u8 + 1);
+            let letters = (end as u8).saturating_sub(from) as usize + usize::from(end as u8 >= from);
+            prop_assert_eq!(parts.len(), (1 + letters).min(MAX_RANGE_EXPANSION), "letter range {}{}..{}{}: {:?}", sn, sl, en, el, parts);
         }
     }
 

@@ -59,18 +59,7 @@ use regex::Regex;
 mod law_abbrevs;
 use law_abbrevs::{BUILTIN_LONG_FORMS, KNOWN};
 
-/// Public wrapper over the closed law-abbreviation set (the built-in lexicon),
-/// so other modules (e.g. `db::chunk_refs`' Kürzel-conflict check) can reuse
-/// the exact same recognition without duplicating the list. Input may be any
-/// case, no surrounding space. Kept for backward compatibility with callers
-/// that have no DB-loaded `RefLexicon` on hand (e.g. standalone core usage);
-/// DB-backed callers should prefer [`is_abbrev_in`] with the loaded lexicon.
-pub fn is_known_law_abbrev_public(abbrev: &str) -> bool {
-    RefLexicon::builtin().is_abbrev(abbrev)
-}
-
-/// True if `abbrev` is a recognized Kürzel in `lexicon`. Same case/whitespace
-/// contract as [`is_known_law_abbrev_public`]. Used where a DB-loaded lexicon
+/// True if `abbrev` is a recognized Kürzel in `lexicon` (any case, no surrounding space). Used where a DB-loaded lexicon
 /// (rather than the built-in one) must be the source of truth, e.g.
 /// `db::chunk_refs`' Kürzel-conflict check once a custom registry is active.
 pub fn is_abbrev_in(abbrev: &str, lexicon: &RefLexicon) -> bool {
@@ -366,13 +355,7 @@ static EU_AFTER_ARTICLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// same rule the EU_REG_RE loop applies: the 4-digit part is the year; when
 /// ambiguous, keep source order.
 fn normalize_eu_number(a: &str, b: &str) -> String {
-    if a.len() == 4 && b.len() != 4 {
-        format!("{a}/{b}")
-    } else if b.len() == 4 && a.len() != 4 {
-        format!("{b}/{a}")
-    } else {
-        format!("{a}/{b}")
-    }
+    if b.len() == 4 && a.len() != 4 { format!("{b}/{a}") } else { format!("{a}/{b}") }
 }
 
 /// If `tail` (the text right after an article match) begins with the EU long

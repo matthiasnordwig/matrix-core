@@ -9,8 +9,7 @@
 //! new entries should be genuine act abbreviations only.
 //!
 //! `KNOWN` and `BUILTIN_LONG_FORMS` are `pub(super)`: reachable from outside only
-//! via `RefLexicon` / `builtin_seed_entries`, with `is_known_law_abbrev_public`
-//! as the builtin-only wrapper.
+//! via `RefLexicon` / `builtin_seed_entries`.
 
 /// Recognized law/act abbreviations, lowercased. `DORA` is included so
 /// `Art. 28 DORA` resolves; the EU-regulation *number* form is handled
