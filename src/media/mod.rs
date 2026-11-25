@@ -94,3 +94,5 @@ impl RgbBuf {
 
 #[cfg(test)]
 mod test_pictures;
+#[cfg(test)]
+mod tests_props;

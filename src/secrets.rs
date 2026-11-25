@@ -169,3 +169,5 @@ pub fn decrypt(key: &SecretKey, aad: &str, s: &str) -> Result<String, SecretErro
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_props;

@@ -25,3 +25,5 @@ pub mod vlm_prompt;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_props;
