@@ -33,15 +33,6 @@ use super::retrieval::rrf_fuse_weighted;
 use super::vision_prep::{max_patches, pad_to, patchify, positions, target_size};
 use crate::chunking::text_repair::repair_mojibake;
 
-/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
-fn config() -> ProptestConfig {
-    let mut c = ProptestConfig::default();
-    if std::env::var("PROPTEST_CASES").is_err() {
-        c.cases = 32;
-    }
-    c
-}
-
 fn score() -> impl Strategy<Value = f32> {
     prop_oneof![
         4 => prop::sample::select(vec![0.0f32, -0.0, 0.5, 1.0, -1.0, 2.5]),
@@ -76,7 +67,7 @@ fn check_rank_merge(scores: &[f32], top_k: usize) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Rule (14).
     #[test]
@@ -142,7 +133,7 @@ proptest! {
     #[test]
     fn rule_17_page_starts_carry_over(
         raw in prop_oneof![
-            "[a-zâ€‰Â­Ã¤ \n]{0,40}",
+            "[a-zâ€‰Â\u{ad}Ã¤ \n]{0,40}",
             any::<String>(),
         ],
         starts in prop::collection::vec(0usize..60, 0..6),

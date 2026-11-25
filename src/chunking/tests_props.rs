@@ -49,15 +49,6 @@ use super::text_repair::repair_mojibake;
 use super::{assemble, build_windows, split_segments, split_sentences, LlmChunkResponse, StartItem};
 use crate::db::models::NewChunk;
 
-/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
-fn config() -> ProptestConfig {
-    let mut c = ProptestConfig::default();
-    if std::env::var("PROPTEST_CASES").is_err() {
-        c.cases = 32;
-    }
-    c
-}
-
 /// Pieces that drive the chunkers' rules: sentence ends, abbreviations,
 /// numbers, line and paragraph breaks, headings, fences, list items and the
 /// line marks of every kind `rules.rs` handles, plus multi-byte text.
@@ -116,7 +107,7 @@ fn check_split_long_text(text: &str, a: usize, b: usize, max_chars: usize) -> Re
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Rules (1) and (2).
     #[test]
@@ -268,7 +259,7 @@ proptest! {
     /// Rules (8) and (9).
     #[test]
     fn rule_8_9_repair_scan_marker_chunk_view(
-        t in prop_oneof![doc_text(40), "[â€‰Â­Ã¤¼½ ‰a-z\n]{0,30}"],
+        t in prop_oneof![doc_text(40), "[â€‰Â\u{ad}Ã¤¼½ ‰a-z\n]{0,30}"],
         ascii in "[ -~\t\n]{0,60}",
         a in 0i64..i64::MAX,
         b in 0i64..i64::MAX,
@@ -310,7 +301,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Stage 3: rules (5) and (6) on long texts, where `chunk_by_rules` and
     /// `chunk_mail` reach their size cuts too.

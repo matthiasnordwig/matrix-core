@@ -30,12 +30,9 @@ fn pick(raw: usize, len: usize) -> usize {
     ((len as u128 * raw as u128) >> usize::BITS) as usize
 }
 
-/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
+/// `PROPTEST_CASES` cases (`crate::props`), many rejects allowed (rule (a) filters cuts).
 fn config() -> ProptestConfig {
-    let mut c = ProptestConfig::default();
-    if std::env::var("PROPTEST_CASES").is_err() {
-        c.cases = 32;
-    }
+    let mut c = crate::props::config();
     c.max_global_rejects = 100_000;
     c
 }

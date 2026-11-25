@@ -20,15 +20,6 @@ use proptest::prelude::*;
 
 use super::{equivalent_ref_keys, expand_range, parse_refs, MAX_RANGE_EXPANSION};
 
-/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
-fn config() -> ProptestConfig {
-    let mut c = ProptestConfig::default();
-    if std::env::var("PROPTEST_CASES").is_err() {
-        c.cases = 32;
-    }
-    c
-}
-
 /// Pieces of real citations plus noise, so that ranges, enumerations, long
 /// forms and Kürzel bindings all occur.
 const PIECES: &[&str] = &[
@@ -58,7 +49,7 @@ fn letter() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Rule (11).
     #[test]
@@ -118,7 +109,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Stage 3: rule (11) on chunk-sized texts.
     #[test]

@@ -15,5 +15,7 @@ pub mod text_language;
 pub mod timeline;
 pub mod text_match;
 pub mod token_estimate;
+#[cfg(test)]
+mod props;
 
 pub use db::{models, CoreError, Database, Result};

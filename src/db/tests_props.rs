@@ -24,14 +24,6 @@ use super::embeddings::{blob_to_vector, cosine, vector_to_blob};
 use super::fts::escape_fts_query;
 use super::sheet_tables::{sql_column_names, SHEET_ROW_COLUMN};
 
-/// Cases per property: `PROPTEST_CASES` if set, else 32 (stage 2 stays fast).
-fn config() -> ProptestConfig {
-    let mut c = ProptestConfig::default();
-    if std::env::var("PROPTEST_CASES").is_err() {
-        c.cases = 32;
-    }
-    c
-}
 
 /// Words that mean something to the FTS5 query grammar, plus symbols and
 /// characters the `unicode61` tokenizer drops or splits.
@@ -47,7 +39,7 @@ fn fts_query() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(config())]
+    #![proptest_config(crate::props::config())]
 
     /// Rule (19).
     #[test]
