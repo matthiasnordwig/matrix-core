@@ -122,7 +122,8 @@ impl PlaceIndex {
 
     /// The place nearest to (`lat`, `lon`) and its distance in km; `None` for an empty index or a position
     /// off the globe. Searches the cells around the position ring by ring until the next ring cannot hold
-    /// anything nearer (a ring of cells lies at least its radius in degrees of latitude away).
+    /// anything nearer ([`ring_bound_km`]: in high latitudes a degree of longitude is much shorter than one of
+    /// latitude, so more rings are searched there).
     pub fn nearest(&self, lat: f64, lon: f64) -> Option<(&Place, f64)> {
         self.nearest_index(lat, lon).map(|(i, d)| (&self.places[i as usize], d))
     }
@@ -171,8 +172,7 @@ impl PlaceIndex {
         let (cy, cx) = cell(lat, lon);
         let mut best: Option<(u32, f64)> = None;
         for ring in 0i16..=180 {
-            // Anything in ring `r` lies at least (r - 1) degrees of latitude ≈ 111 km per degree away.
-            if let Some((_, d)) = best && f64::from(ring - 1) * 111.0 > d {
+            if let Some((_, d)) = best && ring_bound_km(lat, ring) > d {
                 break;
             }
             for dy in -ring..=ring {
@@ -197,6 +197,17 @@ impl PlaceIndex {
         }
         best
     }
+}
+
+/// Nothing in ring `ring` of the grid around latitude `lat` lies nearer than this (km). A cell
+/// `ring` rows away is more than `ring − 1` degrees of latitude off (111 km each); one `ring`
+/// columns away more than `ring − 1` degrees of longitude, and the nearest point that far east
+/// or west lies on that meridian: cross-track distance `asin(cos φ · sin Δλ)`, which shrinks
+/// towards the poles (from 90° on, the pole is nearest).
+fn ring_bound_km(lat: f64, ring: i16) -> f64 {
+    let steps = f64::from(ring - 1).max(0.0);
+    let across = EARTH_KM * (lat.to_radians().cos() * steps.min(90.0).to_radians().sin()).asin();
+    (steps * 111.0).min(across)
 }
 
 /// Name, ASCII name and alternate names of the places `ids` from `cities1000.txt` rows (a second read of

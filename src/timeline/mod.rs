@@ -4,3 +4,6 @@
 //! (`services::places`).
 
 pub mod place;
+
+#[cfg(test)]
+mod tests_props;
