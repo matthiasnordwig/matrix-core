@@ -81,7 +81,7 @@ impl Default for FusionParams {
 
 impl FusionParams {
     /// `stop=0|1`, `w=<f32>`, `k=<usize>`, `img=0|1`, `xw=<f32>`, `iw=<f32>`, `scan=0|1`, comma-separated; unknown parts are ignored and
-    /// missing ones keep their default.
+    /// missing ones keep their default, as does a `NaN` weight (it would pass `clamp`).
     pub fn parse(spec: &str) -> Self {
         let mut p = FusionParams::default();
         for part in spec.split(',').map(str::trim) {
@@ -90,12 +90,16 @@ impl FusionParams {
                 Some(("img", v)) => p.img = v != "0",
                 Some(("scan", v)) => p.img_scanned = v != "0",
                 Some(("xw", v)) => {
-                    if let Ok(w) = v.parse::<f32>() {
+                    if let Ok(w) = v.parse::<f32>()
+                        && !w.is_nan()
+                    {
                         p.cross_lang_fts = w.clamp(0.0, 1.0);
                     }
                 }
                 Some(("iw", v)) => {
-                    if let Ok(w) = v.parse::<f32>() {
+                    if let Ok(w) = v.parse::<f32>()
+                        && !w.is_nan()
+                    {
                         p.img_no_keyword = w.clamp(0.0, 1.0);
                     }
                 }
@@ -105,7 +109,9 @@ impl FusionParams {
                     }
                 }
                 Some(("w", v)) => {
-                    if let Ok(w) = v.parse::<f32>() {
+                    if let Ok(w) = v.parse::<f32>()
+                        && !w.is_nan()
+                    {
                         p.fts_weight = w.clamp(0.0, 2.0);
                     }
                 }

@@ -76,5 +76,7 @@ mod tests_images;
 mod tests_provenance;
 #[cfg(test)]
 mod tests_language;
+#[cfg(test)]
+mod tests_props;
 #[cfg(all(test, feature = "onnx"))]
 mod tests_onnx;

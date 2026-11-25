@@ -16,16 +16,16 @@
 
 /// Pure rank-merge (RETRIEVAL_QUALITY_PLAN.md AP3): given the reranker scores
 /// for `n` candidates, return the indices of the `top_k` highest-scoring
-/// candidates, score-descending. Stable on ties (lower original index first).
+/// candidates, score-descending. Stable on ties (lower original index first); NaN
+/// scores rank last.
 /// No model / no I/O — unit-tested in `tests.rs`.
 pub fn rank_merge(scores: &[f32], top_k: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..scores.len()).collect();
+    // A NaN score (broken model output) ranks last, as -inf: compared "equal" to
+    // everything it would break the total order the sort needs.
+    let key = |i: usize| if scores[i].is_nan() { f32::NEG_INFINITY } else { scores[i] };
     // Sort by score desc; ties keep the earlier candidate (sort_by is stable).
-    idx.sort_by(|&a, &b| {
-        scores[b]
-            .partial_cmp(&scores[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    idx.sort_by(|&a, &b| key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal));
     idx.truncate(top_k);
     idx
 }
