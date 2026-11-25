@@ -81,35 +81,76 @@ impl Kind {
     }
 }
 
-/// Estimated tokens of `text` (≥ 1). Pure; see the module comment for the calibration.
+/// Estimated tokens of `text` (≥ 1). Pure; see the module comment for the calibration. Never less
+/// than the estimate of any beginning of `text`: appending a few English function words can make a
+/// text English and its Latin words cheaper, so the result is the largest estimate over all of its
+/// beginnings (one pass) — a budget reserved for a text never shrinks as the text grows.
 pub fn estimate_tokens(text: &str) -> usize {
     let runs = runs(text);
-    let english = is_english(text, &runs);
-    let mut total = 0.0;
+    // Runs read so far, priced as English and as another Latin language, and the counts of
+    // `english_share` (Latin words, English markers among them).
+    let (mut english, mut other) = (0.0f64, 0.0f64);
+    let (mut words, mut marked) = (0usize, 0usize);
+    let mut most = 0.0f64;
     for (i, &(kind, start, end)) in runs.iter().enumerate() {
+        // The space before a digit is a token of its own, known once the digit comes.
+        if kind == Kind::Digit && i > 0 && runs[i - 1].0 == Kind::Space {
+            english += 1.0;
+            other += 1.0;
+        }
         let run = &text[start..end];
-        let len = run.chars().count() as f64;
-        let word = |free: f64, rate: f64| 1.0 + (len - free).max(0.0) / rate;
-        total += match kind {
-            Kind::Space => {
-                let before_digit = runs.get(i + 1).is_some_and(|r| r.0 == Kind::Digit);
-                f64::from(u8::from(run != " ")) + f64::from(u8::from(before_digit))
-            }
-            Kind::Digit => len,
-            Kind::Punct => 1.0,
-            Kind::Symbol => SYMBOL,
-            Kind::Latin => {
-                let (free, rate) = if english { ENGLISH_WORD } else { LATIN_WORD };
-                word(free, rate) + DIACRITIC * run.chars().filter(|c| !c.is_ascii()).count() as f64
-            }
-            Kind::Cyrillic => word(LATIN_WORD.0, CYRILLIC_RATE),
-            Kind::Arabic => word(LATIN_WORD.0, ARABIC_RATE),
-            Kind::Abugida => ABUGIDA * len,
-            Kind::Cjk => CJK * len,
-            Kind::Hangul => HANGUL * len,
-        };
+        let (mut len, mut accents) = (0usize, 0usize);
+        let mut whole = Price::default();
+        for (j, c) in run.char_indices() {
+            len += 1;
+            accents += usize::from(!c.is_ascii());
+            whole = price(kind, &run[..j + c.len_utf8()], len, accents);
+            let latin = usize::from(kind == Kind::Latin);
+            let (n, m) = (words + latin, marked + usize::from(whole.marker));
+            most = most.max(if english_share(n, m) { english + whole.english } else { other + whole.other });
+        }
+        english += whole.english;
+        other += whole.other;
+        words += usize::from(kind == Kind::Latin);
+        marked += usize::from(whole.marker);
     }
-    (total.ceil() as usize).max(1)
+    (most.ceil() as usize).max(1)
+}
+
+/// What a run (or the beginning of one) costs in an English text and in another one, and whether it
+/// is an English marker word.
+#[derive(Default)]
+struct Price {
+    english: f64,
+    other: f64,
+    marker: bool,
+}
+
+/// The price of `run`: `len` characters of `kind`, `accents` of them non-ASCII.
+fn price(kind: Kind, run: &str, len: usize, accents: usize) -> Price {
+    let len = len as f64;
+    let word = |free: f64, rate: f64| 1.0 + (len - free).max(0.0) / rate;
+    let same = |p: f64| Price { english: p, other: p, marker: false };
+    match kind {
+        // A single space joins the next word; a longer gap or a line break is a token.
+        Kind::Space => same(f64::from(u8::from(run != " "))),
+        Kind::Digit => same(len),
+        Kind::Punct => same(1.0),
+        Kind::Symbol => same(SYMBOL),
+        Kind::Latin => {
+            let extra = DIACRITIC * accents as f64;
+            Price {
+                english: word(ENGLISH_WORD.0, ENGLISH_WORD.1) + extra,
+                other: word(LATIN_WORD.0, LATIN_WORD.1) + extra,
+                marker: is_marker(run),
+            }
+        }
+        Kind::Cyrillic => same(word(LATIN_WORD.0, CYRILLIC_RATE)),
+        Kind::Arabic => same(word(LATIN_WORD.0, ARABIC_RATE)),
+        Kind::Abugida => same(ABUGIDA * len),
+        Kind::Cjk => same(CJK * len),
+        Kind::Hangul => same(HANGUL * len),
+    }
 }
 
 /// `(kind, byte start, byte end)` of each piece of `text`.
@@ -126,15 +167,23 @@ fn runs(text: &str) -> Vec<(Kind, usize, usize)> {
     out
 }
 
+/// Whether a text with `words` Latin words, `marked` of them English markers, counts as English.
+fn english_share(words: usize, marked: usize) -> bool {
+    words > 0 && marked * 100 >= ENGLISH_SHARE_PCT * words
+}
+
+fn is_marker(word: &str) -> bool {
+    word.len() <= 5 && ENGLISH_MARKERS.iter().any(|m| m.eq_ignore_ascii_case(word))
+}
+
+/// Whether the whole `text` counts as English (tests; the estimate decides per beginning).
+#[cfg(test)]
 fn is_english(text: &str, runs: &[(Kind, usize, usize)]) -> bool {
-    let words = runs.iter().filter(|r| r.0 == Kind::Latin).map(|r| &text[r.1..r.2]);
-    let (mut n, mut marked) = (0usize, 0usize);
-    for w in words {
-        n += 1;
-        marked += usize::from(ENGLISH_MARKERS.iter().any(|m| m.eq_ignore_ascii_case(w)));
-    }
-    n > 0 && marked * 100 >= ENGLISH_SHARE_PCT * n
+    let latin: Vec<&str> = runs.iter().filter(|r| r.0 == Kind::Latin).map(|r| &text[r.1..r.2]).collect();
+    english_share(latin.len(), latin.iter().filter(|w| is_marker(w)).count())
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_props;
