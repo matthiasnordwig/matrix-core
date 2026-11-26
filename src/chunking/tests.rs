@@ -261,3 +261,15 @@ fn mojibake_leaves_genuine_text_alone() {
         assert_eq!(repair_mojibake(s), s, "changed: {s}");
     }
 }
+
+/// Chinese and Japanese end a sentence with "。！？" and put no space after it;
+/// the whole line used to stay one segment.
+#[test]
+fn regression_cjk_sentence_ends_split_without_space() {
+    let segs = split_segments("这是一个句子。这是另一个句子。");
+    assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["这是一个句子。", "这是另一个句子。"]);
+    let got: Vec<String> = split_sentences("「来ますか？」と聞いた。はい！本当に").into_iter().map(|s| s.text).collect();
+    assert_eq!(got, ["「来ますか？」", "と聞いた。", "はい！", "本当に"]);
+    // Latin rules stay: no space, no split.
+    assert_eq!(split_sentences("Siehe Dr. Weber, v1.5 und z.B.dies.").len(), 1);
+}

@@ -48,7 +48,9 @@
 //! (12) `split_sentences` on sentences of a known form (words with numbers,
 //!     abbreviations and versions inside, a run of terminators, closing marks)
 //!     returns exactly those sentences ("Absorb consecutive terminators and
-//!     closing punctuation").
+//!     closing punctuation"). Chinese/Japanese sentences ("。！？", optionally
+//!     closed by "」"), written without a space between them, split exactly too
+//!     (sentences.rs: CJK ends "need no space after them").
 //! (13) `repair_mojibake`: every character of the target ranges (U+0080–U+017F,
 //!     U+2000–U+2FFF), written as UTF-8 and read as Windows-1252, comes back
 //!     (soft hyphen dropped, typographic spaces as a space).
@@ -388,6 +390,29 @@ proptest! {
     ) {
         let parts: Vec<String> = sentences.iter().map(|(words, end, close)| format!("{}{end}{close}", words.join(" "))).collect();
         let text = parts.join(" ");
+        let got: Vec<String> = split_sentences(&text).into_iter().map(|s| s.text).collect();
+        prop_assert_eq!(got, parts);
+    }
+
+    /// Rule (12), CJK: no space between the sentences.
+    #[test]
+    fn rule_12_cjk_sentences_split_without_space(
+        sentences in prop::collection::vec((
+            prop::collection::vec(prop::sample::select(vec!["这是", "句子", "2020年", "v1.5", "東京", "です", "「はい"]), 1..5),
+            prop::sample::select(vec!["。", "！", "？", "？！", "｡", "!"]),
+            prop::sample::select(vec!["", "」", "）"]),
+        ), 1..6),
+    ) {
+        // Latin '!' needs a space after it; here it only ends the last sentence or follows a CJK end.
+        let parts: Vec<String> = sentences
+            .iter()
+            .enumerate()
+            .map(|(k, (words, end, close))| {
+                let end = if *end == "!" && k + 1 < sentences.len() { "！" } else { end };
+                format!("{}{end}{close}", words.concat())
+            })
+            .collect();
+        let text = parts.concat();
         let got: Vec<String> = split_sentences(&text).into_iter().map(|s| s.text).collect();
         prop_assert_eq!(got, parts);
     }

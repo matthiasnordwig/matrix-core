@@ -1,6 +1,10 @@
 //! Pure-Rust, offline rule-based sentence segmentation with an abbreviation
 //! guard. No ML model, no heavy dependencies. Offsets are byte offsets into
 //! the original string so callers can slice it directly.
+//!
+//! Chinese and Japanese sentence ends ("。！？") need no space after them —
+//! those scripts put none; the Latin '.', '!', '?' still need one (or the
+//! end of the text), so "z.B.dies" or "v1.5" never split.
 
 /// Lowercased abbreviations (without the trailing dot) that must NOT end a
 /// sentence. Single letters (initials like "A.") are guarded separately.
@@ -20,12 +24,19 @@ pub struct Sentence {
 
 #[inline]
 fn is_terminator(c: char) -> bool {
-    matches!(c, '.' | '!' | '?' | '…')
+    matches!(c, '.' | '!' | '?' | '…') || is_wide_terminator(c)
+}
+
+/// CJK sentence ends (ideographic full stop, its halfwidth form, fullwidth '!'
+/// and '?'): a sentence ends here even without a space after it.
+#[inline]
+fn is_wide_terminator(c: char) -> bool {
+    matches!(c, '。' | '｡' | '！' | '？')
 }
 
 #[inline]
 fn is_closing(c: char) -> bool {
-    matches!(c, '"' | '\'' | ')' | ']' | '}' | '”' | '’' | '»')
+    matches!(c, '"' | '\'' | ')' | ']' | '}' | '”' | '’' | '»' | '」' | '』' | '）' | '】' | '》' | '〉')
 }
 
 /// True when a '.' sits between two digits (e.g. "v1.5", "3.14").
@@ -86,7 +97,8 @@ pub fn split_sentences(text: &str) -> Vec<Sentence> {
                 }
                 let last = chars[j];
                 let end_byte = last.0 + last.1.len_utf8();
-                let at_boundary = j + 1 >= n || chars[j + 1].1.is_whitespace();
+                let wide = chars[i..=j].iter().any(|&(_, c)| is_wide_terminator(c));
+                let at_boundary = j + 1 >= n || chars[j + 1].1.is_whitespace() || wide;
                 if at_boundary {
                     if let Some(s) = sent_start {
                         sentences.push(Sentence {
