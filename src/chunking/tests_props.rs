@@ -489,3 +489,17 @@ fn regression_rule_5_indented_long_line_gives_no_empty_chunk() {
     check_verbatim(t, &chunks).unwrap();
     assert!(split_long_text(t, 0, t.len(), 1).iter().all(|&(s, e)| s < e));
 }
+
+/// Rule (5): a text of nothing but a quote mark (`> `) counted as empty in
+/// `chunk_mail` (its lines are read without the marks), so the block was
+/// dropped and the `>` lost. Right after a mail header it stays with the
+/// header's block. `chunk_mail` takes no `max_chars`; the shrunk `0` came
+/// from the markdown half of the rule and plays no part.
+#[test]
+fn regression_rule_5_mail_of_only_a_quote_mark_keeps_it() {
+    for t in ["> ", "# Betreff\n\n**From:** a@example.com  \n**Date:** 2000-09-06\n\n> ", ">\n> \n"] {
+        let chunks = chunk_mail(t, 1, 2);
+        check_verbatim(t, &chunks).unwrap();
+        check_complete(t, &chunks).unwrap();
+    }
+}

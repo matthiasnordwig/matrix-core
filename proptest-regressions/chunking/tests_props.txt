@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 295fde0260d57aefc836f9853a13f460f8a7c72dbbc292facf186171caa1c166 # shrinks to t = " WortAnna Muster: ", m = "# Betreff\n\n**From:** a@example.com  \n**Date:** 2000-09-06\n\n", max_chars = 1
+cc 95d45fdd361b0f637a50c49b5d167b61926378e341e6612d0d4ee23b69aee1f9 # shrinks to t = "> ", m = "# Betreff\n\n**From:** a@example.com  \n**Date:** 2000-09-06\n\n", max_chars = 0

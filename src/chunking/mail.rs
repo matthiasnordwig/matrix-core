@@ -508,7 +508,8 @@ pub fn chunk_mail(text: &str, context_id: i64, document_id: i64) -> Vec<NewChunk
     let mut out = Vec::new();
     for (b, &first) in firsts.iter().enumerate() {
         let end = firsts.get(b + 1).copied().unwrap_or(lines.len());
-        if lines[first..end].iter().all(|l| l.text.is_empty()) {
+        // Only white space is skipped: a block of bare quote marks is still text (`Line::text` drops them).
+        if text[lines[first].start..lines[end - 1].end].trim().is_empty() {
             continue;
         }
         let mut meta = serde_json::json!({ "section": subject, "title": subject });
