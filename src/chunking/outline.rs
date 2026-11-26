@@ -19,7 +19,8 @@
 //!   lines of control catalogues (`AC-7 UNSUCCESSFUL LOGON ATTEMPTS`) and their numbered
 //!   enhancements `(1)`.
 //!
-//! A section ("unit") runs from its heading to the next heading of the same or a higher rank;
+//! A section ("unit") runs from its heading to the next heading of the same or a higher rank, a
+//! numbered one also to the next numbered heading that does not continue it ("3.1" ends "2.");
 //! paragraphs are never units. A chunk belongs to the unit of its first non-heading line; the unit's
 //! chunks are all chunks with a line inside that span (a chunk ending in the next article's heading
 //! does not pull that article in). Labels keep the document's own wording.

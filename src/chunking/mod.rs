@@ -64,3 +64,5 @@ mod scan_text_tests;
 mod scan_noise_tests;
 #[cfg(test)]
 mod tests_props;
+#[cfg(test)]
+mod structural_tests;
