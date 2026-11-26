@@ -240,3 +240,24 @@ fn a_long_unit_is_cut_at_its_paragraphs_and_numbers_its_parts() {
         assert_eq!((m["part"].as_u64(), m["parts"].as_u64()), (Some(i as u64 + 1), Some(n)));
     }
 }
+
+/// A unit shorter than `min_chars` joins the next one, but the chunk starts
+/// with it and so carries its title, not the next unit's.
+#[test]
+fn regression_short_unit_keeps_its_title_when_joined() {
+    let t = "TOP 1 Begrüßung\n\nAlles gut.\n\nTOP 2 Beschlüsse\n\nAlles beschlossen.";
+    let cs = chunk_by_rules(t, 1, 2, DocKind::Minutes);
+    assert_verbatim(t, &cs);
+    assert!(cs[0].text.starts_with("TOP 1"));
+    assert_eq!(path(&cs[0]), "TOP 1 Begrüßung");
+    let m: serde_json::Value = serde_json::from_str(&cs[0].metadata).unwrap();
+    assert_eq!(m["section"], "TOP 1 Begrüßung");
+    let b = "Kapitel 1\n\nKurz.\n\nKapitel 2\n\nAuch kurz.";
+    assert_eq!(path(&chunk_by_rules(b, 1, 2, DocKind::Book)[0]), "Kapitel 1");
+    // A bare part heading joined with its first paragraph keeps the deeper title.
+    let l = format!("Teil 1\n\n§ 1 Regelung\n\n{}", "Wer ein Beispiel gibt, muss es prüfen. ".repeat(5));
+    assert_eq!(path(&chunk_by_rules(&l, 1, 2, DocKind::Legal)[0]), "Teil 1 › § 1 Regelung");
+    // A short part heading followed by the next part: the paragraph of part 2 is not part 1's.
+    let p = format!("Teil 1\n\nTeil 2\n\n§ 5 Regelung\n\n{}", "Wer ein Beispiel gibt, muss es prüfen. ".repeat(5));
+    assert_eq!(path(&chunk_by_rules(&p, 1, 2, DocKind::Legal)[0]), "Teil 1");
+}

@@ -3,7 +3,8 @@
 //! item, a speaker's turn, a chapter, a chat session, a function), and `chunk_by_rules` cuts there.
 //!
 //! Offsets are byte offsets and chunks are verbatim slices, as in `markdown.rs`. Units shorter than
-//! `min_chars` join the next one, so a bare "Teil 2" stays with its first paragraph. A unit over
+//! `min_chars` join the next one, so a bare "Teil 2" stays with its first paragraph; the chunk keeps
+//! the title path of the unit it starts with, extended by deeper titles below it. A unit over
 //! `max_chars` is cut at the kind's inner marks, at paragraphs, then as `markdown.rs` cuts a long line.
 
 use std::sync::LazyLock;
@@ -170,7 +171,8 @@ pub fn chunk_by_rules(text: &str, context_id: i64, document_id: i64, kind: DocKi
     let n_levels = rules.levels.len().max(1);
     let mut path: Vec<Option<String>> = vec![None; n_levels];
     let mut out: Vec<NewChunk> = Vec::new();
-    let mut carry: Option<usize> = None;
+    // First line and title path of short units waiting to join the next one.
+    let mut carry: Option<(usize, Vec<Option<String>>)> = None;
     for (b, &(line, mark)) in bounds.iter().enumerate() {
         let end = bounds.get(b + 1).map_or(lines.len(), |x| x.0);
         if line >= end {
@@ -180,17 +182,16 @@ pub fn chunk_by_rules(text: &str, context_id: i64, document_id: i64, kind: DocKi
             path[m.level] = Some(title_of(kind, lines[marks_line_of_title(&lines, m.line)].text));
             path[m.level + 1..].iter_mut().for_each(|p| *p = None);
         }
-        let first = carry.unwrap_or(line);
+        let (first, start_path) = carry.take().unwrap_or_else(|| (line, path.clone()));
         let short = lines[first].start + rules.min_chars > lines[end - 1].end;
         if short && b + 1 < bounds.len() {
-            carry = Some(first);
+            carry = Some((first, start_path));
             continue;
         }
-        carry = None;
         if lines[first..end].iter().all(|l| l.text.trim().is_empty()) {
             continue;
         }
-        let heading = path.iter().flatten().cloned().collect::<Vec<_>>();
+        let heading = chunk_path(&start_path, &path);
         let title = heading.last().cloned().unwrap_or_default();
         let meta = serde_json::json!({
             "chunk_type": kind.name(), "section": title, "title": title, "heading_path": heading.join(PATH_SEP),
@@ -221,6 +222,14 @@ pub fn chunk_by_rules(text: &str, context_id: i64, document_id: i64, kind: DocKi
         }
     }
     out
+}
+
+/// Title path of a chunk that starts at `start` and ends under `now`: `now` when it only adds deeper
+/// titles below `start` ("Teil 1" joined with "§ 1"), else `start` (a short "TOP 1" joined with "TOP 2").
+fn chunk_path(start: &[Option<String>], now: &[Option<String>]) -> Vec<String> {
+    let depth = start.iter().rposition(Option::is_some).map_or(0, |d| d + 1);
+    let chosen = if start[..depth] == now[..depth] { now } else { start };
+    chosen.iter().flatten().cloned().collect()
 }
 
 /// The line naming a unit: its mark, past a comment block above a code definition.
