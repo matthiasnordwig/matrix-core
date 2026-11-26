@@ -194,3 +194,13 @@ fn boilerplate_paragraphs_of_every_kind() {
     }
     assert!(!is_boilerplate("Danke, das passt so."));
 }
+
+#[test]
+fn a_text_opening_with_lotus_sender_lines_keeps_them_with_its_header() {
+    // The sender lines reach the first line of the text: nothing above them to look at.
+    let t = "Anna Maier\n05/14/2001 09:00 AM\nTo: Ben Roth/HOU/ECT@ECT\ncc:\nSubject: Plan\n\nThe text.\n";
+    let cs = chunk(t, 1, 2);
+    assert_offsets(t, &cs);
+    assert_eq!(cs.len(), 1);
+    assert_eq!((cs[0].text.as_str(), kinds(&cs)), (t.trim_end(), vec!["mail_message".to_string()]));
+}

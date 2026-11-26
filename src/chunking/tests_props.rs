@@ -164,7 +164,8 @@ proptest! {
     #[test]
     fn rule_3_windows_cover_all_segments(
         t in doc_text(80),
-        window_tokens in 0usize..40,
+        // A budget of 0 (no windows) in every fifth case, not only by chance once in 40.
+        window_tokens in prop_oneof![1 => Just(0usize), 4 => 1usize..40],
         overlap in prop_oneof![-1.0f64..2.0, Just(f64::NAN), Just(f64::INFINITY)],
     ) {
         let segments = split_segments(&t);

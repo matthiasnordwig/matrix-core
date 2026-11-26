@@ -261,6 +261,10 @@ fn a_slide_over_the_limit_is_cut_at_its_sentence_ends_counting_the_spaces() {
     assert_eq!(texts(&cut), ["Satz eins. Satz zwei.", "Satz drei."]);
     let whole = chunk_transcript("v.mp4", &doc(), &[slide], 0, DOC, 32);
     assert_eq!(texts(&whole), ["Satz eins. Satz zwei. Satz drei."]);
+    // Cut at its sentence ends, three sentences with their two spaces (32 bytes) still fill one passage.
+    let four = other(SegmentKind::Slide, 0, 20_000, "Satz eins. Satz zwei. Satz drei. Satz vier.");
+    let cut = chunk_transcript("v.mp4", &doc(), &[four], 0, DOC, 33);
+    assert_eq!(texts(&cut), ["Satz eins. Satz zwei. Satz drei.", "Satz vier."]);
 }
 
 #[test]
@@ -339,6 +343,11 @@ fn the_pause_fences_follow_the_real_pauses_of_the_file() {
     // Pauses of 0.1 s and 2 s alike: the spread is the quartile distance, not the median.
     let bimodal = |i: usize| if i.is_multiple_of(2) { 100 } else { 2_000 };
     assert_eq!(second_start(bimodal, 4_000), "Satz nummer 09");
+    // Mostly short pauses, a third of them 3 s: quartiles 0.125 / 0.2 / 3 s, so the spread is the
+    // quartile distance (2.875 s, above the median) and 5 s stays below the far fence (11.6 s).
+    let skewed = [0, 100, 3_000, 100, 200, 3_000, 5_000, 150, 3_000, 200, 100, 3_000];
+    let calm = chunk_transcript("a.m4a", &doc(), &sentences(12, |i| skewed[i]), 0, DOC, 0);
+    assert_eq!(calm.chunks.len(), 1, "{:?}", texts(&calm));
     // A long pause between the fences is preferred, but does not force a cut by itself.
     let calm = chunk_transcript("a.m4a", &doc(), &sentences(12, |i| if i == 6 { 1_700 } else { usual(i) }), 0, DOC, 0);
     assert_eq!(calm.chunks.len(), 1);

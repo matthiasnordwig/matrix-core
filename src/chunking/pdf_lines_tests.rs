@@ -117,3 +117,16 @@ fn many_long_lines_or_short_lines_of_digits_are_no_letter_salad() {
     let digits = format!("{}{}", "a\nb\nc\n".repeat(13), "7\n".repeat(11));
     assert!(!looks_like_letter_salad(&digits), "only 78 % of the short lines letters");
 }
+
+#[test]
+fn a_rotated_line_measures_its_gaps_like_an_upright_one() {
+    // Rotated glyphs carry no width; half the font size stands in, close to an upright glyph's width.
+    let gap = |rotation: f32| {
+        let (dx, dy) = if rotation == 0.0 { (100.0, 0.0) } else { (0.0, 100.0) };
+        let mut g = word("TIME", 40.0, 100.0, rotation);
+        g.extend(word("SOURCE", 40.0 + dx, 100.0 + dy, rotation));
+        let l = &page_lines(&g)[0];
+        l.glyphs[4].along - l.glyphs[3].end
+    };
+    assert!((gap(90.0) - gap(0.0)).abs() < 1.0, "rotated {} upright {}", gap(90.0), gap(0.0));
+}
