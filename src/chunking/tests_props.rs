@@ -53,7 +53,8 @@
 //!     (sentences.rs: CJK ends "need no space after them").
 //! (13) `repair_mojibake`: every character of the target ranges (U+0080–U+017F,
 //!     U+2000–U+2FFF), written as UTF-8 and read as Windows-1252, comes back
-//!     (soft hyphen dropped, typographic spaces as a space).
+//!     (soft hyphen dropped, typographic spaces as a space: every Unicode
+//!     whitespace there but the line/paragraph separators U+2028/U+2029).
 
 use proptest::prelude::*;
 use serde_json::{Map, Value};
@@ -456,11 +457,23 @@ fn rule_13_every_target_char_read_as_cp1252_comes_back() {
         let garbled: String = c.encode_utf8(&mut buf).bytes().map(as_cp1252).collect();
         let want = match c {
             '\u{AD}' => String::new(),
-            '\u{2002}' | '\u{2003}' | '\u{2007}' | '\u{2009}' | '\u{200A}' | '\u{202F}' => " ".to_string(),
+            c if is_typographic_space(c) => " ".to_string(),
             _ => c.to_string(),
         };
         assert_eq!(repair_mojibake(&format!(" {garbled} ")), format!(" {want} "), "U+{:04X} read as {garbled:?}", c as u32);
     }
+}
+
+/// Typographic spaces of the target range, by Unicode's own classification:
+/// every whitespace char there except the line/paragraph separators.
+fn is_typographic_space(c: char) -> bool {
+    ('\u{2000}'..='\u{2FFF}').contains(&c) && c.is_whitespace() && !matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// Rule (13): EN QUAD (U+2000) read as Windows-1252 ("â€€") stayed U+2000.
+#[test]
+fn regression_rule_13_en_quad_becomes_a_space() {
+    assert_eq!(repair_mojibake("a\u{E2}\u{20AC}\u{20AC}b"), "a b");
 }
 
 // Counterexamples proptest found, replayed verbatim (seeds in

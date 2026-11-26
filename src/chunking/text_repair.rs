@@ -90,7 +90,8 @@ pub fn repair_mojibake(text: &str) -> String {
     for (k, &c) in decoded.iter().enumerate() {
         match c {
             '\u{AD}' => {}
-            '\u{2002}' | '\u{2003}' | '\u{2007}' | '\u{2009}' | '\u{200A}' | '\u{202F}' => out.push(' '),
+            // Typographic spaces: EN QUAD … HAIR SPACE, narrow no-break, medium math space.
+            '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' => out.push(' '),
             // Previous char taken from `out`: a soft hyphen before it is already gone.
             'Â' if out.chars().last().is_some_and(char::is_lowercase)
                 && decoded.get(k + 1).is_none_or(|n| n.is_lowercase() || n.is_whitespace()) => {}
